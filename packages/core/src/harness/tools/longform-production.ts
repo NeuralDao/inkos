@@ -11,6 +11,7 @@ import { runAsWorkflowTrajectory } from "../../llm/agent-trajectory.js";
 import {StateManager} from "../../state/manager.js";
 import type {WorkManifest} from "../contracts.js";
 import type {BookConfig} from "../../models/book.js";
+import { resolveBookCreationLanguages } from "../../utils/book-language.js";
 
 interface LongformToolOptions {
   readonly activeWork?: {readonly work:WorkManifest;readonly projectRoot:string};
@@ -27,6 +28,7 @@ const BookCreateParams = Type.Object({
   genre: Type.Optional(Type.String()),
   platform: Type.Optional(Type.String({ minLength: 1 })),
   language: Type.Optional(Type.Union([Type.Literal("zh"), Type.Literal("en")])),
+  narrativeLanguage: Type.Optional(Type.Union([Type.Literal("en"), Type.Literal("zh"), Type.Literal("ru")])),
   targetChapters: Type.Optional(Type.Integer({ minimum: 1 })),
   chapterWordCount: Type.Optional(Type.Integer({ minimum: 1 })),
   minChapterLength: Type.Optional(Type.Integer({minimum:1,description:"Lower end of an explicitly requested per-chapter range. Preserve it as a Work constraint."})),
@@ -130,7 +132,20 @@ export function createBookFoundationTool(
           if(await state.isCompleteBookDirectory(state.bookDir(id)))throw Object.assign(new Error("The current book is already initialized; use its foundation or chapter revision action."),{code:"BOOK_ALREADY_INITIALIZED"});
           try{existing=await state.loadBookConfig(id);}catch(error){if((error as NodeJS.ErrnoException).code!=="ENOENT")throw error;}
         }
-        const language = existing?.language ?? (options.activeWork ? options.activeWork.work.language==="en"?"en":"zh" : payload?.language ?? params.language ?? options.language ?? "zh");
+        const narrativeLanguage = existing?.narrativeLanguage ?? options.activeWork?.work.metadata.narrativeLanguage ?? payload?.narrativeLanguage ?? params.narrativeLanguage;
+        resolveBookCreationLanguages({
+          language: params.language,
+          narrativeLanguage: params.narrativeLanguage === undefined ? narrativeLanguage : params.narrativeLanguage,
+        });
+        if (payload) resolveBookCreationLanguages({
+          language: payload.language,
+          narrativeLanguage: payload.narrativeLanguage === undefined ? narrativeLanguage : payload.narrativeLanguage,
+        });
+        const bookLanguages = resolveBookCreationLanguages({
+          language: existing?.language ?? options.activeWork?.work.language ?? payload?.language ?? params.language,
+          narrativeLanguage,
+        }, options.language);
+        const { language } = bookLanguages;
         const skills = activatedSkills(options, "architect");
         const now = new Date().toISOString();
         progress(onUpdate, `Creating foundation for "${id}"...`);
@@ -141,6 +156,7 @@ export function createBookFoundationTool(
           genre: payload?.genre ?? params.genre ?? existing?.genre ?? "other",
           platform: payload?.platform ?? params.platform ?? existing?.platform ?? "other",
           language,
+          ...(bookLanguages.narrativeLanguage !== undefined ? { narrativeLanguage: bookLanguages.narrativeLanguage } : {}),
           status: "outlining",
           targetChapters: payload?.targetChapters ?? params.targetChapters ?? existing?.targetChapters ?? 200,
           chapterWordCount: payload?.chapterWordCount ?? params.chapterWordCount ?? existing?.chapterWordCount ?? defaultChapterLength(language),

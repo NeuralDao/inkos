@@ -37,11 +37,15 @@ export const CreateBookActionPayloadSchema = z.object({
   genre: z.string().min(1).optional(),
   platform: PlatformSchema.optional(),
   language: z.enum(["zh", "en"]).optional(),
+  narrativeLanguage: z.enum(["en", "zh", "ru"]).optional(),
   targetChapters: z.number().int().min(1).optional(),
   chapterWordCount: z.number().int().min(1).optional(),
   minChapterLength:z.number().int().min(1).optional(),
   maxChapterLength:z.number().int().min(1).optional(),
-}).strict();
+}).strict().refine((payload) => !(payload.narrativeLanguage === "ru" && payload.language === "zh"), {
+  message: "Russian narrativeLanguage requires operational language en; zh + ru is not supported.",
+  path: ["narrativeLanguage"],
+});
 
 export const WriteNextActionPayloadSchema = z.object({
   chapterCount: z.number().int().min(1).default(1),

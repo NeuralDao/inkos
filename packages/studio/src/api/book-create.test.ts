@@ -14,6 +14,16 @@ describe("normalizeStudioPlatform", () => {
 });
 
 describe("buildStudioBookConfig", () => {
+  it("keeps Russian narrative separate from operational English", () => {
+    expect(buildStudioBookConfig({ title: "Тихий город", genre: "mystery", narrativeLanguage: "ru" }, "2026-10-29T00:00:00.000Z"))
+      .toMatchObject({ language: "en", narrativeLanguage: "ru", title: "Тихий город" });
+  });
+  it.each([
+    { language: "zh", narrativeLanguage: "ru" }, { language: "ru" }, { narrativeLanguage: "unsupported" },
+  ])("rejects invalid languages %j", (languages) => {
+    expect(() => buildStudioBookConfig({ title: "City", genre: "mystery", ...languages }, "2026-10-29T00:00:00.000Z"))
+      .toThrow();
+  });
   it.each([
     ["Тихий город", "тихий-город"],
     ["Ёж и робот", "ёж-и-робот"],

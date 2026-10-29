@@ -6,7 +6,7 @@ import {createBuiltInWorkProfileRegistry} from "../harness/builtin-profiles.js";
 import type { LLMClient, OnStreamProgress } from "../llm/provider.js";
 import { createLLMClient } from "../llm/provider.js";
 import type { Logger } from "../utils/logger.js";
-import type { BookConfig, FanficMode } from "../models/book.js";
+import { BookConfigSchema, type BookConfig, type FanficMode } from "../models/book.js";
 import type { ChapterMeta } from "../models/chapter.js";
 import type { NotifyChannel, LLMConfig, AgentLLMOverride } from "../models/project.js";
 import { ArchitectAgent, type ArchitectOutput } from "../agents/architect.js";
@@ -288,6 +288,7 @@ export class PipelineRunner {
   }
 
   async prepareDraftBook(book: BookConfig): Promise<void> {
+    book = BookConfigSchema.parse(book);
     let manifest: WorkManifest;
     try {
       manifest = await loadWorkManifest(this.config.projectRoot, book.id);
@@ -304,6 +305,7 @@ export class PipelineRunner {
         status: "draft",
         metadata: {
           ...manifest.metadata,
+          ...(book.narrativeLanguage !== undefined ? { narrativeLanguage: book.narrativeLanguage } : {}),
           genre: book.genre,
           platform: book.platform,
           ...(book.fanficMode ? { fanficMode: book.fanficMode } : {}),
@@ -325,6 +327,7 @@ export class PipelineRunner {
         metadata: {
           genre: book.genre,
           platform: book.platform,
+          ...(book.narrativeLanguage !== undefined ? { narrativeLanguage: book.narrativeLanguage } : {}),
           ...(book.fanficMode ? { fanficMode: book.fanficMode } : {}),
         },
       });
@@ -451,6 +454,7 @@ export class PipelineRunner {
   }
 
   async initBook(book: BookConfig, options: InitBookOptions = {}): Promise<void> {
+    book = BookConfigSchema.parse(book);
     await this.prepareDraftBook(book);
     if (await this.state.isCompleteBookDirectory(this.state.bookDir(book.id))) {
       const saved = await loadWorkManifest(this.config.projectRoot, book.id);

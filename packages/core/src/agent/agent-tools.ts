@@ -215,7 +215,10 @@ const ProposeActionParams = Type.Object({
     language: Type.Optional(Type.Union([
       Type.Literal("zh"),
       Type.Literal("en"),
-    ], { description: "Confirmed writing language." })),
+    ], { description: "Confirmed operational language." })),
+    narrativeLanguage: Type.Optional(Type.Union([
+      Type.Literal("en"), Type.Literal("zh"), Type.Literal("ru"),
+    ], { description: "Confirmed narrative output language; Russian requires operational English." })),
     targetChapters: Type.Optional(Type.Number({
       description: "Confirmed total chapter count.",
     })),
