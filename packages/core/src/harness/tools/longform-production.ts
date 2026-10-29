@@ -119,10 +119,11 @@ export function createBookFoundationTool(
         const title = options.activeWork?.work.title || payload?.title?.trim() || params.title?.trim();
         if (!title) throw new Error("create_book requires title.");
         const id = options.activeWork ? resolveBookId("create_book",params.bookId,options.activeWork.work.id) : payload?.title
-          ? deriveBookIdFromTitle(payload.title) || `book-${Date.now().toString(36)}`
+          ? deriveBookIdFromTitle(payload.title)
           : params.bookId
             ? assertSafeBookId(params.bookId, "create_book.bookId")
-            : deriveBookIdFromTitle(title) || `book-${Date.now().toString(36)}`;
+            : deriveBookIdFromTitle(title);
+        if (!id) throw new Error("Book title must contain at least one supported letter or digit.");
         let existing:BookConfig|undefined;
         if(options.activeWork){
           const state=new StateManager(options.activeWork.projectRoot);

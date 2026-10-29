@@ -47,7 +47,8 @@ fanficCommand
 
       if (!sourceText.trim()) throw new Error("Fanfic source material is empty.");
 
-      const bookId = deriveBookIdFromTitle(opts.title) || `book-${Date.now().toString(36)}`;
+      const bookId = deriveBookIdFromTitle(opts.title);
+      if (!bookId) throw new Error("Book title must contain at least one supported letter or digit.");
 
       const now = new Date().toISOString();
       const book: BookConfig = {

@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { deriveBookIdFromTitle, isSafeBookId } from "@actalk/inkos-core";
 import { buildStudioBookConfig, normalizeStudioPlatform, waitForStudioBookReady } from "./book-create";
 
 describe("normalizeStudioPlatform", () => {
@@ -13,6 +14,28 @@ describe("normalizeStudioPlatform", () => {
 });
 
 describe("buildStudioBookConfig", () => {
+  it.each([
+    ["Тихий город", "тихий-город"],
+    ["Ёж и робот", "ёж-и-робот"],
+    ["Север-7", "север-7"],
+    ["The Last City", "the-last-city"],
+    ["夜港账本", "夜港账本"],
+    ["Тихий City 7", "тихий-city-7"],
+    ["  --ЁЖ___и  / робот!!!  ", "ёж-и-робот"],
+    ["Я".repeat(31), "я".repeat(30)],
+    ["", ""],
+    ["!?.../\\:*\"<>|", ""],
+  ])("uses Core id rules and preserves the title %j", (title, expectedId) => {
+    const config = buildStudioBookConfig(
+      { title, genre: "other", language: "en" },
+      "2026-03-30T00:00:00.000Z",
+    );
+    expect(config.id).toBe(expectedId);
+    expect(config.id).toBe(deriveBookIdFromTitle(title));
+    expect(config.title).toBe(title);
+    expect(isSafeBookId(config.id)).toBe(expectedId !== "");
+  });
+
   it("preserves supported platform selections from studio create requests", () => {
     const config = buildStudioBookConfig(
       {
