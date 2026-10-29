@@ -38,18 +38,7 @@
     "node": ">=22.16.0",
     "pnpm": ">=9.0.0"
   },
-"pnpm": {
-    "overrides": {
-      "@mariozechner/pi-ai": "0.67.1",
-      "@mariozechner/pi-agent-core": "0.67.1"
-    },
-    "onlyBuiltDependencies": [
-      "esbuild",
-      "msw",
-      "protobufjs"
-    ]
-  },
-"devDependencies": {
+  "devDependencies": {
     "concurrently": "^10.0.6",
     "cross-env": "^10.1.0"
   }
