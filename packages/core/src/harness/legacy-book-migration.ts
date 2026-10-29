@@ -23,7 +23,7 @@ export async function migrateLegacyBookDocuments(root:string,names:readonly stri
     overrides.set(name,JSON.stringify(value,null,2)+'\n');
   };
   const raw=JSON.parse(documents.get('book.json')!);
-  const metadata=BookConfigSchema.strip().parse({...raw,
+  const metadata=BookConfigSchema.parse({...raw,
     targetChapters:raw.targetChapters===undefined?200:raw.targetChapters,chapterWordCount:raw.chapterWordCount===undefined?3000:raw.chapterWordCount,
     language:raw.language===undefined?projectLanguage??'zh':raw.language,
   });

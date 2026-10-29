@@ -8,6 +8,11 @@ import {
 } from "./BookCreate";
 
 describe("book creation miniflow", () => {
+  it("selects Russian narrative independently of the project/UI language", () => {
+    const form = { ...defaultBookCreateForm("zh"), title: "Тихий город", genre: "mystery", brief: "A mystery", narrativeLanguage: "ru" as const };
+    expect(buildBookCreatePayload(form, "zh")).toMatchObject({ language: "en", narrativeLanguage: "ru" });
+    expect(buildBookCreatePayload(form, "en")).toMatchObject({ language: "en", narrativeLanguage: "ru" });
+  });
   it("preserves explicit Work metadata in the typed create payload", () => {
     const form = {
       ...defaultBookCreateForm("en"),

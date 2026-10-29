@@ -16,6 +16,7 @@ interface PlatformOption {
 }
 
 export interface BookCreateFormState {
+  readonly narrativeLanguage?: "en" | "zh" | "ru";
   readonly title: string;
   readonly genre: string;
   readonly platform: string;
@@ -25,6 +26,7 @@ export interface BookCreateFormState {
 }
 
 export interface BookCreatePayload {
+  readonly narrativeLanguage?: "en" | "zh" | "ru";
   readonly title: string;
   readonly genre: string;
   readonly platform: string;
@@ -152,7 +154,8 @@ export function buildBookCreatePayload(form: BookCreateFormState, language: "zh"
     title: form.title.trim(),
     genre: form.genre.trim(),
     platform: form.platform.trim(),
-    language,
+    language: form.narrativeLanguage === "ru" ? "en" : language,
+    ...(form.narrativeLanguage !== undefined ? { narrativeLanguage: form.narrativeLanguage } : {}),
     targetChapters,
     chapterWordCount,
     blurb: form.brief.trim(),
@@ -260,6 +263,15 @@ export function BookCreate({ nav, theme, t: _t }: { nav: Nav; theme: Theme; t: T
             </label>
           </div>
           <div className="grid gap-4 sm:grid-cols-3">
+            <label className="space-y-2">
+              <span className="text-xs font-medium text-muted-foreground">{projectLang === "zh" ? "作品语言" : "Narrative language"}</span>
+              <select value={form.narrativeLanguage ?? ""} onChange={(event) => updateForm({ narrativeLanguage: (event.target.value || undefined) as BookCreateFormState["narrativeLanguage"] })} className={`w-full ${c.input} rounded-md bg-background px-3 py-2.5 text-sm focus:outline-none`}>
+                <option value="">{projectLang === "zh" ? "继承工作语言" : "Use operational language"}</option>
+                <option value="en">English</option>
+                <option value="zh">中文</option>
+                <option value="ru">Русский</option>
+              </select>
+            </label>
             <label className="space-y-2">
               <span className="text-xs font-medium text-muted-foreground">{copy.platformLabel}</span>
               <select value={form.platform} onChange={(event) => updateForm({ platform: event.target.value })} className={`w-full ${c.input} rounded-md bg-background px-3 py-2.5 text-sm focus:outline-none`}>

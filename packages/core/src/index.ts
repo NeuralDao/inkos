@@ -187,6 +187,7 @@ export {
   resolveProxyUrl,
 } from "./utils/proxy-fetch.js";
 export { assertSafeBookId, deriveBookIdFromTitle, isSafeBookId } from "./utils/book-id.js";
+export { BookLanguageSchema, NarrativeLanguageSchema, resolveBookCreationLanguages, resolveNarrativeLanguage, type NarrativeLanguage } from "./utils/book-language.js";
 export { safeChildPath } from "./utils/path-safety.js";
 export { toPosixPath } from "./utils/posix-path.js";
 export {
