@@ -1,4 +1,4 @@
-import { PlatformSchema, defaultChapterLength, type Platform } from "@actalk/inkos-core";
+import { PlatformSchema, defaultChapterLength, deriveBookIdFromTitle, type Platform } from "@actalk/inkos-core";
 export { waitForStudioBookReady } from "../lib/book-ready.js";
 export type { StudioBookDetail, WaitForStudioBookReadyOptions } from "../lib/book-ready.js";
 
@@ -35,11 +35,7 @@ export function normalizeStudioPlatform(platform?: string): Platform {
 
 export function buildStudioBookConfig(body: StudioCreateBookBody, now: string): StudioBookConfigDraft {
   return {
-    id: body.title
-      .toLowerCase()
-      .replace(/[^a-z0-9\u4e00-\u9fff]/g, "-")
-      .replace(/-+/g, "-")
-      .slice(0, 30),
+    id: deriveBookIdFromTitle(body.title),
     title: body.title,
     platform: normalizeStudioPlatform(body.platform),
     genre: body.genre,

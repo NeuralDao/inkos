@@ -2,6 +2,34 @@ import { describe, expect, it } from "vitest";
 import { assertSafeBookId, deriveBookIdFromTitle, isSafeBookId } from "../utils/book-id.js";
 
 describe("book id safety", () => {
+  it.each([
+    ["Тихий город", "тихий-город"],
+    ["Ёж и робот", "ёж-и-робот"],
+    ["Север-7", "север-7"],
+    ["The Last City", "the-last-city"],
+    ["夜港账本", "夜港账本"],
+    ["Тихий City 7", "тихий-city-7"],
+    ["  --ЁЖ___и  / робот!!!  ", "ёж-и-робот"],
+    ["Я".repeat(31), "я".repeat(30)],
+    ["A".repeat(31), "a".repeat(30)],
+    ["夜".repeat(31), "夜".repeat(30)],
+    ["../Тихий/город\\Север:7", "тихий-город-север-7"],
+  ])("derives a safe id from %j", (title, expectedId) => {
+    const id = deriveBookIdFromTitle(title);
+    expect(id).toBe(expectedId);
+    expect(isSafeBookId(id)).toBe(true);
+  });
+
+  it.each(["", "   ", "!?.../\\:*\"<>|", "../.."])(
+    "leaves titles without allowed characters empty: %j",
+    (title) => {
+      const id = deriveBookIdFromTitle(title);
+      expect(id).toBe("");
+      expect(isSafeBookId(id)).toBe(false);
+      expect(() => assertSafeBookId(id)).toThrow("Invalid bookId");
+    },
+  );
+
   it("accepts ids produced by InkOS title derivation", () => {
     expect(deriveBookIdFromTitle("夜港账本")).toBe("夜港账本");
     expect(deriveBookIdFromTitle(" Harbor: Ledger! ")).toBe("harbor-ledger");

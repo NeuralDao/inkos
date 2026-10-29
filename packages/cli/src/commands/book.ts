@@ -44,7 +44,8 @@ bookCommand
     try {
       const root = findProjectRoot();
 
-      const bookId = deriveBookIdFromTitle(opts.title) || `book-${Date.now().toString(36)}`;
+      const bookId = deriveBookIdFromTitle(opts.title);
+      if (!bookId) throw new Error("Book title must contain at least one supported letter or digit.");
 
       const workDir = workDirectory(root, bookId);
       const bookDir = join(workDir, "source");
