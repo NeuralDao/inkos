@@ -23,7 +23,7 @@
 | Модели Selectel и экономика | [G1_MODEL_STACK.md](./G1_MODEL_STACK.md) — **кандидат v0, не проверенная baseline** | [RESEARCH_R6_MODELS.md](./RESEARCH_R6_MODELS.md) — выбор и риски, **OpenRouter — архив**; [RESEARCH_R6_TOKEN_ECONOMY.md](./RESEARCH_R6_TOKEN_ECONOMY.md) — вход/выход, reasoning, историческая статистика |
 | Русский longform, счётчик, заголовки и экспорт | [RESEARCH_R5_LENGTH_EXPORT.md](./RESEARCH_R5_LENGTH_EXPORT.md) | [LANGUAGE_AUDIT.md](./LANGUAGE_AUDIT.md) — **исторический снимок**, [ARCHITECTURE.md](./ARCHITECTURE.md) — карта кода, тоже датированный снимок |
 | Литературные методики и офлайн-проверки | [RESEARCH_RU_RUBRIC.md](./RESEARCH_RU_RUBRIC.md) | [RESEARCH_LITERARY_EVAL.md](./RESEARCH_LITERARY_EVAL.md) — первичный обзор источников; [RESEARCH_LLM_OFFLINE.md](./RESEARCH_LLM_OFFLINE.md) — моки/микромодель |
-| Требования площадок и возможная монетизация | [RESEARCH_AUTHOR_TODAY.md](./RESEARCH_AUTHOR_TODAY.md) — проверенная R7a | **R7b Boosty ещё не проведена**; статус в [RESEARCH_CURRENT_STATE.md](./RESEARCH_CURRENT_STATE.md) |
+| Требования площадок и возможная монетизация | [RESEARCH_AUTHOR_TODAY.md](./RESEARCH_AUTHOR_TODAY.md) — R7a, правила маркировки AT | [RESEARCH_BOOSTY.md](./RESEARCH_BOOSTY.md) — R7b, ссылки, платежи и границы связки; статус/непроверенные договоры в [RESEARCH_CURRENT_STATE.md](./RESEARCH_CURRENT_STATE.md) |
 
 ## Правила надёжности документации
 
