@@ -1,5 +1,6 @@
 import { BaseAgent } from "./base.js";
 import {renderChapterDocument} from '../utils/chapter-document.js';
+import type { NarrativeLanguage } from "../utils/book-language.js";
 import type { BookConfig } from "../models/book.js";
 import type { BookRules } from "../models/book-rules.js";
 import { buildWriterSystemPrompt } from "./writer-prompts.js";
@@ -366,6 +367,8 @@ export class WriterAgent extends BaseAgent {
     output: WriteChapterOutput,
     language: "zh" | "en" = "zh",
     chapterIndex?: ReadonlyArray<ChapterMeta>,
+    // Reader wrapper only; runtime-state artifacts still use operational language.
+    narrativeLanguage?: NarrativeLanguage,
   ): Promise<void> {
     const chaptersDir = join(bookDir, "chapters");
     await mkdir(chaptersDir, { recursive: true });
@@ -381,7 +384,7 @@ export class WriterAgent extends BaseAgent {
     const supersededChapterFiles = existingChapterFiles
       .filter((file) => file.startsWith(`${paddedNum}_`) && file.endsWith(".md") && file !== filename);
 
-    const chapterContent = renderChapterDocument(output.chapterNumber,output.title,output.content,language);
+    const chapterContent = renderChapterDocument(output.chapterNumber,output.title,output.content,narrativeLanguage==='ru'?'ru':language);
     const runtimeStateArtifacts = await this.resolveRuntimeStateArtifactsForOutput(
       bookDir,
       output,

@@ -1122,14 +1122,14 @@ export class PipelineRunner {
       // Only the latest chapter owns current truth. Reworking an older chapter
       // invalidates its descendants, but must not rewind the live story state.
       if (isLatestChapter) {
-        await writer.saveChapter(bookDir, settledRevision, reviseLang, updatedIndex);
+        await writer.saveChapter(bookDir, settledRevision, reviseLang, updatedIndex, book.narrativeLanguage);
       } else {
         await commitAtomicFileSet({
           rootDir: bookDir,
           writes: [
             {
               relativePath: join("chapters", existingFile),
-              content: renderChapterDocument(targetChapter,chapterMeta.title,revisedContent,reviseLang),
+              content: renderChapterDocument(targetChapter,chapterMeta.title,revisedContent,book.narrativeLanguage==='ru'?'ru':reviseLang),
             },
             {
               relativePath: join("chapters", "index.json"),
@@ -1437,7 +1437,7 @@ export class PipelineRunner {
       lengthTelemetry,
       tokenUsage: totalUsage,
       loadChapterIndex: () => this.state.loadChapterIndex(bookId),
-      saveChapter: (index) => writer.saveChapter(bookDir, persistenceOutput, pipelineLang, index),
+      saveChapter: (index) => writer.saveChapter(bookDir, persistenceOutput, pipelineLang, index, book.narrativeLanguage),
       markBookActiveIfNeeded: () => this.markBookActiveIfNeeded(bookId),
     });
 
@@ -1596,7 +1596,7 @@ export class PipelineRunner {
       updatedAt: new Date().toISOString(),
       observations: targetMeta.observations.filter((observation) => observation.code !== "state-sync-required"),
     };
-    await writer.saveChapter(bookDir, syncedOutput, pipelineLang, index);
+    await writer.saveChapter(bookDir, syncedOutput, pipelineLang, index, book.narrativeLanguage);
     return {
       chapterNumber: targetChapter,
       title: targetMeta.title,
@@ -1813,7 +1813,7 @@ export class PipelineRunner {
         const updatedIndex = existingIdx >= 0
           ? existingIndex.map((e, idx) => idx === existingIdx ? newEntry : e)
           : [...existingIndex, newEntry];
-        await writer.saveChapter(bookDir, persistedOutput, resolvedLanguage, updatedIndex);
+        await writer.saveChapter(bookDir, persistedOutput, resolvedLanguage, updatedIndex, book.narrativeLanguage);
 
         importedCount++;
         totalWords += chapterWordCount;
@@ -2219,9 +2219,6 @@ export class PipelineRunner {
       throw new Error(`Chapter ${chapterNumber} file not found in ${chaptersDir}`);
     }
     const raw = await readFile(join(chaptersDir, chapterFile), "utf-8");
-    // Strip the title line
-    const lines = raw.split("\n");
-    const contentStart = lines.findIndex((l, i) => i > 0 && l.trim().length > 0);
-    return contentStart >= 0 ? lines.slice(contentStart).join("\n") : raw;
+    return chapterDocumentBody(raw, chapterNumber, "");
   }
 }

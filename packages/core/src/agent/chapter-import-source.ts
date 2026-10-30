@@ -1,6 +1,7 @@
 import { readFile, readdir, stat } from "node:fs/promises";
 import { basename, join, relative, sep } from "node:path";
-import { splitChapters, type SplitChapter } from "../utils/chapter-splitter.js";
+import { readChapterHeading, splitChapters, type SplitChapter } from "../utils/chapter-splitter.js";
+import { chapterDocumentBody } from "../utils/chapter-document.js";
 import {loadWorkManifest} from '../harness/work-store.js';
 import {readArtifactRevision} from '../harness/artifact-reader.js';
 import {WorkResourceIdSchema,type WorkLineage} from '../harness/contracts.js';
@@ -48,6 +49,11 @@ export async function loadChaptersFromPath(
       textFiles.map(async (f) => {
         const content = await readFile(join(sourcePath, f), "utf-8");
         const title = f.replace(/\.(md|txt)$/, "").replace(/^\d+[_\-\s]*/, "");
+        const heading = readChapterHeading(content.trimStart().split(/\r?\n/u)[0] ?? "");
+        if (heading?.language === "ru") return {
+          title: heading.title || title,
+          content: chapterDocumentBody(content, heading.number, heading.title, "ru"),
+        };
         return { title, content };
       }),
     );
@@ -93,7 +99,7 @@ function chaptersFromText(text:string,sourcePath:string,splitPattern?:string):Re
     }
     throw new Error(
       `No chapters found in ${sourcePath}. ` +
-      `The default pattern matches "第X章/第X回" and "Chapter N" heading lines. ` +
+      `The default pattern matches "第X章/第X回", "Chapter N" and "Глава N" heading lines. ` +
       `Pass splitPattern with a custom regex if the source uses a different heading style.`,
     );
   }

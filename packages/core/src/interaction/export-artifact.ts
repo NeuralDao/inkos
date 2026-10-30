@@ -6,7 +6,7 @@ import {readChapterHeading} from '../utils/chapter-splitter.js';
 
 export interface ExportStateLike {
   readonly bookDir: (bookId: string) => string;
-  readonly loadBookConfig: (bookId: string) => Promise<{ readonly title: string; readonly language?: string }>;
+  readonly loadBookConfig: (bookId: string) => Promise<{ readonly title: string; readonly language?: string; readonly narrativeLanguage?: string }>;
   readonly loadChapterIndex: (bookId: string) => Promise<ReadonlyArray<{
     readonly number: number;
     readonly title?: string;
@@ -75,11 +75,11 @@ function escapeHtml(text: string): string {
     .replaceAll(">", "&gt;");
 }
 
-function markdownToSimpleHtml(markdown: string): { title: string; html: string } {
+function markdownToSimpleHtml(markdown: string, preserveBodyHeadings = false): { title: string; html: string } {
   const title = markdown.match(/^#\s+(.+)/m)?.[1]?.trim() ?? "Untitled Chapter";
   const html = markdown
     .split("\n")
-    .filter((line) => !line.startsWith("#"))
+    .filter((line, index) => preserveBodyHeadings ? index !== 0 : !line.startsWith("#"))
     .map((line) => line.trim())
     .filter(Boolean)
     .map((line) => `<p>${escapeHtml(line)}</p>`)
@@ -113,7 +113,7 @@ export async function buildExportArtifact(
     const raw = await readFile(join(chaptersDir, file), 'utf-8');
     const heading = readChapterHeading(raw.trimStart().split(/\r?\n/u)[0] ?? '');
     return renderChapterDocument(chapter.number, chapter.title ?? heading?.title ?? file.replace(/^\d+_/u,'').replace(/\.md$/u,''), raw,
-      book.language === 'en' || book.language === undefined && heading?.language === 'en' ? 'en' : 'zh');
+      book.narrativeLanguage === 'ru' ? 'ru' : book.language === 'en' || book.language === undefined && heading?.language === 'en' ? 'en' : 'zh');
   };
 
   if (format === "epub") {
@@ -124,11 +124,11 @@ export async function buildExportArtifact(
         continue;
       }
       const markdown = await readChapter(chapter, match);
-      const { title, html } = markdownToSimpleHtml(markdown);
+      const { title, html } = markdownToSimpleHtml(markdown, book.narrativeLanguage === "ru");
       epubChapters.push({ title, content: html });
     }
     const epubInstance = new EPub(
-      { title: book.title, lang: book.language === "en" ? "en" : "zh-CN" },
+      { title: book.title, lang: book.narrativeLanguage === "ru" ? "ru" : book.language === "en" ? "en" : "zh-CN" },
       epubChapters,
     );
     return {
