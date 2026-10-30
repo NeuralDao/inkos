@@ -12,7 +12,9 @@
 
 ## Порядок чтения
 
-1. [CURRENT_STATE.md](./CURRENT_STATE.md) — факты, проверенная версия, блокеры и следующий шаг.
+**Выбрать режим до начала работы:** для **исследований** — [RESEARCH_CURRENT_STATE.md](./RESEARCH_CURRENT_STATE.md) → [RESEARCH.md](./RESEARCH.md) → только относящийся к вопросу файл; для **разработки** — [CURRENT_STATE.md](./CURRENT_STATE.md) → [ROADMAP.md](./ROADMAP.md) → нужный код/PR. Команда «продолжаем» в исследовательском чате **не означает запуск Codex**.
+
+1. [CURRENT_STATE.md](./CURRENT_STATE.md) — состояние разработки, код, проверки и следующий **инженерный** шаг.
 2. [ROADMAP.md](./ROADMAP.md) — приоритеты и зависимости.
 3. [ARCHITECTURE.md](./ARCHITECTURE.md) — краткая карта реальных модулей InkOS 2.0, точки входа, известные ограничения.
 4. [LANGUAGE_AUDIT.md](./LANGUAGE_AUDIT.md) — детальный аудит языковых инструкций и маршрутов, статус рисков, тестовый план.
@@ -26,6 +28,7 @@
 12. [RESEARCH_R6_MODELS.md](./RESEARCH_R6_MODELS.md) — R6(a): целевой Selectel AI Router, рублёвый прайс из Library, риск tool calling, реальные aliases и границы P1.M (OpenRouter — архив).
 13. [RESEARCH_R6_TOKEN_ECONOMY.md](./RESEARCH_R6_TOKEN_ECONOMY.md) — R6(c): экономика входа/выхода и reasoning с обезличенной статистикой прошлого прогона InkOS 1.8.
 14. [G1_MODEL_STACK.md](./G1_MODEL_STACK.md) — утверждённый к подготовке кандидат v0 для Selectel (назначения агентов, зависимости P1.M, preflight); не проверенная baseline.
+15. [RESEARCH_CURRENT_STATE.md](./RESEARCH_CURRENT_STATE.md) — отдельная точка входа исследовательского чата: завершённые проходы, открытые вопросы, граница с разработкой.
 
 Затем изучить связанные GitHub Issues/PR и **код** нужной ветки. Для технических выводов указывать проверенный коммит. Если документация противоречит реализации, приоритет у кода; расхождение следует зафиксировать.
 
