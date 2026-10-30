@@ -6,6 +6,7 @@ import { loadWorkManifest } from "../harness/work-store.js";
 import { loadAvailableAgentSkills } from "../skills/builtin-loader.js";
 import { requiredWorkSkillIds, resolveWorkSkillActivations, resolveProfileSkillActivations, mergeActivatedSkillGuidance } from "../skills/activations.js";
 import type { LLMClient, LLMMessage, LLMResponse, OnStreamProgress } from "../llm/provider.js";
+import { clientWithModel } from "../llm/provider.js";
 import { runWorkerAgent, runWorkerAgentTool, type WorkerResultTool } from "../agent/worker-agent.js";
 import type { Static, TSchema } from "@sinclair/typebox";
 import type { Logger } from "../utils/logger.js";
@@ -31,7 +32,9 @@ export abstract class BaseAgent {
   protected readonly ctx: AgentContext;
 
   constructor(ctx: AgentContext) {
-    this.ctx = ctx;
+    const model = ctx.client._piModel;
+    this.ctx = model && model.id !== ctx.model && model.name !== ctx.model
+      ? { ...ctx, client: clientWithModel(ctx.client, ctx.model) } : ctx;
   }
 
   protected get log() {
@@ -58,7 +61,8 @@ export abstract class BaseAgent {
     const result = await runWorkerAgentTool(
       this.ctx.client,
       this.ctx.model,
-      await this.appendTaskSkillGuidance(messages, options?.maxTokens, options?.professionalGuidance),
+      await this.appendTaskSkillGuidance(messages, Math.min(options?.maxTokens ?? this.ctx.client.defaults.maxTokens,
+        this.ctx.client._piModel?.maxTokens ?? this.ctx.client.defaults.maxTokens), options?.professionalGuidance),
       resultTool,
       {
         ...options,

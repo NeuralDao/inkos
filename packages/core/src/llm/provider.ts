@@ -311,6 +311,7 @@ export interface LLMMessage {
 }
 
 export interface LLMClient {
+  readonly _withConfig?: (override: Partial<LLMConfig>) => LLMClient;
   readonly provider: "openai" | "anthropic";
   readonly service?: string;
   readonly configSource?: LLMConfig["configSource"];
@@ -337,7 +338,7 @@ export function createLLMClient(config: LLMConfig): LLMClient {
   const _earlyCard = lookupModel(config.service ?? "custom", config.model);
   const defaults = {
     temperature: config.temperature ?? 0.7,
-    maxTokens: _earlyCard?.maxOutput ?? UNKNOWN_MODEL_FALLBACK_MAX_TOKENS,
+    maxTokens: config.maxTokens ?? _earlyCard?.maxOutput ?? UNKNOWN_MODEL_FALLBACK_MAX_TOKENS,
     thinkingBudget: config.thinkingBudget ?? 0,
     extra: config.extra ?? {},
   };
@@ -383,13 +384,14 @@ export function createLLMClient(config: LLMConfig): LLMClient {
     reasoning: (config.thinkingBudget ?? 0) > 0,
     input: ["text"] as ("text" | "image")[],
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: modelCard?.contextWindowTokens ?? 128_000,
-    maxTokens: modelCard?.maxOutput ?? UNKNOWN_MODEL_FALLBACK_MAX_TOKENS,
+    contextWindow: config.contextWindow ?? modelCard?.contextWindowTokens ?? 128_000,
+    maxTokens: defaults.maxTokens,
     ...(extraHeaders ? { headers: extraHeaders } : {}),
     ...(compat ? { compat } : {}),
   };
 
   return {
+    _withConfig: override => createLLMClient(withDeploymentConfig(config, override)),
     provider,
     service: serviceName,
     configSource: config.configSource,
@@ -400,6 +402,31 @@ export function createLLMClient(config: LLMConfig): LLMClient {
     _apiKey: config.apiKey,
     defaults,
   };
+}
+
+/** Resolve a new model without inheriting the previous model's limits. */
+function withDeploymentConfig(config: LLMConfig, override: Partial<LLMConfig>): LLMConfig {
+  const connectionChanged = (["baseUrl", "service", "provider"] as const)
+    .some(key => override[key] !== undefined && override[key] !== config[key]);
+  const deploymentChanged = connectionChanged || (override.model !== undefined && override.model !== config.model);
+  const credentialsChanged = override.apiKey !== undefined && override.apiKey !== config.apiKey;
+  return { ...config,
+    ...(deploymentChanged ? { contextWindow: undefined, maxTokens: undefined } : {}),
+    // An explicit empty map also prevents environment headers from reappearing.
+    ...(connectionChanged ? { apiKey: "", headers: {} } : credentialsChanged ? { headers: {} } : {}),
+    ...override,
+  };
+}
+
+export function clientWithModel(client: LLMClient, model: string, override: Partial<LLMConfig> = {}): LLMClient {
+  if (client._withConfig) return client._withConfig({ ...override, model });
+  return createLLMClient(withDeploymentConfig({
+    provider: client.provider, service: client.service ?? "custom", configSource: client.configSource ?? "env",
+    model, baseUrl: client._piModel?.baseUrl ?? "", apiKey: client._apiKey ?? "",
+    apiFormat: client.apiFormat, stream: client.stream, proxyUrl: client.proxyUrl,
+    temperature: client.defaults.temperature, thinkingBudget: client.defaults.thinkingBudget,
+    extra: client.defaults.extra, headers: client._piModel?.headers,
+  }, { ...override, model }));
 }
 
 function resolvePiApi(
@@ -513,7 +540,7 @@ function stripReservedKeys(extra: Record<string, unknown>): Record<string, unkno
 
 const warnedFixedTemperatureModels = new Set<string>();
 
-function clampTemperatureForModel(
+export function clampTemperatureForModel(
   service: string | undefined,
   model: string,
   requested: number,

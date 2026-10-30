@@ -4,7 +4,7 @@ import {renderChapterDocument,chapterDocumentBody} from '../utils/chapter-docume
 import {changedSourceRegion} from '../utils/source-text.js';
 import {createBuiltInWorkProfileRegistry} from "../harness/builtin-profiles.js";
 import type { LLMClient, OnStreamProgress } from "../llm/provider.js";
-import { createLLMClient } from "../llm/provider.js";
+import { clientWithModel } from "../llm/provider.js";
 import type { Logger } from "../utils/logger.js";
 import { BookConfigSchema, type BookConfig, type FanficMode } from "../models/book.js";
 import { resolveNarrativeLanguage } from "../utils/book-language.js";
@@ -360,47 +360,19 @@ export class PipelineRunner {
     if (!override) {
       return { model: this.config.model, client: this.config.client };
     }
-    if (typeof override === "string") {
-      return { model: override, client: this.config.client };
-    }
-    // Full override — needs its own client if baseUrl differs
-    if (!override.baseUrl) {
-      return { model: override.model, client: this.config.client };
-    }
-    const base = this.config.defaultLLMConfig;
-    const provider = override.provider ?? base?.provider ?? "custom";
-    const apiKeySource = override.apiKeyEnv
-      ? `env:${override.apiKeyEnv}`
-      : `base:${base?.apiKey ?? ""}`;
-    const stream = override.stream ?? base?.stream ?? true;
-    const apiFormat = base?.apiFormat ?? "chat";
-    const cacheKey = [
-      provider,
-      override.baseUrl,
-      apiKeySource,
-      `stream:${stream}`,
-      `format:${apiFormat}`,
-    ].join("|");
-    let client = this.agentClients.get(cacheKey);
-    if (!client) {
-      const apiKey = override.apiKeyEnv
-        ? process.env[override.apiKeyEnv] ?? ""
-        : base?.apiKey ?? "";
-      client = createLLMClient({
-        provider,
-        service: base?.service ?? "custom",
-        configSource: base?.configSource ?? "env",
-        baseUrl: override.baseUrl,
-        apiKey,
-        model: override.model,
-        temperature: base?.temperature ?? 0.7,
-        thinkingBudget: base?.thinkingBudget ?? 0,
-        apiFormat,
-        stream,
-      });
-      this.agentClients.set(cacheKey, client);
-    }
-    return { model: override.model, client };
+    const selected: AgentLLMOverride = typeof override === "string" ? { model: override } : override;
+    if (typeof override === "string" && override === this.config.model) return { model: override, client: this.config.client };
+    const cacheKey = JSON.stringify(selected);
+    const cached = this.agentClients.get(cacheKey);
+    if (cached) return { model: selected.model, client: cached };
+    const { apiKeyEnv, ...settings } = selected;
+    const client = clientWithModel(this.config.client, selected.model, {
+      ...settings,
+      ...(selected.baseUrl && selected.baseUrl !== this.config.client._piModel?.baseUrl ? { service: "custom" } : {}),
+      ...(apiKeyEnv ? { apiKey: process.env[apiKeyEnv] ?? "" } : {}),
+    });
+    this.agentClients.set(cacheKey, client);
+    return { model: selected.model, client };
   }
 
   private agentCtxFor(agent: string, bookId?: string): AgentContext {
