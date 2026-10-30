@@ -18,6 +18,35 @@
 
 **Резерв, не обязательный запуск:** Kimi K2.5 для Writer/Reviser при подтверждённом FAIL. Исторически использованная DeepSeek V4.1 Flash — ориентир по биллингу версии 1.8, **не** подтверждение совместимости/качества в версии 2.0.
 
+## Температура: статическая сверка InkOS 2.0 и профиль G1 v0 (30.10.2026)
+
+**Код:** `NeuralDao/inkos custom/main@c130a39edb1be38954247bc91f588e180b5f6cfd` (последний merge исходников `24bdd47c`). **Нет** ни Selectel-запросов, ни гарантии, что конкретный alias принимает эти параметры. Температура — sampling, а не reasoning и не доказательство качества. Таблица ниже показывает **встроенные per-call значения**; это **начальная гипотеза для сохранения baseline, не оптимальные числа для каждого модельного семейства**.
+
+| Реальная операция G1 | Статически передаётся | Код и замечания |
+| --- | ---: | --- |
+| Architect: новая foundation (outline, details, cast index, cast cards) | **0.8** | `agents/architect.ts:69–77,264–332`; для импортированной foundation — 0.5, для фанфика — 0.7 (не наш G1) |
+| Planner: chapter memo | **0.7** | `agents/planner.ts:142–154` |
+| Composer: semantic source selection | **0.1** | `agents/composer.ts:468–488`; complete fast path **не вызывает LLM** |
+| Composer: semantic-context-compiler / recompilation | **0.1** | `agents/semantic-context-compiler.ts:37–78` |
+| Writer: `submit_chapter_draft` | **0.7**, или `temperatureOverride` | `agents/writer.ts:135–155`. Только creative phase |
+| Writer: Settler `submit_runtime_state_delta` | **0.3** | `agents/writer.ts:313–327`; **тот же ключ модели `writer`, другая задача и температура** |
+| ContinuityAuditor: обычная глава/предревизионный аудит | **0.3** | `agents/continuity.ts:89`, `pipeline/chapter-review.ts:61` |
+| ContinuityAuditor: проверка после ревизии | **0.0** | `pipeline/runner.ts:1046–1056`; намеренно строже обычной проверки |
+| Reviser: full rewrite, spot-fix plan, spot-fix replacements | **0.3** | `agents/reviser.ts:98–158` |
+| StateValidator | **0.1** | `agents/state-validator.ts:71–86` |
+
+**Проблема реального контроля:**
+- `models/project.ts:20–34`: `LLMConfig.temperature=0.7` по умолчанию, диапазон схемы **0–2**. `utils/effective-llm-config.ts:320–354` допускает `services[].temperature` и `INKOS_LLM_TEMPERATURE`, но это только **клиентское значение по умолчанию**. Практически все перечисленные агенты передают `temperature` явно, поэтому смена глобальных 0.7 их **не перенастроит**.
+- `models/project.ts:78–84`: `AgentLLMOverrideSchema` не допускает `temperature` (как и per-agent `thinkingBudget`). Даже добавление поля в эту схему **само по себе недостаточно**: явные per-call параметры имеют приоритет. Более того, для Writer и Settler одним ролевым значением нельзя безопасно заменить одновременно 0.7 и 0.3.
+- `pipeline/runner.ts:1337`: `...(temperatureOverride ? { temperatureOverride } : {})` **теряет корректный 0** при передаче Writer; `writer.ts:135` сам использует корректное `??`. Исправление должно сохранять 0 как число.
+- `llm/provider.ts:516–532,1487–1492` реализует `clampTemperatureForModel()` для **обычного** `chatCompletion()` с lookup модельной карточки (например, фиксированная 1 у некоторых Kimi на их родном сервисе). Но `agent/worker-agent.ts:312–397` для `submitStructured` идёт напрямую через `guardedPiStream/guardedPiNonStreaming` в `agent/pi-stream.ts:32–145`, **минуя эту модельную проверку**. Именно structured tools составляют основные операции G1. `service-presets.ts` также экспортирует `clampTemperature()` по service range, но не подтверждено использование его на этом пути.
+- `agent/pi-stream.ts:74–87` записывает в `model-request-prepared` stream/thinking/лимиты/tool_choice, **но не temperature**. Поэтому существующая execution evidence не доказывает эффективную температуру каждого запроса. `provider.ts:492–500` фильтрует reserved `temperature` для некоторых generic extras, однако `worker-agent.ts:391` добавляет `client.defaults.extra` в structured payload; проверять именно итоговый wire JSON, а не только входную настройку.
+- **Точные требования Selectel-моделей не подтверждены** (допустимый диапазон, фиксированное значение, игнорирование поля или обязательное опущение). OpenAI-compatible API сам по себе не гарантирует поддержку всех sampling-параметров у каждого alias. Не подменять официальный Selectel AI Router сведениями об отдельном сервисе Selectel Dedicated Inference и не копировать требования родного Moonshot endpoint на Selectel без проверки.
+
+**Рекомендация для P1.M — узкая, без общего рефакторинга промптов:** обеспечить управляемую эффективную температуру **по реальной операции** (в т.ч. отдельно Writer draft и Writer Settler, обычный Auditor и post-revision Auditor), с сохранением указанных исторических значений при отсутствии настройки. Порядок: `явное изменение для операции` → `существующий operation default` → `LLMConfig.temperature`, если у операции своего значения нет; затем **модельно-провайдерская валидация**: поддерживает число — отправить, зафиксированное fixed value — применить/показать причину или fail заранее, не поддерживает — корректно опустить поле/явно отказать. Не вводить одновременно десятки обязательных UI-полей. Точную форму опционального конфига определить узкой задачей Codex **только после разрешения**, а не фиксировать здесь новую схему без проверки потребителей.
+
+**Минимальные офлайн-критерии P1.M:** два модельных ID на одном endpoint и разные температурные профили; `0` успешно достигает Writer и post-revision Auditor; параметры на **финальном** OpenAI-compatible JSON для stream=true/false соответствуют запросу; несовместимый sampling-параметр не приводит к повторным оплачиваемым 400; изменённая настройка Writer не переписывает автоматически Settler; recording effective `role / operation / model ID / requested temperature / sent or omitted / override reason` **без ключей/рукописей**. До G1 не подбирать «идеальные» значения перебором: сначала совместимость и воспроизводимый baseline.
+
 ## Почему такой выбор
 
 Сначала качество русского текста, валидные структурированные вызовы и сохранение канона; среди подходящих моделей — минимальная стоимость **всех** input, cached input, output, reasoning, correction turns и повторов на **принятую главу**. Writer и полный Reviser имеют дорогой выход; Planner, Auditor, Settler и StateValidator много читают. Composer в основном работает локально. Не внедрять отдельный proxy и не вводить много новых ролей ради эксперимента.
