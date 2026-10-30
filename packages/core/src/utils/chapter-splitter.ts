@@ -4,9 +4,15 @@ export interface SplitChapter {
 }
 
 const NUMBERED_HEADING = /^#{0,6}\s*(?:第([零〇○Ｏ０一二三四五六七八九十百千万\d]+)(章|回)(?:[:：]|\s+)?\s*(.*)|Chapter\s+(\d+|[IVXLCDM]+)[.:]?\s*(.*))$/i;
+const RUSSIAN_HEADING = /^#{0,6}\s*Глава\s+(\d+)(?:[.:]\s*|\s+|$)(.*)$/iu;
 
 /** Numbered document syntax shared by persistence, export and import. */
-export function readChapterHeading(line: string): {number:number;title:string;language:'zh'|'en'} | undefined {
+export function readChapterHeading(line: string): {number:number;title:string;language:'zh'|'en'|'ru'} | undefined {
+  const russian=RUSSIAN_HEADING.exec(line.trim());
+  if(russian){
+    const number=Number(russian[1]);
+    return Number.isSafeInteger(number)&&number>=0?{number,title:russian[2]!.trim(),language:'ru'}:undefined;
+  }
   const match=NUMBERED_HEADING.exec(line.trim());
   if(!match)return undefined;
   const ordinal=match[1]??match[4]!;
@@ -41,6 +47,7 @@ export function readChapterHeading(line: string): {number:number;title:string;la
  * - "第一回 xxxx" / "第1回 xxxx"
  * - "# 第1章 xxxx" / "## 第23章 xxxx"
  * - "CHAPTER I." / "CHAPTER II."
+ * - "# Глава 1: Обман RiverLine" / "Глава 2: Последний рейс"
  *
  * Each match marks the start of a new chapter. Content between matches
  * belongs to the preceding chapter.
@@ -98,6 +105,7 @@ export function splitChapters(
 }
 
 function inferFallbackTitle(headingLine: string, chapterNumber: number): string {
+  if (/глава\s+\d+/iu.test(headingLine)) return `Глава ${chapterNumber}`;
   if (/chapter\s+(?:\d+|[ivxlcdm]+)/i.test(headingLine)) {
     return `Chapter ${chapterNumber}`;
   }

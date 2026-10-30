@@ -1,12 +1,13 @@
 import {splitSourceLines} from './source-text.js';
 import {readChapterHeading} from './chapter-splitter.js';
 
-export function chapterDocumentHeading(number:number,title:string,language:'zh'|'en'):string{
+export function chapterDocumentHeading(number:number,title:string,language:'zh'|'en'|'ru'):string{
+  if(language==='ru')return `# Глава ${number}: ${title}`;
   return language==='en'?`# Chapter ${number}: ${title}`:`# 第${number}章 ${title}`;
 }
 
 /** The numbered title belongs to the document wrapper, not the chapter prose. */
-export function chapterDocumentBody(content:string,number:number,title:string,language:'zh'|'en'):string{
+export function chapterDocumentBody(content:string,number:number,title:string,language:'zh'|'en'|'ru'='en'):string{
   const heading=chapterDocumentHeading(number,title,language);
   const lines=splitSourceLines(content);
   let cursor=0,bodyStart=0;
@@ -21,6 +22,6 @@ export function chapterDocumentBody(content:string,number:number,title:string,la
   return bodyStart?lines.slice(bodyStart).join(''):content;
 }
 
-export function renderChapterDocument(number:number,title:string,content:string,language:'zh'|'en'):string{
+export function renderChapterDocument(number:number,title:string,content:string,language:'zh'|'en'|'ru'):string{
   return chapterDocumentHeading(number,title,language)+'\n\n'+chapterDocumentBody(content,number,title,language);
 }
