@@ -1,4 +1,6 @@
-# Инвентаризация архитектуры InkOS 2.0
+# Инвентаризация архитектуры InkOS 2.0 — исторический кодовый снимок
+
+**Не текущий реестр возможностей:** исходный статический аудит до P0/P1.1a/P1.1b. Снимок ниже сохранён ради карты модулей и причин решений; после него на `custom/main@24bdd47c` интегрированы P0, кириллические идентификаторы и `BookConfig.narrativeLanguage`. Поэтому упоминания «сейчас нет RU-поля», старой pnpm/Studio-настройки или необходимости P0 **не относятся к актуальному HEAD**. Новый технический вывод — только после чтения кода нужной ветки; оперативный статус — [CURRENT_STATE.md](./CURRENT_STATE.md). Исследовательские направления — [RESEARCH_CURRENT_STATE.md](./RESEARCH_CURRENT_STATE.md).
 
 **Проверено:** 29.10.2026, `NeuralDao/inkos@custom/main`, исходный коммит `d05b455992fd377adcfac81e2fb68ea1898eb282` (изменения только в документации поверх кодового `2de9ac5`). Анализ выполнен чтением кода GitHub **без** сборки и запуска LLM.
 
@@ -44,7 +46,7 @@ Node.js: `>=22.16.0` по манифесту. Локальная приорит�
 
 ## Языки — подтверждённый системный пробел для цели форка
 
-Сейчас валидаторы `packages/core/src/models/book.ts` и `project.ts` поддерживают только `zh` / `en`. Та же пара зашита в `packages/cli/src/localization.ts`, `packages/cli/src/commands/init.ts`, `packages/studio/src/lib/app-language.ts`, `packages/studio/src/pages/LanguageSelector.tsx`, а также в нескольких агентах.
+**На момент этого снимка (до P1.1b)** валидаторы `packages/core/src/models/book.ts` и `project.ts` поддерживали только `zh` / `en`. **После PR #3** рабочий `book.language` остаётся `en/zh`, но появилась отдельная `book.narrativeLanguage?: en|zh|ru`; счётчик/EPUB и остальные художественные маршруты всё ещё требуют отдельной проверки ([R5](./RESEARCH_R5_LENGTH_EXPORT.md)). Та же пара зашита в `packages/cli/src/localization.ts`, `packages/cli/src/commands/init.ts`, `packages/studio/src/lib/app-language.ts`, `packages/studio/src/pages/LanguageSelector.tsx`, а также в нескольких агентах.
 
 **Важно:** `packages/core/src/utils/length-metrics.ts` считает `en_words` латинской регуляркой, а `zh_chars` — непробельными символами. В `packages/core/src/utils/source-text.ts` есть **другой** латинский счётчик `englishWords` для измерений исходного документа. Потребители метрик: `state/chapter-word-sync.ts`, `pipeline/runner.ts`, `pipeline/chapter-review.ts`, а также короткая проза в `agents/short-fiction.ts`. Проверить различия целей метрик и зависимости, не заменять все регулярки без разбора.
 
