@@ -7,6 +7,7 @@ import type { LLMClient, OnStreamProgress } from "../llm/provider.js";
 import { createLLMClient } from "../llm/provider.js";
 import type { Logger } from "../utils/logger.js";
 import { BookConfigSchema, type BookConfig, type FanficMode } from "../models/book.js";
+import { resolveNarrativeLanguage } from "../utils/book-language.js";
 import type { ChapterMeta } from "../models/chapter.js";
 import type { NotifyChannel, LLMConfig, AgentLLMOverride } from "../models/project.js";
 import { ArchitectAgent, type ArchitectOutput } from "../agents/architect.js";
@@ -985,6 +986,7 @@ export class PipelineRunner {
         book.genre,
         {
           language,
+          narrativeLanguage: resolveNarrativeLanguage(book),
           chapterTitle:chapterMeta.title,
           targetText:editScope?.targetText,
           contextPackage: reviseControlInput.contextPackage,

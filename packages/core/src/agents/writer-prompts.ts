@@ -2,6 +2,7 @@ import type { BookConfig } from "../models/book.js";
 import type { BookRules } from "../models/book-rules.js";
 import type { LengthSpec } from "../models/length-governance.js";
 import { buildLengthSpec } from "../utils/length-metrics.js";
+import { resolveNarrativeLanguage } from "../utils/book-language.js";
 
 /** Writer protocol. Narrative craft comes from the active long-writing Skill. */
 export function buildWriterSystemPrompt(
@@ -33,7 +34,17 @@ export function buildWriterSystemPrompt(
         authorityBlock("本书规则", bookRulesBody),
         authorityBlock("文风指南", styleGuide),
       ];
-  return sections.filter(Boolean).join("\n\n");
+  return [...sections, chapterDraftLanguageContract(book)].filter(Boolean).join("\n\n");
+}
+
+function chapterDraftLanguageContract(book: BookConfig): string {
+  const language = resolveNarrativeLanguage(book);
+  const target = { en: "English", zh: "Chinese", ru: "Russian" }[language];
+  return `## Chapter draft language
+For submit_chapter_draft only: write the generated title and the narrative prose in content in ${target} (${language}), independently of the operational language.
+Preserve a chapter title explicitly specified by the author as exact verbatim, even if it is in another language. Preserve canon-established spellings of names and terms, and quotations explicitly required to be reproduced verbatim.
+Use the target narrative language and canon-consistent terminology. An English name or term in internal plans alone does not prohibit natural Russian rendering or translation/transliteration into the target narrative language. Latin and other scripts are allowed when meaningful or explicitly requested by the author.
+This contract applies only to title and content, not to state settlement or other operational outputs. Keep IDs, JSON keys, tool names, the result schema, and operational materials unchanged.`;
 }
 
 function governedContract(language: "zh" | "en"): string {
