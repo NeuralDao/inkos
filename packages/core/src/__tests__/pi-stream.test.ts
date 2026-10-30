@@ -27,6 +27,9 @@ import {loadWorkManifest, listWorkManifests, createWorkManifest, saveWorkManifes
 import {createBookFoundationTool} from '../harness/tools/longform-production.js';
 import {WriterAgent} from '../agents/writer.js';
 import {ContinuityAuditor} from '../agents/continuity.js';
+import {StateValidatorAgent} from '../agents/state-validator.js';
+import {createInitialRuntimeState} from '../state/runtime-state-store.js';
+import type {BookConfig} from '../models/book.js';
 
 const fetchWithProxyMock = vi.hoisted(() => vi.fn());
 
@@ -133,6 +136,76 @@ function finishResponse(status: 'answered' | 'delivered' | 'needs_input' | 'bloc
 }
 
 describe("guardedPiNonStreaming", () => {
+  it("routes Writer, Settler and StateValidator through their assigned structured clients", async () => {
+    const root = await mkdtemp(join(tmpdir(), "inkos-model-preflight-"));
+    const network = vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("Unexpected network request"));
+    const requests: Array<{ url: string; body: any; headers: Headers }> = [];
+    const sequence = ["submit_chapter_draft", "submit_runtime_state_delta", "submit_state_validation"];
+    const responses: Record<string, unknown> = {
+      submit_chapter_draft: { title: "Пристань", content: "Ёж заметил RiverLine у пристани." },
+      submit_runtime_state_delta: {
+        postSettlement: "The visitor sees the ferry.", factOps: { upsert: [], expire: [] },
+        hookOps: { upsert: [], mention: [], resolve: [], defer: [] }, newHookCandidates: [],
+        chapterSummary: { title: "Пристань", characters: "visitor", events: "Ferry seen", stateChanges: "", hookActivity: "", mood: "quiet", chapterType: "arrival" },
+      },
+      submit_state_validation: { reconciliationRequired: false, reportMarkdown: "" },
+    };
+    fetchWithProxyMock.mockImplementation(async (url: string, init: RequestInit) => {
+      const body = JSON.parse(String(init.body));
+      requests.push({ url, body, headers: new Headers(init.headers) });
+      const name = body.tools?.[0]?.function?.name;
+      if (name !== sequence[requests.length - 1] || !Object.hasOwn(responses, name)) throw new Error(`Unexpected fake request: ${name}`);
+      return new Response(JSON.stringify({ choices: [{ finish_reason: "tool_calls", message: { tool_calls: [{
+        id: `fixture-${requests.length}`, type: "function", function: { name, arguments: JSON.stringify(responses[name]) },
+      }] } }], usage: { prompt_tokens: 10, completion_tokens: 2, total_tokens: 12 } }));
+    });
+    try {
+      const bookDir = join(root, "source");
+      await mkdir(join(bookDir, "story"), { recursive: true });
+      await writeFile(join(bookDir, "story", "book_rules.md"), "Preserve established facts.");
+      await writeFile(join(bookDir, "story", "book_rules.json"), JSON.stringify({ version: "2", prohibitions: [], enableFullCastTracking: false, allowedDeviations: [] }));
+      await createInitialRuntimeState({ bookDir, language: "en" });
+      const book: BookConfig = { id: "preflight", title: "Пристань", genre: "general", platform: "other", status: "active",
+        language: "en", narrativeLanguage: "ru", targetChapters: 1, chapterWordCount: 100,
+        createdAt: "2026-10-30T00:00:00.000Z", updatedAt: "2026-10-30T00:00:00.000Z" };
+      const base = createLLMClient(LLMConfigSchema.parse({ provider: "custom", service: "custom", baseUrl: "https://fake-router.invalid/v1", model: "base-alias", apiKey: "fixture-key", headers: {}, stream: false }));
+      const runner = new PipelineRunner({ projectRoot: root, client: base, model: "base-alias", modelOverrides: {
+        writer: { model: "writer-alias", contextWindow: 32000, maxTokens: 1200 },
+        "state-validator": { model: "validator-alias", contextWindow: 24000, maxTokens: 800 },
+      } });
+      const writerContext = runner.createAgentContext("writer");
+      const validatorContext = runner.createAgentContext("state-validator");
+      expect(writerContext.model).toBe("writer-alias");
+      expect(validatorContext.model).toBe("validator-alias");
+      expect(writerContext.client).not.toBe(validatorContext.client);
+      expect(writerContext.client._piModel).toMatchObject({ id: "writer-alias", contextWindow: 32000, maxTokens: 1200 });
+      expect(validatorContext.client._piModel).toMatchObject({ id: "validator-alias", contextWindow: 24000, maxTokens: 800 });
+      expect(runner.createAgentContext("unconfigured")).toMatchObject({ model: "base-alias", client: base });
+      const output = await new WriterAgent(writerContext).writeChapter({ book, bookDir, chapterNumber: 1,
+        chapterIntent: "A visitor arrives.", chapterMemo: { chapter: 1, goal: "Arrival", body: "The visitor sees the ferry.", threadRefs: [] },
+        contextPackage: { chapter: 1, selectedContext: [] } });
+      expect(output.content).toBe("Ёж заметил RiverLine у пристани.");
+      const validation = await new StateValidatorAgent(validatorContext).validate(output.content, 1, "The ferry is absent.", "The ferry is present.", "No hooks.", "No hooks.", "en");
+      expect(validation).toMatchObject({ consistent: true, reconciliationRequired: false });
+      expect(requests).toHaveLength(3);
+      expect(requests.map(request => request.body.model)).toEqual(["writer-alias", "writer-alias", "validator-alias"]);
+      expect(requests.map(request => request.body.tools[0].function.name)).toEqual(sequence);
+      expect(requests.map(request => request.body.temperature)).toEqual([0.7, 0.3, 0.1]);
+      expect(requests.map(request => request.body.max_tokens)).toEqual([1200, 1200, 800]);
+      for (const request of requests) {
+        expect(request.url).toBe("https://fake-router.invalid/v1/chat/completions");
+        expect(request.body.tool_choice).toBe("required");
+        expect(request.body.tools).toHaveLength(1);
+        expect(request.body.tools[0].function.parameters).toMatchObject({ type: "object" });
+        expect(request.headers.get("authorization")).toBe("Bearer fixture-key");
+      }
+      expect(network).not.toHaveBeenCalled();
+    } finally {
+      network.mockRestore();
+      await rm(root, { recursive: true, force: true });
+    }
+  }, 30000);
+
   it('keeps a native creation entry focused on its selected producer without executing it automatically',async()=>{
     const root=await mkdtemp(join(tmpdir(),'inkos-creation-entry-'));let tools:string[]=[];
     fetchWithProxyMock.mockImplementation(async(_url:string,init:RequestInit)=>{const body=JSON.parse(String(init.body));tools=body.tools.map((t:any)=>t.function.name);return finishResponse('needs_input','Select a source.');});
