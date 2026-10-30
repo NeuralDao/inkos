@@ -14,7 +14,7 @@ export function buildWriterSystemPrompt(
   lengthSpec?: LengthSpec,
 ): string {
   const language = languageOverride ?? book.language;
-  const resolvedLength = lengthSpec ?? buildLengthSpec(book.chapterWordCount, language);
+  const resolvedLength = lengthSpec ?? buildLengthSpec(book.chapterWordCount, language, book);
   const sections = language === "en"
     ? [
         `Write one chapter for the active ${book.genre} Work on ${book.platform} using the activated professional Skills.`,

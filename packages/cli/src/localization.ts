@@ -1,4 +1,4 @@
-import { formatLengthCount, resolveLengthCountingMode, type Observation } from "@actalk/inkos-core";
+import { formatLengthCount, resolveLengthCountingMode, type LengthCountingMode, type Observation } from "@actalk/inkos-core";
 
 export type CliLanguage = "zh" | "en";
 
@@ -421,7 +421,7 @@ export function formatChapterSyncNoChanges(language: CliLanguage, checked: numbe
 export function formatChapterSyncChange(
   language: CliLanguage,
   change: { number: number; title: string; previousWordCount: number; wordCount: number },
-  countingMode: "zh_chars" | "en_words",
+  countingMode: LengthCountingMode,
 ): string {
   const from = formatLengthCount(change.previousWordCount, countingMode);
   const to = formatLengthCount(change.wordCount, countingMode);

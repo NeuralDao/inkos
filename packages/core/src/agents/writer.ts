@@ -11,7 +11,7 @@ import type { ChapterIntent, ChapterMemo, ContextPackage } from "../models/input
 import type { LengthSpec } from "../models/length-governance.js";
 import type { ChapterMeta } from "../models/chapter.js";
 import { RuntimeStateDeltaSchema, type RuntimeStateDelta } from "../models/runtime-state.js";
-import { buildLengthSpec, countChapterLength } from "../utils/length-metrics.js";
+import { buildLengthSpec, countChapterLength, resolveLengthCountingMode } from "../utils/length-metrics.js";
 import {
   buildRuntimeStateArtifacts,
   buildRuntimeStateArtifactsFromSnapshot,
@@ -255,7 +255,7 @@ export class WriterAgent extends BaseAgent {
       content: input.content,
       wordCount: countChapterLength(
         input.content,
-        resolvedLanguage === "en" ? "en_words" : "zh_chars",
+        resolveLengthCountingMode(resolvedLanguage, input.book.narrativeLanguage),
       ),
       postSettlement: settlement.postSettlement,
       runtimeStateDelta: runtimeStateArtifacts?.resolvedDelta ?? settlement.runtimeStateDelta,

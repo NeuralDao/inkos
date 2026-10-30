@@ -38,7 +38,7 @@ export async function syncChapterWordCounts(
   bookId: string,
 ): Promise<ChapterWordSyncResult> {
   const book = await deps.loadBookConfig(bookId);
-  const countingMode = resolveLengthCountingMode(book.language);
+  const countingMode = resolveLengthCountingMode(book.language, book.narrativeLanguage);
   const index = await deps.loadChapterIndex(bookId);
   if (index.length === 0) {
     return { bookId, countingMode, checkedChapters: 0, changes: [], missingChapterFiles: [] };
@@ -66,7 +66,8 @@ export async function syncChapterWordCounts(
     }
     const content = await readFile(join(chaptersDir, fileName), "utf-8");
     const wordCount = countChapterLength(content, countingMode);
-    if (wordCount === chapter.wordCount) {
+    const telemetry = chapter.lengthTelemetry;
+    if (wordCount === chapter.wordCount && (!telemetry || (telemetry.countingMode === countingMode && telemetry.finalCount === wordCount))) {
       nextIndex.push(chapter);
       continue;
     }
@@ -76,7 +77,9 @@ export async function syncChapterWordCounts(
       previousWordCount: chapter.wordCount,
       wordCount,
     });
-    nextIndex.push({ ...chapter, wordCount, updatedAt: now });
+    nextIndex.push({ ...chapter, wordCount, updatedAt: now,
+      ...(telemetry ? { lengthTelemetry: { ...telemetry, countingMode, finalCount: wordCount } } : {}),
+    });
   }
 
   if (changes.length > 0) {

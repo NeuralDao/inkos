@@ -270,10 +270,6 @@ export class PipelineRunner {
     return this.resolveBookLanguage(book);
   }
 
-  private languageFromLengthSpec(lengthSpec: Pick<LengthSpec, "countingMode">): LengthLanguage {
-    return lengthSpec.countingMode === "en_words" ? "en" : "zh";
-  }
-
   private logStage(language: LengthLanguage, message: { zh: string; en: string }): void {
     this.config.logger?.info(
       `${this.localize(language, { zh: "阶段：", en: "Stage: " })}${this.localize(language, message)}`,
@@ -906,7 +902,7 @@ export class PipelineRunner {
       const content = await this.readChapterContent(bookDir, targetChapter);
       const auditor = new ContinuityAuditor(this.agentCtxFor("auditor", bookId));
       const language = book.language;
-      const countingMode = resolveLengthCountingMode(language);
+      const countingMode = resolveLengthCountingMode(language, book.narrativeLanguage);
       const persistedChapterBrief = await readChapterUserBrief(bookDir, targetChapter);
       const effectiveExternalContext = mergeChapterRevisionInstructions(
         persistedChapterBrief,
@@ -1345,7 +1341,7 @@ export class PipelineRunner {
     let totalUsage: TokenUsageSummary = output.tokenUsage ?? { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
     this.logStage(stageLanguage, { zh: "生成章节审查观察", en: "collecting chapter review observations" });
     const reviewResult = await reviewChapterDraft({
-      book: { genre: book.genre },
+      book: { genre: book.genre, language: book.language },
       bookDir,
       chapterNumber,
       output,
@@ -1591,6 +1587,12 @@ export class PipelineRunner {
 
     index[targetIndex] = {
       ...targetMeta,
+      wordCount: syncedOutput.wordCount,
+      ...(targetMeta.lengthTelemetry ? { lengthTelemetry: {
+        ...targetMeta.lengthTelemetry,
+        countingMode: resolveLengthCountingMode(book.language, book.narrativeLanguage),
+        finalCount: syncedOutput.wordCount,
+      } } : {}),
       updatedAt: new Date().toISOString(),
       observations: targetMeta.observations.filter((observation) => observation.code !== "state-sync-required"),
     };
@@ -1598,12 +1600,12 @@ export class PipelineRunner {
     return {
       chapterNumber: targetChapter,
       title: targetMeta.title,
-      wordCount: targetMeta.wordCount,
+      wordCount: syncedOutput.wordCount,
       review: {
         observations: [],
         summary: "chapter truth/state resynced from edited body",
       },
-      lengthTelemetry: targetMeta.lengthTelemetry,
+      lengthTelemetry: index[targetIndex]!.lengthTelemetry,
       tokenUsage: targetMeta.tokenUsage,
     };
   }
@@ -1757,7 +1759,7 @@ export class PipelineRunner {
         en: `Step 2: Sequential replay from chapter ${startFrom}...`,
       }));
       const writer = new WriterAgent(this.agentCtxFor("writer", input.bookId));
-      const countingMode = resolveLengthCountingMode(book.language);
+      const countingMode = resolveLengthCountingMode(book.language, book.narrativeLanguage);
       let totalWords = 0;
       let importedCount = 0;
 

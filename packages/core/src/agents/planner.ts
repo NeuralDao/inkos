@@ -86,6 +86,7 @@ export class PlannerAgent extends BaseAgent {
     const lengthSpec = buildLengthSpec(
       input.book.chapterWordCount,
       input.book.language,
+      input.book,
     );
     const memo = await this.planChapterMemo({
       chapterNumber: input.chapterNumber,
@@ -132,7 +133,7 @@ export class PlannerAgent extends BaseAgent {
       currentInstruction: input.currentInstruction,
       lengthBudget: {
         target: input.lengthSpec.target,
-        unit: input.lengthSpec.countingMode === "en_words" ? "words" : "字",
+        unit: input.lengthSpec.countingMode === "zh_chars" ? "字" : "words",
       },
       language,
     });

@@ -77,8 +77,7 @@ function expectRussianContract(mode: ReviseMode) {
 }
 
 describe("Reviser narrative language", () => {
-  // Pure Agent prompt/scope tests omit the optional lengthSpec. The real
-  // Runner length contract is not bypassed; its RU limitation is tested below.
+  // Prompt/scope tests omit optional bounds; RU length validation is tested below.
   it.each(modes)("keeps English operations, Russian prose and the %s scope", async (mode) => {
     replies = mode === "spot-fix"
       ? [{ ranges: [{ startLine: 2, endLine: 2 }] }, { range_0_content: replacement }]
@@ -147,24 +146,61 @@ describe("Reviser narrative language", () => {
     expectRussianContract("spot-fix");
   });
 
-  it("does not bypass the existing en_words rejection for pure Russian prose", async () => {
-    expect(countChapterLength(revised, "en_words")).toBe(0);
+  it("accepts pure Russian prose within explicit ru_words bounds", async () => {
+    expect(countChapterLength(revised, "ru_words")).toBe(9);
     replies = [{ revisedContent: revised }];
-    await expect(agent().reviseChapter("unused", original, 1, [], "rewrite", undefined, {
+    const result = await agent().reviseChapter("unused", original, 1, [], "rewrite", undefined, {
       language: "en", narrativeLanguage: "ru", contextPackage,
-      lengthSpec: buildLengthSpec(20, "en", { minChapterLength: 10, maxChapterLength: 30 }),
+      lengthSpec: buildLengthSpec(9, "en", { narrativeLanguage: "ru", minChapterLength: 8, maxChapterLength: 10 }),
+    });
+    expect(result.wordCount).toBe(9);
+    expect(result.revisedContent).toBe(revised);
+  });
+
+  it.each(["ranges", "targetText"] as const)("accepts Russian %s replacements within the shared budget", async (branch) => {
+    replies = branch === "ranges"
+      ? [{ ranges: [{ startLine: 2, endLine: 2 }] }, { range_0_content: revised + "\r\n" }]
+      : [{ range_0_content: revised }];
+    const result = await agent().reviseChapter("unused", original, 1, [], "spot-fix", undefined, {
+      language: "en", narrativeLanguage: "ru", contextPackage,
+      ...(branch === "targetText" ? { targetText: "Старая строка." } : {}),
+      lengthSpec: buildLengthSpec(15, "en", { narrativeLanguage: "ru", minChapterLength: 14, maxChapterLength: 16 }),
+    });
+    expect(result.wordCount).toBe(15);
+    expect(result.revisedContent).toBe(`Protected English NASA.\r\n${revised}\r\nProtected Apollo-1 suffix.\n`);
+    const prompt = submissions.at(-1)!.messages.at(-1)!.content;
+    expect(JSON.parse(prompt).replacementBudget).toEqual({ countingMode: "ru_words", fixedContentLength: 6, minimum: 8, maximum: 10 });
+  });
+
+  it.each(["rewrite", "ranges", "targetText"] as const)("still rejects out-of-range Russian %s output", async (branch) => {
+    replies = branch === "rewrite" ? [{ revisedContent: revised }]
+      : branch === "ranges" ? [{ ranges: [{ startLine: 2, endLine: 2 }] }, { range_0_content: revised + "\r\n" }]
+      : [{ range_0_content: revised }];
+    await expect(agent().reviseChapter("unused", original, 1, [], branch === "rewrite" ? "rewrite" : "spot-fix", undefined, {
+      language: "en", narrativeLanguage: "ru", contextPackage,
+      ...(branch === "targetText" ? { targetText: "Старая строка." } : {}),
+      lengthSpec: buildLengthSpec(20, "en", { narrativeLanguage: "ru", minChapterLength: 18, maxChapterLength: 22 }),
     })).rejects.toMatchObject({ code: "CHAPTER_LENGTH_OUT_OF_RANGE" });
   });
 
-  it.each(["ranges", "targetText"] as const)("keeps length validation active for Russian %s replacements", async (branch) => {
+  it.each(["ranges", "targetText"] as const)("keeps the RU maximum and protected text binding for %s", async (branch) => {
     replies = branch === "ranges"
       ? [{ ranges: [{ startLine: 2, endLine: 2 }] }, { range_0_content: revised + "\r\n" }]
       : [{ range_0_content: revised }];
     await expect(agent().reviseChapter("unused", original, 1, [], "spot-fix", undefined, {
       language: "en", narrativeLanguage: "ru", contextPackage,
       ...(branch === "targetText" ? { targetText: "Старая строка." } : {}),
-      lengthSpec: buildLengthSpec(50, "en", { minChapterLength: 40, maxChapterLength: 60 }),
-    })).rejects.toMatchObject({ code: "CHAPTER_LENGTH_OUT_OF_RANGE" });
+      lengthSpec: buildLengthSpec(9, "en", { narrativeLanguage: "ru", minChapterLength: 8, maxChapterLength: 10 }),
+    })).rejects.toMatchObject({ code: "CHAPTER_LENGTH_OUT_OF_RANGE", replacementBudget: { countingMode: "ru_words", fixedContentLength: 6, maximum: 4 } });
+  });
+
+  it("rejects a local scope whose protected RU text alone exceeds the maximum", async () => {
+    replies = [{ ranges: [{ startLine: 2, endLine: 2 }] }];
+    await expect(agent().reviseChapter("unused", original, 1, [], "spot-fix", undefined, {
+      language: "en", narrativeLanguage: "ru", contextPackage,
+      lengthSpec: buildLengthSpec(4, "en", { narrativeLanguage: "ru", maxChapterLength: 5 }),
+    })).rejects.toMatchObject({ code: "CHAPTER_EDIT_SCOPE_CONFLICT" });
+    expect(submissions.map(call => call.name)).toEqual(["submit_chapter_edit_ranges"]);
   });
 
   it("keeps the full-rewrite result schema unchanged", () => {

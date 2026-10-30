@@ -22,7 +22,7 @@ describe("Runner forwards narrative language independently to Reviser", () => {
     ["en", "ru", "ru"],
     ["en", undefined, "en"],
     ["zh", undefined, "zh"],
-  ] as const)("routes operational %s / narrative %s without changing length policy", async (language, narrativeLanguage, expectedNarrative) => {
+  ] as const)("routes operational %s / narrative %s with the matching length policy", async (language, narrativeLanguage, expectedNarrative) => {
     const root = await mkdtemp(join(tmpdir(), "inkos-reviser-route-"));
     roots.push(root);
     const book: BookConfig = {
@@ -59,7 +59,7 @@ describe("Runner forwards narrative language independently to Reviser", () => {
     expect(revise).toHaveBeenCalledTimes(1);
     expect(revise.mock.calls[0]![6]).toMatchObject({
       language, narrativeLanguage: expectedNarrative, targetText: "Старая фраза.", chapterTitle: "Door",
-      lengthSpec: { target: 2000, minChapterLength: 1500, maxChapterLength: 2500, countingMode: language === "en" ? "en_words" : "zh_chars" },
+      lengthSpec: { target: 2000, minChapterLength: 1500, maxChapterLength: 2500, countingMode: narrativeLanguage === "ru" ? "ru_words" : language === "en" ? "en_words" : "zh_chars" },
     });
     expect(await readFile(join(bookDir, "chapters", "0001-door.md"), "utf8")).toBe(chapter);
   });

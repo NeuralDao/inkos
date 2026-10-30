@@ -22,7 +22,7 @@ export interface ChapterReviewResult {
 }
 
 export async function reviewChapterDraft(params: {
-  readonly book: Pick<{ genre: string }, "genre">;
+  readonly book: { readonly genre: string; readonly language: "en" | "zh" };
   readonly bookDir: string;
   readonly chapterNumber: number;
   readonly output: Pick<WriteChapterOutput, "content">;
@@ -56,13 +56,13 @@ export async function reviewChapterDraft(params: {
       params.chapterNumber,
       params.book.genre,
       {
-        language: params.lengthSpec.countingMode === "en_words" ? "en" : "zh",
+        language: params.book.language,
         contextPackage: params.controlInput.contextPackage,
         temperature: 0.3,
       },
     );
   } catch (error) {
-    const isEnglish = params.lengthSpec.countingMode === "en_words";
+    const isEnglish = params.book.language === "en";
     modelReview = {
       unavailable: true,
       observations: [{
