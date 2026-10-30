@@ -4,7 +4,7 @@ import { Type } from "@sinclair/typebox";
 import { runWorkerAgentTool } from "../agent/worker-agent.js";
 import { LLMConfigSchema } from "../models/project.js";
 import { guardedPiNonStreaming } from "../agent/pi-stream.js";
-import { createLLMClient, clientWithModel } from "../llm/provider.js";
+import { createLLMClient, clientWithModel, estimateTextTokens } from "../llm/provider.js";
 import { ShortFictionOutlineAgent, ShortFictionWriterAgent, ShortFictionDraftReviewerAgent } from "../agents/short-fiction.js";
 import {createShortFictionRunTool,createShortFictionReviseTool} from "../agent/agent-tools.js";
 import {runShortFictionStage} from "../pipeline/short-fiction-runner.js";
@@ -30,6 +30,7 @@ import {ContinuityAuditor} from '../agents/continuity.js';
 import {StateValidatorAgent} from '../agents/state-validator.js';
 import {createInitialRuntimeState} from '../state/runtime-state-store.js';
 import type {BookConfig} from '../models/book.js';
+import {ComposerAgent} from '../agents/composer.js';
 
 const fetchWithProxyMock = vi.hoisted(() => vi.fn());
 
@@ -136,6 +137,77 @@ function finishResponse(status: 'answered' | 'delivered' | 'needs_input' | 'bloc
 }
 
 describe("guardedPiNonStreaming", () => {
+  it.each([
+    { composerWindow: 32000, writerWindow: 4096, overflows: true },
+    { composerWindow: 16000, writerWindow: 32000, overflows: false },
+  ])("preserves Composer authority across model windows: $composerWindow -> $writerWindow", async ({ composerWindow, writerWindow, overflows }) => {
+    const root = await mkdtemp(join(tmpdir(), "inkos-window-preflight-"));
+    const network = vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("Unexpected network request"));
+    const requests: Array<{ model: string; messages: unknown; tools: Array<{ function: { name: string } }> }> = [];
+    fetchWithProxyMock.mockImplementation(async (_url: string, init: RequestInit) => {
+      const body = JSON.parse(String(init.body));
+      requests.push(body);
+      const name = body.tools[0].function.name;
+      const responses: Record<string, unknown> = {
+        submit_chapter_draft: { title: "Пристань", content: "Ёж заметил RiverLine у пристани." },
+        submit_runtime_state_delta: { postSettlement: "Ferry seen.", factOps: { upsert: [], expire: [] },
+          hookOps: { upsert: [], mention: [], resolve: [], defer: [] }, newHookCandidates: [],
+          chapterSummary: { title: "Пристань", characters: "visitor", events: "Ferry seen", stateChanges: "", hookActivity: "", mood: "quiet", chapterType: "arrival" } },
+      };
+      if (!Object.hasOwn(responses, name) || requests.length > 2) throw new Error(`Unexpected fake request: ${name}`);
+      return new Response(JSON.stringify({ choices: [{ finish_reason: "tool_calls", message: { tool_calls: [{
+        id: name, type: "function", function: { name, arguments: JSON.stringify(responses[name]) },
+      }] } }] }));
+    });
+    try {
+      const bookDir = join(root, "source");
+      await createInitialRuntimeState({ bookDir, language: "en" });
+      await mkdir(join(bookDir, "story"), { recursive: true });
+      const authority = "The author requires RiverLine to remain unchanged and forbids changing the witness. ".repeat(250);
+      await writeFile(join(bookDir, "story", "author_intent.md"), authority);
+      await writeFile(join(bookDir, "story", "book_rules.md"), "Preserve established facts.");
+      await writeFile(join(bookDir, "story", "book_rules.json"), JSON.stringify({ version: "2", prohibitions: [], enableFullCastTracking: false, allowedDeviations: [] }));
+      const base = createLLMClient(LLMConfigSchema.parse({ provider: "custom", baseUrl: "https://fake-router.invalid/v1", model: "base-alias", apiKey: "fixture-key", headers: {}, stream: false }));
+      const runner = new PipelineRunner({ projectRoot: root, client: base, model: "base-alias", modelOverrides: {
+        composer: { model: "composer-alias", contextWindow: composerWindow, maxTokens: 512 },
+        writer: { model: "writer-alias", contextWindow: writerWindow, maxTokens: 512 },
+      } });
+      const composerContext = runner.createAgentContext("composer");
+      const writerContext = runner.createAgentContext("writer");
+      expect(composerContext.client._piModel).toMatchObject({ id: "composer-alias", contextWindow: composerWindow, maxTokens: 512 });
+      expect(writerContext.client._piModel).toMatchObject({ id: "writer-alias", contextWindow: writerWindow, maxTokens: 512 });
+      const book: BookConfig = { id: "preflight", title: "Пристань", genre: "general", platform: "other", status: "active", language: "en", narrativeLanguage: "ru", targetChapters: 1, chapterWordCount: 100, createdAt: "2026-10-30T00:00:00.000Z", updatedAt: "2026-10-30T00:00:00.000Z" };
+      const goal = "A visitor sees the ferry.";
+      const plan = { intent: { chapter: 1, goal }, memo: { chapter: 1, goal, body: goal, threadRefs: [] }, intentMarkdown: goal, runtimePath: "runtime/chapter-1.intent.md", plannerInputs: [] };
+      // Writer reserves output tokens and 2048 tokens of overhead in prepareWorkerMessages.
+      const writerBudget = writerWindow - writerContext.client.defaults.maxTokens - 2048;
+      expect(estimateTextTokens(authority)).toBeGreaterThan(4096 - 512 - 2048);
+      expect(estimateTextTokens(authority)).toBeLessThan(composerWindow - 512);
+      const composed = await new ComposerAgent(composerContext).composeChapter({ book, bookDir, chapterNumber: 1, plan,
+        outlineSectionSelector: async () => [], memorySemanticSelector: async () => [] });
+      const saved = JSON.parse(await readFile(composed.contextPath, "utf8"));
+      expect(saved).toEqual(composed.contextPackage);
+      expect(saved.selectedContext).toContainEqual(expect.objectContaining({ source: "story/author_intent.md", excerpt: authority.trim(), protection: "protected" }));
+      expect(requests).toHaveLength(0);
+      const writing = new WriterAgent(writerContext).writeChapter({ book, bookDir, chapterNumber: 1, chapterIntent: goal, chapterMemo: plan.memo, contextPackage: composed.contextPackage });
+      if (overflows) {
+        await expect(writing).rejects.toMatchObject({ name: "ProtectedContextOverflowError", budgetTokens: writerBudget });
+        expect(requests).toHaveLength(0);
+        expect(JSON.parse(await readFile(composed.contextPath, "utf8"))).toEqual(saved);
+      } else {
+        expect((await writing).content).toBe("Ёж заметил RiverLine у пристани.");
+        expect(requests).toHaveLength(2);
+        expect(requests.map(request => request.model)).toEqual(["writer-alias", "writer-alias"]);
+        expect(requests.map(request => request.tools[0].function.name)).toEqual(["submit_chapter_draft", "submit_runtime_state_delta"]);
+        expect(JSON.stringify(requests[0]!.messages)).toContain(authority.trim());
+      }
+      expect(network).not.toHaveBeenCalled();
+    } finally {
+      network.mockRestore();
+      await rm(root, { recursive: true, force: true });
+    }
+  }, 30000);
+
   it("routes Writer, Settler and StateValidator through their assigned structured clients", async () => {
     const root = await mkdtemp(join(tmpdir(), "inkos-model-preflight-"));
     const network = vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("Unexpected network request"));
