@@ -7,6 +7,35 @@ import {
 } from "../llm/provider.js";
 import { runWithAgentTrajectory } from "../llm/agent-trajectory.js";
 import { readFile } from "node:fs/promises";
+import { createLLMClient, clientWithModel } from "../llm/provider.js";
+import { LLMConfigSchema } from "../models/project.js";
+
+describe("explicit alias limits", () => {
+  it.each([
+    { baseUrl: "https://other-router.example/v1" },
+    { service: "another-service" },
+    { provider: "openai" as const },
+  ])("resets same-ID deployment limits when connection changes: %j", change => {
+    const a = createLLMClient(LLMConfigSchema.parse({ provider: "custom", baseUrl: "https://router.example/v1", model: "same-alias", apiKey: "fixture-old", contextWindow: 4096, maxTokens: 512 }));
+    const fallback = clientWithModel(a, "same-alias", change);
+    expect(fallback._piModel?.contextWindow).toBe(128000);
+    expect(fallback._piModel?.maxTokens).not.toBe(512);
+    const b = clientWithModel(a, "same-alias", { ...change, contextWindow: 8192, maxTokens: 1024 });
+    expect(b._piModel).toMatchObject({ id: "same-alias", contextWindow: 8192, maxTokens: 1024 });
+    expect(b.defaults.maxTokens).toBe(1024);
+    expect(a._piModel).toMatchObject({ contextWindow: 4096, maxTokens: 512 });
+  });
+  it("does not transfer confirmed deployment limits to another alias", () => {
+    const a = createLLMClient(LLMConfigSchema.parse({ provider: "custom", baseUrl: "https://router.example/v1", model: "alias-a", apiKey: "fixture", contextWindow: 4096, maxTokens: 512 }));
+    const b = clientWithModel(a, "alias-b", { contextWindow: 8192, maxTokens: 1024 });
+    expect(a._piModel).toMatchObject({ id: "alias-a", contextWindow: 4096, maxTokens: 512 });
+    expect(b._piModel).toMatchObject({ id: "alias-b", contextWindow: 8192, maxTokens: 1024 });
+    expect(b.defaults.maxTokens).toBe(1024);
+    expect(clientWithModel(b, "alias-a")._piModel?.contextWindow).toBe(128000);
+    expect(clientWithModel(a, "alias-a")._piModel?.contextWindow).toBe(4096);
+    expect(() => LLMConfigSchema.parse({ provider: "custom", baseUrl: "https://router.example/v1", model: "alias", contextWindow: 0 })).toThrow();
+  });
+});
 
 // ── Mock @mariozechner/pi-ai ──────────────────────────────────────────────────
 // We intercept streamSimple so tests don't hit the network.

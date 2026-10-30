@@ -1,8 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Context, Model } from "@mariozechner/pi-ai";
 import { Type } from "@sinclair/typebox";
+import { runWorkerAgentTool } from "../agent/worker-agent.js";
+import { LLMConfigSchema } from "../models/project.js";
 import { guardedPiNonStreaming } from "../agent/pi-stream.js";
-import { createLLMClient } from "../llm/provider.js";
+import { createLLMClient, clientWithModel } from "../llm/provider.js";
 import { ShortFictionOutlineAgent, ShortFictionWriterAgent, ShortFictionDraftReviewerAgent } from "../agents/short-fiction.js";
 import {createShortFictionRunTool,createShortFictionReviseTool} from "../agent/agent-tools.js";
 import {runShortFictionStage} from "../pipeline/short-fiction-runner.js";
@@ -27,6 +29,85 @@ import {WriterAgent} from '../agents/writer.js';
 import {ContinuityAuditor} from '../agents/continuity.js';
 
 const fetchWithProxyMock = vi.hoisted(() => vi.fn());
+
+describe("structured alias routing", () => {
+  it.each([false, true])("isolates outgoing credentials after endpoint change (public-surface fallback=%s)", async fallback => {
+    vi.stubEnv("INKOS_M1_FIXTURE_KEY", "fixture-new-key");
+    vi.stubEnv("INKOS_LLM_HEADERS", JSON.stringify({ Authorization: "Bearer fixture-env-old", "x-api-key": "fixture-env-old" }));
+    try {
+      const base = createLLMClient(LLMConfigSchema.parse({ provider: "custom", baseUrl: "https://old.example/v1", model: "same-alias", apiKey: "fixture-old-key", stream: false,
+        headers: { Authorization: "Bearer fixture-header-old", "X-API-Key": "fixture-header-old", "x-provider-option": "fixture-private-option" } }));
+      const client = fallback ? { ...base, _withConfig: undefined } : base;
+      const pipeline = new PipelineRunner({ projectRoot: "", client, model: "same-alias", modelOverrides: {
+        writer: { model: "same-alias", baseUrl: "https://new.example/v1", apiKeyEnv: "INKOS_M1_FIXTURE_KEY", stream: false, contextWindow: 8192, maxTokens: 64 },
+      } });
+      const selected = pipeline.createAgentContext("writer");
+      const requests: Array<{ url: string; headers: Headers }> = [];
+      fetchWithProxyMock.mockImplementation(async (url: string, init: RequestInit) => {
+        requests.push({ url, headers: new Headers(init.headers) });
+        return new Response(JSON.stringify({ choices: [{ finish_reason: "tool_calls", message: { tool_calls: [{ id: "fixture", type: "function", function: { name: "submit_fixture", arguments: '{"ok":true}' } }] } }] }));
+      });
+      expect(await runWorkerAgentTool(selected.client, selected.model, [{ role: "user", content: "Fixture." }], {
+        name: "submit_fixture", label: "Fixture", description: "Fixture", parameters: Type.Object({ ok: Type.Boolean() }),
+      })).toEqual({ ok: true });
+      expect(requests).toHaveLength(1);
+      expect(requests[0]!.url).toBe("https://new.example/v1/chat/completions");
+      expect(requests[0]!.headers.get("authorization")).toBe("Bearer fixture-new-key");
+      expect(requests[0]!.headers.has("x-api-key")).toBe(false);
+      expect(requests[0]!.headers.has("x-provider-option")).toBe(false);
+      expect(JSON.stringify([...requests[0]!.headers])).not.toContain("old");
+      expect(clientWithModel(client, "same-alias", { baseUrl: "https://other.example/v1" })._apiKey).toBe("");
+      const rekeyed = clientWithModel(client, "same-alias", { apiKey: "fixture-rekeyed" });
+      expect(rekeyed._piModel?.headers).toBeUndefined();
+    } finally { vi.unstubAllEnvs(); }
+  });
+  it.each([false, true])("sends effective metadata and structured options (stream=%s)", async stream => {
+    const { createServer } = await import("node:http");
+    const payloads: Array<Record<string, any>> = [];
+    const reply = (body: Record<string, any>) => ({ id: "fixture", object: "chat.completion", choices: [{ index: 0, finish_reason: "tool_calls", message: { role: "assistant", content: null, tool_calls: [{ id: "result", type: "function", function: { name: body.tools[0].function.name, arguments: '{"ok":true}' } }] } }], usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } });
+    const server = createServer(async (req, res) => {
+      const chunks: Buffer[] = [];
+      for await (const chunk of req) chunks.push(Buffer.from(chunk));
+      const body = JSON.parse(Buffer.concat(chunks).toString("utf8")); payloads.push(body);
+      res.writeHead(200, { "Content-Type": "text/event-stream" });
+      res.end('data: ' + JSON.stringify({ id: "fixture", choices: [{ index: 0, delta: { role: "assistant", tool_calls: [{ index: 0, id: "result", type: "function", function: { name: body.tools[0].function.name, arguments: '{"ok":true}' } }] }, finish_reason: "tool_calls" }] }) + '\n\ndata: [DONE]\n\n');
+    });
+    await new Promise<void>((resolve, reject) => {
+      const onError = (error: Error) => { server.off("error", onError); reject(error); };
+      server.once("error", onError);
+      server.listen(0, "127.0.0.1", () => { server.off("error", onError); resolve(); });
+    });
+    fetchWithProxyMock.mockImplementation(async (_url: string, init: RequestInit) => {
+      const body = JSON.parse(String(init.body)); payloads.push(body);
+      return new Response(JSON.stringify(reply(body)));
+    });
+    try {
+      const baseUrl = `http://127.0.0.1:${(server.address() as { port: number }).port}/v1`;
+      const client = createLLMClient(LLMConfigSchema.parse({ provider: "custom", baseUrl, model: "confirmed-alias", apiKey: "fixture", stream, contextWindow: 8192, maxTokens: 64 }));
+      const tool = { name: "submit_fixture", label: "Fixture", description: "Submit fixture.", parameters: Type.Object({ ok: Type.Boolean() }) };
+      const prompt = "Protected RiverLine context. ".repeat(200);
+      for (const temperature of [0.7, 0.3]) {
+        expect(await runWorkerAgentTool(client, "confirmed-alias", [{ role: "user", content: prompt }], tool, { maxTokens: 2048, temperature })).toEqual({ ok: true });
+      }
+      expect(await runWorkerAgentTool(client, "confirmed-alias", [{ role: "user", content: prompt }], tool)).toEqual({ ok: true });
+      expect(payloads).toHaveLength(3);
+      expect(payloads[2]).not.toHaveProperty("temperature");
+      for (const [index, payload] of payloads.slice(0, 2).entries()) {
+        expect(payload.model).toBe("confirmed-alias");
+        expect(payload.tool_choice).toBe("required");
+        expect(payload.tools[0].function.parameters.required).toEqual(["ok"]);
+        expect(payload.max_tokens ?? payload.max_completion_tokens).toBe(64);
+        expect(payload.temperature).toBe([0.7, 0.3][index]);
+        expect(JSON.stringify(payload.messages)).toContain("Protected RiverLine context.");
+      }
+      const small = client._withConfig!({ contextWindow: 80 });
+      await expect(runWorkerAgentTool(small, "confirmed-alias", [{ role: "user", content: prompt }], tool, { maxTokens: 64 })).rejects.toThrow();
+      expect(payloads).toHaveLength(3);
+    } finally {
+      server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve()));
+    }
+  });
+});
 
 vi.mock("../utils/proxy-fetch.js", () => ({
   fetchWithProxy: fetchWithProxyMock,
@@ -97,14 +178,17 @@ describe("guardedPiNonStreaming", () => {
       const canon="Mara retains the sealed receipt and returns it to its owner. ".repeat(1100);
       const boundedClient={...client,defaults:{...client.defaults,maxTokens:4096},_piModel:{...client._piModel!,contextWindow:30000,maxTokens:4096}};
       const calls:string[]=[];
+      const writerPayloads: Array<{model:string;temperature:number}> = [];
       fetchWithProxyMock.mockImplementation(async(_url:string,init:RequestInit)=>{
-        const body=JSON.parse(String(init.body)),name=body.tools[0].function.name;calls.push(name);
+        const body=JSON.parse(String(init.body)),name=body.tools[0].function.name;calls.push(name);writerPayloads.push(body);
         const args=name==="submit_chapter_draft"?{title:"Return",content:"Mara returns the sealed receipt. The owner checks the seal and accepts it."}:{postSettlement:"Receipt returned.",factOps:{upsert:[],expire:[]},hookOps:{upsert:[],mention:[],resolve:[],defer:[]},newHookCandidates:[],chapterSummary:{title:"Return",characters:"Mara",events:"Receipt returned",stateChanges:"",hookActivity:"",mood:"calm",chapterType:"resolution"}};
         return new Response(JSON.stringify({choices:[{finish_reason:"tool_calls",message:{tool_calls:[{id:name,type:"function",function:{name,arguments:JSON.stringify(args)}}]}}]}));
       });
       const chapter=await new WriterAgent({client:boundedClient,model:model.id,projectRoot:root,bookId:"generic"}).writeChapter({book:JSON.parse(original),bookDir:join(root,"works/generic/source"),chapterNumber:1,chapterIntent:"Return the receipt",chapterMemo:{chapter:1,goal:"Return the receipt",body:"The owner accepts the sealed receipt.",threadRefs:[]},contextPackage:{chapter:1,selectedContext:[{source:"story/parent_canon.md",reason:"Original ownership",excerpt:canon,protection:"protected"}]}});
       expect(chapter.chapterNumber).toBe(1);
       expect(calls).toEqual(["submit_chapter_draft","submit_runtime_state_delta"]);
+      expect(writerPayloads.map(payload=>payload.model)).toEqual([model.id,model.id]);
+      expect(writerPayloads.map(payload=>payload.temperature)).toEqual([0.7,0.3]);
     }finally{evictAgentCache('initialization');await rm(root,{recursive:true,force:true});}
   });
   it('repairs an invalid world proposal before one commit and delivers without another main-model call',async()=>{

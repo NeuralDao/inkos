@@ -14,6 +14,8 @@ import type { Static, TSchema } from "@sinclair/typebox";
 import { Value } from "@sinclair/typebox/value";
 import {
   chatCompletion,
+  clientWithModel,
+  clampTemperatureForModel,
   createStreamMonitor,
   type LLMClient,
   type LLMMessage,
@@ -49,7 +51,7 @@ const EMPTY_COST = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
 function workerModel(client: LLMClient, modelId: string, maxTokens?: number): Model<Api> {
   const base = client._piModel;
   if (base) {
-    return base.id === modelId ? base : { ...base, id: modelId, name: modelId };
+    return base.id === modelId || base.name === modelId ? base : clientWithModel(client, modelId)._piModel!;
   }
 
   // Test doubles and embedders may provide only the public LLMClient surface.
@@ -320,6 +322,7 @@ export async function runWorkerAgentTool<TParameters extends TSchema>(
   if (!client._piModel) {
     throw new Error("Structured worker tools require a resolved Pi model");
   }
+  if (client._piModel.id !== modelId && client._piModel.name !== modelId) client = clientWithModel(client, modelId);
   const model = workerModel(client, modelId, options.maxTokens);
   const systemPrompt = [
     ...messages.filter((message) => message.role === "system").map((message) => message.content),
@@ -383,8 +386,9 @@ export async function runWorkerAgentTool<TParameters extends TSchema>(
       modelTurns++;
       const resultOptions = {
           ...streamOptions,
-          ...(options.temperature !== undefined ? { temperature: options.temperature } : {}),
-          ...(options.maxTokens !== undefined ? { maxTokens: options.maxTokens } : {}),
+          ...(options.temperature !== undefined ? { temperature: client.service === "custom" ? options.temperature
+            : clampTemperatureForModel(client.service, modelId, options.temperature) } : {}),
+          maxTokens: Math.min(options.maxTokens ?? client.defaults.maxTokens, streamModel.maxTokens),
           signal: combineSignals(streamOptions?.signal, options.signal),
           // There is exactly one result tool, so required selects it without a
           // provider-specific named-function envelope.

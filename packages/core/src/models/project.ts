@@ -18,6 +18,8 @@ const LLMCoverConfigSchema = z.object({
 }).strict().optional();
 
 export const LLMConfigSchema = z.object({
+  contextWindow: z.number().int().positive().optional(),
+  maxTokens: z.number().int().positive().optional(),
   provider: z.enum(["anthropic", "openai", "custom"]),
   service: z.string().default("custom"),
   configSource: z.enum(["env", "studio"]).default("env"),
@@ -77,6 +79,8 @@ export type DetectionConfig = z.infer<typeof DetectionConfigSchema>;
 
 export const AgentLLMOverrideSchema = z.object({
   model: z.string().min(1),
+  contextWindow: z.number().int().positive().optional(),
+  maxTokens: z.number().int().positive().optional(),
   provider: z.enum(["anthropic", "openai", "custom"]).optional(),
   baseUrl: z.string().url().optional(),
   apiKeyEnv: z.string().optional(),

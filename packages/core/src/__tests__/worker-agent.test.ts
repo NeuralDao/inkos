@@ -2,6 +2,28 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Type } from "@sinclair/typebox";
 import { runWorkerAgent, runWorkerAgentTool } from "../agent/worker-agent.js";
 import { BaseAgent, type AgentContext } from "../agents/base.js";
+import { PipelineRunner } from "../pipeline/runner.js";
+import { createLLMClient } from "../llm/provider.js";
+import { LLMConfigSchema } from "../models/project.js";
+
+describe("pipeline model metadata cache", () => {
+  it.each([false, true])("isolates same-endpoint aliases in either order (%s)", reverse => {
+    const base = createLLMClient(LLMConfigSchema.parse({ provider: "custom", baseUrl: "https://router.example/v1", model: "base", apiKey: "fixture", contextWindow: 65536, maxTokens: 4096 }));
+    const pipeline = new PipelineRunner({ projectRoot: "", client: base, model: "base", modelOverrides: {
+      writer: { model: "small", baseUrl: "https://router.example/v1", contextWindow: 4096, maxTokens: 512 },
+      auditor: { model: "large", baseUrl: "https://router.example/v1", contextWindow: 32768, maxTokens: 2048 },
+      reviser: "other-alias",
+    } });
+    for (const role of reverse ? ["auditor", "writer"] : ["writer", "auditor"]) pipeline.createAgentContext(role);
+    const writer = pipeline.createAgentContext("writer"), auditor = pipeline.createAgentContext("auditor");
+    expect(writer.client._piModel).toMatchObject({ id: "small", contextWindow: 4096, maxTokens: 512 });
+    expect(auditor.client._piModel).toMatchObject({ id: "large", contextWindow: 32768, maxTokens: 2048 });
+    expect(pipeline.createAgentContext("writer").client).toBe(writer.client);
+    expect(pipeline.createAgentContext("auditor").client).toBe(auditor.client);
+    expect(pipeline.createAgentContext("reviser").client._piModel).toMatchObject({ id: "other-alias", contextWindow: 128000 });
+    expect(pipeline.createAgentContext("unconfigured").client).toBe(base);
+  });
+});
 
 const chatCompletionMock = vi.hoisted(() => vi.fn());
 const guardedPiStreamMock = vi.hoisted(() => vi.fn());
