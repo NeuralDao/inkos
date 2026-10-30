@@ -24,6 +24,7 @@
 10. [RESEARCH_R3_STRESS_BRIEF.md](./RESEARCH_R3_STRESS_BRIEF.md) — R3: источники стрессового сюжета и архив кандидата v0 (актуальный brief v1.0 в BENCHMARK_LONGFORM).
 11. [RESEARCH_R5_LENGTH_EXPORT.md](./RESEARCH_R5_LENGTH_EXPORT.md) — R5: кодовый аудит RU+Latin метрик, заголовков, обратного чтения и EPUB; границы P1.3a/b.
 12. [RESEARCH_R6_MODELS.md](./RESEARCH_R6_MODELS.md) — R6(a): целевой Selectel AI Router, рублёвый прайс из Library, риск tool calling, реальные aliases и границы P1.M (OpenRouter — архив).
+13. [RESEARCH_R6_TOKEN_ECONOMY.md](./RESEARCH_R6_TOKEN_ECONOMY.md) — R6(c): баланс цены входа/выхода, reasoning и затрат на retries по ролям до G1; гипотезы без платных измерений.
 
 Затем изучить связанные GitHub Issues/PR и **код** нужной ветки. Для технических выводов указывать проверенный коммит. Если документация противоречит реализации, приоритет у кода; расхождение следует зафиксировать.
 
