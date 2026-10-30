@@ -19,6 +19,9 @@ import { createInitialRuntimeState, loadRuntimeStateSnapshot } from "../state/ru
 import { createWorkManifest, saveWorkManifest } from "../harness/work-store.js";
 import { savePersistedPlan } from "../pipeline/persisted-governed-plan.js";
 import { buildLengthSpec } from "../utils/length-metrics.js";
+import { createLLMClient } from "../llm/provider.js";
+import { LLMConfigSchema } from "../models/project.js";
+import type { AgentContext } from "../agents/base.js";
 
 // Replace only model transport/decisions. Real Writer, settlement, Runner,
 // review counts, persistence, schemas, telemetry and word-sync remain active.
@@ -99,6 +102,35 @@ function expectEnglishAudits() {
 }
 
 describe("Russian longform length routes", () => {
+  it.each([false, true])("routes StateValidator consistently through write, revise and resync (override=%s)", async enabled => {
+    const { root, book } = await fixture();
+    const base = createLLMClient(LLMConfigSchema.parse({ provider: "custom", baseUrl: "https://router.example/v1", model: "base-model", apiKey: "fixture" }));
+    const runner = new PipelineRunner({ projectRoot: root, client: base, model: "base-model",
+      ...(enabled ? { modelOverrides: { "state-validator": { model: "validator-model", contextWindow: 8192, maxTokens: 1024 } } } : {}),
+    });
+    const expected = runner.createAgentContext("state-validator", book.id);
+    const seen: AgentContext[] = [];
+    vi.mocked(StateValidatorAgent.prototype.validate).mockImplementation(async function (this: StateValidatorAgent) {
+      seen.push((this as unknown as { ctx: AgentContext }).ctx);
+      return { consistent: true, reconciliationRequired: false, observations: [] };
+    });
+    expect(expected.model).toBe(enabled ? "validator-model" : "base-model");
+    expect(expected.client._piModel?.id).toBe(expected.model);
+    expect(runner.createAgentContext("writer", book.id).client).toBe(base);
+    for (const operation of [
+      () => runner.writeNextChapter(book.id),
+      () => runner.reviseDraft(book.id, 1, "rewrite", "Polish the prose in Russian."),
+      () => runner.resyncChapterStateAndAudit(book.id, 1),
+    ]) {
+      seen.length = 0;
+      await operation();
+      expect(seen).toHaveLength(1);
+      expect(seen[0]!.model).toBe(expected.model);
+      expect(seen[0]!.client).toBe(expected.client);
+      expect(seen[0]!.bookId).toBe(book.id);
+    }
+  }, 30000);
+
   it("counts real Writer output and separate settlement with RU metrics and EN state", async () => {
     const { root, book, bookDir } = await fixture();
     const writer = new WriterAgent({ projectRoot: root, client, model: "unused" });
