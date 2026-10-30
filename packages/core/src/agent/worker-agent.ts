@@ -450,16 +450,18 @@ export async function runWorkerAgentTool<TParameters extends TSchema>(
         lastAssistantText: last?.content.filter((part)=>part.type==="text").map((part)=>part.text).join(""),
       });
     }
-    const usageMessage = [...agent.state.messages].reverse().find(
-      (message): message is AssistantMessage => message.role === "assistant" && message.usage.totalTokens > 0,
-    );
-    if (usageMessage) {
-      options.onUsage?.({
-        promptTokens: usageMessage.usage.input,
-        completionTokens: usageMessage.usage.output,
-        totalTokens: usageMessage.usage.totalTokens,
-      });
+    // Initial prompt messages may themselves include assistant history. Only
+    // responses produced by this invocation belong to its usage. The local
+    // stop message after a successful tool call carries zero usage.
+    const usage = { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
+    const count = (value: unknown): number => typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : 0;
+    for (const message of agent.state.messages.slice(promptMessages.length)) {
+      if (message.role !== "assistant" || message.stopReason === "error" || message.stopReason === "aborted") continue;
+      usage.promptTokens += count(message.usage?.input);
+      usage.completionTokens += count(message.usage?.output);
+      usage.totalTokens += count(message.usage?.totalTokens);
     }
+    if (usage.promptTokens || usage.completionTokens || usage.totalTokens) options.onUsage?.(usage);
     return submitted;
   } finally {
     unsubscribeProgress();

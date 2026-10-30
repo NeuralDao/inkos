@@ -218,6 +218,46 @@ describe("Pi worker harness", () => {
     });
   });
 
+  it.each([
+    { counts: [{ input: 10, output: 4, totalTokens: 14 }], expected: { promptTokens: 10, completionTokens: 4, totalTokens: 14 } },
+    { counts: [{ input: 10, output: 4, totalTokens: 14 }, { input: 15, output: 5, totalTokens: 20 }], expected: { promptTokens: 25, completionTokens: 9, totalTokens: 34 } },
+    { counts: [{ input: 3, output: 1, totalTokens: 4 }, { input: 5, output: 2, totalTokens: 7 }, { input: 7, output: 3, totalTokens: 10 }], expected: { promptTokens: 15, completionTokens: 6, totalTokens: 21 } },
+    { counts: [undefined, { input: 0, output: 0, totalTokens: 0 }, { input: 7, output: 3, totalTokens: 10 }], expected: { promptTokens: 7, completionTokens: 3, totalTokens: 10 } },
+    { counts: [undefined], expected: undefined },
+    { counts: [{ input: 0, output: 0, totalTokens: 0 }], expected: undefined },
+  ])("reports usage for $counts.length completed response(s)", async ({ counts, expected }) => {
+    const { createAssistantMessageEventStream } = await import("@mariozechner/pi-ai");
+    let turn = 0;
+    guardedPiStreamMock.mockImplementation((model: NonNullable<AgentContext["client"]["_piModel"]>) => {
+      const index = turn++;
+      if (index >= counts.length) throw new Error("Unexpected extra model request");
+      const usage = counts[index];
+      const stream = createAssistantMessageEventStream();
+      const message = {
+        role: "assistant" as const,
+        content: [{ type: "toolCall" as const, id: `call-${index}`, name: "submit_result", arguments: { value: index } }],
+        api: model.api, provider: model.provider, model: model.id,
+        usage: usage ? { ...usage, cacheRead: 0, cacheWrite: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } : undefined as never,
+        stopReason: "toolUse" as const, timestamp: Date.now(),
+      };
+      stream.push({ type: "done", reason: "toolUse", message });
+      stream.end(message);
+      return stream;
+    });
+    const onUsage = vi.fn();
+    const result = await runWorkerAgentTool(client(), "deepseek-v4-flash", [
+      { role: "assistant", content: "Previous assistant context." },
+      { role: "user", content: "Submit the result." },
+    ], {
+      name: "submit_result", label: "Result", description: "Submit result", parameters: Type.Object({ value: Type.Number() }),
+      validate: value => { if (value.value !== counts.length - 1) throw new Error("Correct the result"); return value; },
+    }, { onUsage });
+    expect(result).toEqual({ value: counts.length - 1 });
+    expect(guardedPiStreamMock).toHaveBeenCalledTimes(counts.length);
+    if (expected) expect(onUsage).toHaveBeenCalledExactlyOnceWith(expected);
+    else expect(onUsage).not.toHaveBeenCalled();
+  });
+
   it("honors non-streaming transport for structured worker submissions", async () => {
     const { createAssistantMessageEventStream } = await import("@mariozechner/pi-ai");
     guardedPiNonStreamingMock.mockImplementation((model: AgentContext["client"]["_piModel"]) => {
