@@ -969,7 +969,7 @@ export class PipelineRunner {
       const changed = revisedContent !== content;
       const revisedCount = countChapterLength(revisedContent, lengthSpec.countingMode);
       const writer = new WriterAgent(this.agentCtxFor("writer", bookId));
-      const stateValidator = new StateValidatorAgent(this.agentCtxFor("stateValidator", bookId));
+      const stateValidator = new StateValidatorAgent(this.agentCtxFor("state-validator", bookId));
       let settledRevision = await writer.settleChapterState({
         book,
         bookDir,
