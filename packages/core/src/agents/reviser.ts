@@ -9,6 +9,7 @@ import {textRangeEditContract,textSelectionEditContract,TextEditRangeSchema} fro
 import { ChapterRewriteToolSchema } from "./reviser-tool.js";
 import {chapterDocumentBody} from '../utils/chapter-document.js';
 import { renderNarrativeSelectedContext } from "../utils/narrative-control.js";
+import type { NarrativeLanguage } from "../utils/book-language.js";
 
 export type ReviseMode = "polish" | "rewrite" | "rework" | "anti-detect" | "spot-fix";
 
@@ -38,6 +39,7 @@ export class ReviserAgent extends BaseAgent {
     _genre?: string,
     options?: {
       readonly language: "zh" | "en";
+      readonly narrativeLanguage?: NarrativeLanguage;
       readonly chapterTitle?:string;
       readonly targetText?:string;
       readonly contextPackage: ContextPackage;
@@ -64,7 +66,8 @@ export class ReviserAgent extends BaseAgent {
           ? `\n## Length contract\n${JSON.stringify({...options.lengthSpec,currentCount:countChapterLength(chapterContent,options.lengthSpec.countingMode),unit:"words"})}`
           : `\n## 篇幅要求\n${JSON.stringify({...options.lengthSpec,currentCount:countChapterLength(chapterContent,options.lengthSpec.countingMode),unit:"正文非空白字符，含标点，不含标题"})}`)
       : "";
-    const systemPrompt = buildRevisionProtocol(mode, options.language);
+    const systemPrompt = buildRevisionProtocol(mode, options.language)
+      + (options.narrativeLanguage === undefined ? "" : `\n\n${revisionNarrativeLanguageContract(options.narrativeLanguage)}`);
     const source=mode==='spot-fix'?numberReviewSource(chapterContent):chapterContent;
     const userPrompt = isEnglish
       ? `Revise chapter ${chapterNumber}.\n\n## Observations or instruction\n${observationList}\n\n## Governed context\n${context}${lengthBlock}\n\n## Current chapter\n${source}`
@@ -162,6 +165,15 @@ export class ReviserAgent extends BaseAgent {
       tokenUsage: usage,
     };
   }
+}
+
+function revisionNarrativeLanguageContract(language: NarrativeLanguage): string {
+  const target = { en: "English", zh: "Chinese", ru: "Russian" }[language];
+  return `## Revision narrative language
+For submit_revised_chapter.revisedContent and submit_chapter_range_replacements.range_N_content only: write new or revised prose in natural literary ${target} (${language}), independently of the operational language.
+Follow the author's instructions, canon, established spellings, and style. An English name or term in an internal plan alone does not prohibit natural Russian rendering or translation/transliteration into the target narrative language. Latin and other scripts, including Nike, Microsoft, Apollo-1, NASA, quotations, and technical terms, are allowed where appropriate to context or required by the author; do not require exclusively Cyrillic text.
+The selected revision mode and edit scope remain binding. This language contract never authorizes a whole-chapter rewrite for a local request. For local edits, apply it only to replacement prose inside the selected ranges or targetText. Preserve every source character outside those editable spans unchanged, even if the protected text is English.
+Do not apply this prose-language rule to submit_chapter_edit_ranges or other operational outputs. Keep IDs, tool names, JSON keys, and result schemas unchanged.`;
 }
 
 function buildRevisionProtocol(mode: ReviseMode, language: "zh" | "en"): string {
