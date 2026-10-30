@@ -8,6 +8,7 @@
 | --- | --- | --- |
 | **Исследовать** качество генерации, новые модели, стоимость, методику тестирования, upstream-риски | **[RESEARCH_CURRENT_STATE.md](./RESEARCH_CURRENT_STATE.md)** | Только **один-два тематических** документа ниже; [RESEARCH.md](./RESEARCH.md) — если нужна история/полный исследовательский план |
 | **Продолжить разработку**, проверить работу Codex, diff/PR или запланировать реализацию | **[CURRENT_STATE.md](./CURRENT_STATE.md)** | Нужный раздел [ROADMAP.md](./ROADMAP.md), нужный **код/коммит**, PR; детали из тематического аудита при необходимости |
+| **Выбрать Codex-модель, использовать Plan/Goal, субагентов или снизить расход лимита** | **[CODEX_PLAYBOOK.md](./CODEX_PLAYBOOK.md)** | [WORKFLOW.md](./WORKFLOW.md) — обязательные разрешения; [CURRENT_STATE.md](./CURRENT_STATE.md) — актуальная инженерная задача |
 | **Определить, что именно проверять в G1** | [G1_MODEL_STACK.md](./G1_MODEL_STACK.md) + [BENCHMARK_LONGFORM.md](./BENCHMARK_LONGFORM.md) | [RESEARCH_RU_RUBRIC.md](./RESEARCH_RU_RUBRIC.md); бюджет/код/платный запуск утверждать отдельно |
 | **Вспомнить принятое решение или правило** | [DECISIONS.md](./DECISIONS.md) или [WORKFLOW.md](./WORKFLOW.md) | Исходный документ-обоснование только при необходимости |
 
