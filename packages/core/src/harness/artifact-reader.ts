@@ -1,8 +1,9 @@
 import { createHash } from "node:crypto";
 import { readFile, realpath } from "node:fs/promises";
-import { join, relative, isAbsolute } from "node:path";
+import { join, relative, isAbsolute, sep } from "node:path";
 import { loadWorkManifest } from "./work-store.js";
 import { WorkResourceIdSchema } from "./contracts.js";
+import { resolveModelReadPath } from "../utils/model-read-path.js";
 
 /** Read the selected registered revision; never substitute the newest candidate. */
 export async function readArtifactRevision(input: {
@@ -30,8 +31,9 @@ export async function readArtifactRevision(input: {
     throw error;
   }
   const child = relative(root, path);
-  if (child === ".." || child.startsWith("../") || isAbsolute(child)) return fail("ARTIFACT_PATH_OUTSIDE_WORK", "The revision resolves outside its Work.");
-  const bytes = await readFile(path);
+  if (child === ".." || child.startsWith(`..${sep}`) || isAbsolute(child)) return fail("ARTIFACT_PATH_OUTSIDE_WORK", "The revision resolves outside its Work.");
+  const safePath = await resolveModelReadPath(input.projectRoot, join(input.projectRoot, "works", workId), revision.snapshotPath ?? revision.path);
+  const bytes = await readFile(safePath);
   if (`sha256:${createHash("sha256").update(bytes).digest("hex")}` !== revision.checksum) {
     return fail("ARTIFACT_REVISION_CONFLICT", "The stored bytes do not match the registered revision.");
   }

@@ -1,10 +1,11 @@
-import { readFile, readdir, stat } from "node:fs/promises";
+import { readFile, readdir, stat, lstat } from "node:fs/promises";
 import { basename, join, relative, sep } from "node:path";
 import { readChapterHeading, splitChapters, type SplitChapter } from "../utils/chapter-splitter.js";
 import { chapterDocumentBody } from "../utils/chapter-document.js";
 import {loadWorkManifest} from '../harness/work-store.js';
 import {readArtifactRevision} from '../harness/artifact-reader.js';
 import {WorkResourceIdSchema,type WorkLineage} from '../harness/contracts.js';
+import { resolveModelReadPath } from "../utils/model-read-path.js";
 
 const CHAPTER_FILENAME_COLLATOR = new Intl.Collator("en", {
   numeric: true,
@@ -32,14 +33,25 @@ export function compareChapterSourceNames(left: string, right: string): number {
 export async function loadChaptersFromPath(
   sourcePath: string,
   splitPattern?: string,
+  modelProjectRoot?: string,
 ): Promise<ReadonlyArray<SplitChapter>> {
   const sourceStat = await stat(sourcePath);
 
   if (sourceStat.isDirectory()) {
     const entries = await readdir(sourcePath);
-    const textFiles = entries
+    let textFiles = entries
       .filter((f) => f.endsWith(".md") || f.endsWith(".txt"))
       .sort(compareChapterSourceNames);
+
+    if (modelProjectRoot) {
+      const permitted: string[] = [];
+      for (const file of textFiles) {
+        if ((await lstat(join(sourcePath, file))).isSymbolicLink()) continue;
+        await resolveModelReadPath(modelProjectRoot, sourcePath, file);
+        permitted.push(file);
+      }
+      textFiles = permitted;
+    }
 
     if (textFiles.length === 0) {
       throw new Error(`No .md or .txt files found in ${sourcePath}.`);
@@ -64,7 +76,7 @@ export async function loadChaptersFromPath(
 }
 
 /** Registered sources keep their exact revision identity across import/resume. */
-export async function loadChapterSource(projectRoot:string,sourcePath:string,splitPattern?:string,previousSources:readonly WorkLineage[]=[]):Promise<{chapters:ReadonlyArray<SplitChapter>;lineage:WorkLineage[]}>{
+export async function loadChapterSource(projectRoot:string,sourcePath:string,splitPattern?:string,previousSources:readonly WorkLineage[]=[],modelControlled=false):Promise<{chapters:ReadonlyArray<SplitChapter>;lineage:WorkLineage[]}>{
   const parts=relative(projectRoot,sourcePath).split(sep);
   if(parts[0]==='works'&&WorkResourceIdSchema.safeParse(parts[1]).success){
     let work;
@@ -75,7 +87,7 @@ export async function loadChapterSource(projectRoot:string,sourcePath:string,spl
       return loadChapterArtifactSource(projectRoot,{workId:work.id,artifactId:artifact.id},splitPattern,previousSources);
     }
   }
-  return{chapters:await loadChaptersFromPath(sourcePath,splitPattern),lineage:[]};
+  return{chapters:await loadChaptersFromPath(sourcePath,splitPattern,modelControlled?projectRoot:undefined),lineage:[]};
 }
 
 export async function loadChapterArtifactSource(projectRoot:string,reference:{workId:string;artifactId:string;revisionId?:string},splitPattern?:string,previousSources:readonly WorkLineage[]=[]):Promise<{chapters:ReadonlyArray<SplitChapter>;lineage:WorkLineage[]}>{
