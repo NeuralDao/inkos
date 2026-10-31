@@ -100,6 +100,21 @@ describe("OpenRouter free-only G1 guard", () => {
     }
   });
 
+  it("blocks a paid per-call text model even when the client was constructed earlier", async () => {
+    // chatCompletion accepts a model ID directly, without calling clientWithModel.
+    const client = createLLMClient(free());
+    vi.stubEnv("INKOS_OPENROUTER_FREE_ONLY", "1");
+    try {
+      const prompt = [{ role: "user" as const, content: "Synthetic G1 prompt." }];
+      await expect(chatCompletion(client, "openrouter/auto", prompt))
+        .rejects.toThrow(/INKOS_OPENROUTER_FREE_ONLY/);
+      await expect(chatCompletion(client, "openai/gpt-4o", prompt))
+        .rejects.toThrow(/INKOS_OPENROUTER_FREE_ONLY/);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it("does not restrict explicit paid models outside the opt-in G1 mode", () => {
     vi.stubEnv("INKOS_OPENROUTER_FREE_ONLY", "0");
     try {
