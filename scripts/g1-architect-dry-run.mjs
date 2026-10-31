@@ -204,6 +204,9 @@ async function main() {
   if (sourceLLM.service !== "openrouter") {
     throw new Error("Studio project service must be openrouter; found " + sourceLLM.service);
   }
+  if (sourceLLM.provider !== "openai") {
+    throw new Error("OpenRouter Responses qualification requires provider=openai; found " + sourceLLM.provider);
+  }
   if (new URL(sourceLLM.baseUrl).origin !== "https://openrouter.ai") {
     throw new Error("Studio project must use the official https://openrouter.ai endpoint.");
   }
@@ -249,6 +252,8 @@ async function main() {
     architectContext.model !== modelId ||
     !piModel ||
     (piModel.id !== modelId && piModel.name !== modelId) ||
+    piModel.api !== "openai-responses" ||
+    !architectContext.client._apiKey ||
     architectContext.client.service !== "openrouter" ||
     architectContext.client.apiFormat !== "responses"
   ) {
