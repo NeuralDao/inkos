@@ -116,6 +116,14 @@ function Get-InputInventory {
         $files.Add($file.FullName)
     }
 
+    $compilerLibRoot = Join-Path $script:ResolvedRepo "packages/core/node_modules/typescript/lib"
+    if (-not (Test-Path -LiteralPath $compilerLibRoot -PathType Container)) {
+        throw "Installed TypeScript library directory is missing: $compilerLibRoot"
+    }
+    foreach ($file in Get-ChildItem -LiteralPath $compilerLibRoot -File -Recurse -Force) {
+        $files.Add($file.FullName)
+    }
+
     $inventory = foreach ($fullPath in ($files | Sort-Object -Unique)) {
         $relativePath = [System.IO.Path]::GetRelativePath($script:ResolvedRepo, $fullPath).Replace('\', '/')
         [pscustomobject]@{
