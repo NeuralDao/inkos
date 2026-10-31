@@ -24,7 +24,7 @@
 
 | Приоритет | Точный ID | Публично заявленные возможности | Статус в InkOS |
 | --- | --- | --- | --- |
-| 1 | `nvidia/nemotron-3-ultra-550b-a55b:free` | 1M контекст; `tools` и `tool_choice`; без `response_format` | Ранее фактически обслуживал успешный chat preflight; fixed-ID structured worker не проверен |
+| 1 | `nvidia/nemotron-3-ultra-550b-a55b:free` | 1M контекст; `tools` и `tool_choice`; без `response_format` | Ранее chat preflight был обслужен фактическим ID `nvidia/nemotron-3-ultra-550b-a55b-20260604:free`; direct fixed-ID structured worker не проверен |
 | 2 | `nvidia/nemotron-3.5-super-vl:free` | 1M контекст; `tools`, `tool_choice`, JSON-schema `response_format` | Новый кандидат; реальный InkOS tool path и русский текст не проверены |
 | 3 | `google/gemma-4-26b-a4b-it:free` | 262K контекст; native function calling; `tools`, `tool_choice`; `response_format` без JSON-schema enforcement | Независимое семейство для сравнения; реальный InkOS tool path и русский текст не проверены |
 | 4 | `xingchen-agi/xing4.0-29b-a4b:free` | 262K контекст; заявлены tool calling и multi-step planning | Один PASS на 2 персонажах; 3-персонажный тест дал 429 Provider returned error; повторяемость не доказана |
