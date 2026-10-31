@@ -65,11 +65,17 @@ function Invoke-NativeText {
         [Parameter(Mandatory = $true)][string[]]$Arguments
     )
 
-    $output = & $Command @Arguments
-    if ($LASTEXITCODE -ne 0) {
-        throw "Command failed: $Command $($Arguments -join ' ')"
+    Push-Location $script:ResolvedRepo
+    try {
+        $output = & $Command @Arguments
+        if ($LASTEXITCODE -ne 0) {
+            throw "Command failed: $Command $($Arguments -join ' ')"
+        }
+        return ($output -join [Environment]::NewLine).Trim()
     }
-    return ($output -join [Environment]::NewLine).Trim()
+    finally {
+        Pop-Location
+    }
 }
 
 function Assert-SourceParity {
@@ -189,9 +195,16 @@ if ($Mode -eq "Build") {
     }
 
     Write-Host "Building Core from verified source commit $head ..."
-    & pnpm --filter "@actalk/inkos-core" build
-    if ($LASTEXITCODE -ne 0) {
-        throw "Core build failed with exit code $LASTEXITCODE. No provenance manifest was written."
+    Push-Location $script:ResolvedRepo
+    try {
+        & pnpm --filter "@actalk/inkos-core" build
+        $buildExitCode = $LASTEXITCODE
+    }
+    finally {
+        Pop-Location
+    }
+    if ($buildExitCode -ne 0) {
+        throw "Core build failed with exit code $buildExitCode. No provenance manifest was written."
     }
 
     $headAfterBuild = Invoke-GitText -Arguments @("rev-parse", "HEAD")
