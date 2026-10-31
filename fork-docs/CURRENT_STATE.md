@@ -1,18 +1,19 @@
 # Текущее состояние форка
 
-**АКТУАЛЬНОЕ ОБНОВЛЕНИЕ — 31.10.2026: PR #15 прошёл статический review; целевые Vitest PASS, typecheck выявил и получил узкое исправление, повторная проверка ожидается.**
+**АКТУАЛЬНОЕ ОБНОВЛЕНИЕ — 31.10.2026: reasoning fix локально проверен; G1 переходит к квалификации фиксированных бесплатных моделей.**
 
-- `custom/main` подтверждена на `05a0f0dbbcd0a85f49c731ac1357083ab6b9d10a`; основная ветка не изменялась.
-- Task branch: `fix/g1-openrouter-reasoning-defaults`; implementation commit: `7f9bb2a0ed7aef11ab6432db419c5f4fe8a21dfb`; initial test commit: `1d5d29d16d15fe7ae8fa6832578618c2224be382`; Codex correction commit: `35eb7c28ddeb209857fb59380f5aa3144b23947a`; fetch mock type fix: `4f5aa4999eb3816d7dd701c55b6447ab35dee6f5`.
-- Draft PR #15: https://github.com/NeuralDao/inkos/pull/15; открыт, не объединён.
-- Codex исправил два замечания: тест Chat Completions теперь явно задаёт Pi model API `openai-completions`; normalizer удаляет только объект с единственным ключом `effort: "none"`, сохраняя объекты с дополнительными полями.
-- Повторный статический review ChatGPT: **ACCEPT по коду**. Проверены фактические ветви direct text, structured worker и agent session; отдельного блокирующего дефекта после двух исправлений не найдено.
-- Ограничение: Pi Agent сводит отсутствие уровня и `thinkingLevel="off"` к `reasoning: undefined`. В InkOS `LLMConfigSchema` отдельного `thinkingLevel` нет; явный provider override доступен через `extra.reasoning` и сохраняется. Если позже появится отдельный пользовательский переключатель off, потребуется явный контракт намерения.
-- В execution evidence включены `reasoning`, `reasoning_effort`, `enable_thinking`. DeepSeek V4/MiniMax, `thinkingBudget`, transport и retry policy не переписывались.
-- Пользовательский Core Vitest `src/__tests__/openrouter-reasoning.test.ts`: **10/10 PASS** (31.10.2026).
-- Первый Core typecheck завершился **FAIL** только из-за недоступного типа `RequestInfo` в тестовом mock при `lib: ["ES2022"]`; заменено на `Parameters<typeof fetch>[0]` в commit `4f5aa499`. Повторный typecheck ещё **NOT RUN**.
-- Build, lint, Studio и реальные LLM/API — **NOT RUN**. Codex сообщает `git diff --check` **PASS**; ChatGPT эту команду не запускал.
-- Следующий шаг пользователя: повторить `pnpm exec tsc --noEmit` из `C:\Projects\inkos\packages\core`; при PASS зафиксировать локальную валидацию. Merge только по отдельному разрешению.
+- База `custom/main`: `05a0f0dbbcd0a85f49c731ac1357083ab6b9d10a`.
+- Task branch: `fix/g1-openrouter-reasoning-defaults`; GitHub HEAD: `0c46dbc36aac1376a569be5fad30b6882fd77606`.
+- Draft PR #15: https://github.com/NeuralDao/inkos/pull/15; открыт, **не объединён**. Реализация reasoning fix, регрессии и документационные фиксации находятся в отдельной ветке.
+- Статический review ChatGPT: **ACCEPT по коду**. Codex исправил два замечания: тест Chat Completions явно создаёт Pi-модель `openai-completions`; normalizer удаляет только точную синтетическую форму `{ effort: "none" }`.
+- Пользователь сообщил о локальных проверках после исправления: целевой Vitest `openrouter-reasoning.test.ts` — **10/10 PASS**; Core `pnpm exec tsc --noEmit` — **PASS**. Команды ChatGPT независимо не запускал; отдельный локальный `git rev-parse HEAD` после последней синхронизации не предоставлен.
+- Codex сообщил `git diff --check` **PASS**. Build, lint, Studio и live API именно на reasoning-fix branch — **NOT RUN**.
+- Ограничение сохранено: Pi Agent сводит отсутствие уровня и `thinkingLevel="off"` к `reasoning: undefined`; отдельного поля намерения в текущей схеме нет. Явный provider override `extra.reasoning` сохраняется.
+- Пользовательская текущая оценка динамического free-router: Nemotron выглядит наиболее стабильным из наблюдавшихся семейств, но точный serving model каждого вызова и повторяемость пока не закреплены. Первые два литературных образца не являются baseline: в одном отмечено смешение языков, в другом — сценарное дробление на сцены. Качество не принято.
+- **Текущая стратегия G1:** отказаться от динамического `openrouter/free` как рабочего стека; квалифицировать конкретные `:free` IDs через существующий `modelOverrides`. Не менять агентную архитектуру и не начинать новый Work до квалификации.
+- PR #14 содержит платный qualification script: он отключает free-only guard и задаёт ненулевой `max_price`; **не запускать его для текущего free-only эксперимента**.
+- Следующий шаг: ограниченный синтетический structured-tool smoke фиксированных моделей. Кандидаты и порядок указаны в [G1_MODEL_STACK.md](./G1_MODEL_STACK.md). NVIDIA free endpoints запрещают отправку конфиденциальных материалов и предупреждают о логировании запросов для улучшения продуктов; до отдельного решения использовать только синтетические данные.
+- PR #15 не объединять без отдельного разрешения. Существующий Work и рукописи не изменять и не публиковать.
 
 **ИСТОРИЧЕСКАЯ ПЕРЕДАЧА ДО ИССЛЕДОВАНИЯ REASONING (31.10.2026; текущий статус см. выше):** [G1_HANDOFF_2026-10-31.md](./G1_HANDOFF_2026-10-31.md). Пользователь сообщил **новый реальный PASS для Xing4.0** после предыдущего FAILED smoke: in-memory `modelOverrides.architect` → `xingchen-agi/xing4.0-29b-a4b:free`, `ctx.model` корректен, `api=openai-responses`, API-key есть; один настоящий `runWorkerAgentTool(submit_foundation_cast_index)` с **двумя персонажами** (Anna major, Pavel minor) при `maxTokens=2048`, temperature 0.8 **PASS**, вернул точный typed `roles`. Ранний smoke на **трёх персонажах** для Xing и Dots — по **одному WORKER_MODEL_ERROR** без полной причины, не «3/3 FAIL». Следовательно, routing PASS, совместимость Xing **частично подтверждена (1 PASS + 1 FAIL в разных условиях)**; стабильность не проверена; Dots NOT VERIFIED. `modelOverrides` в Studio **не записаны**, стоимость последнего запроса **UNKNOWN**, новая Foundation **NOT RUN**, старый failed draft `works/последняя-ведомость` сохранён. Пользователь предпочёл **новую книгу с фиксированным отобранным стеком**, а не recovery/рефакторинг. Следующий шаг — повторить **исходный одинаковый 3-ролевой** synthetic test Xing с полной безопасной ошибкой при FAIL и сверкой Activity, затем проверить persistent override/readback и выбрать модель, **до** удаления draft или повторной генерации. Новый чат сначала читает handoff и указанный код; прежние статусы внизу — история.
 
