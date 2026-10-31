@@ -79,7 +79,7 @@ function Invoke-NativeText {
 }
 
 function Assert-SourceParity {
-    $dirtyArguments = @("status", "--porcelain", "--untracked-files=all", "--") + $protectedPaths
+    $dirtyArguments = @("status", "--porcelain", "--untracked-files=all", "--ignored=matching", "--") + $protectedPaths
     $dirty = Invoke-GitText -Arguments $dirtyArguments
     if ($dirty) {
         throw "Build inputs have local changes or untracked files: $dirty"
@@ -112,7 +112,15 @@ function Get-InputInventory {
         throw "Core source directory is missing: $sourceRoot"
     }
 
-    foreach ($file in Get-ChildItem -LiteralPath $sourceRoot -File -Recurse -Force) {
+    $sourceEntries = @(Get-ChildItem -LiteralPath $sourceRoot -Recurse -Force)
+    $sourceLinks = @($sourceEntries | Where-Object {
+        ($_.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0
+    })
+    if ($sourceLinks.Count -gt 0) {
+        $linkPaths = ($sourceLinks | ForEach-Object { $_.FullName }) -join [Environment]::NewLine
+        throw "Reparse points/symlinks under Core source are not allowed in a provenance build: $linkPaths"
+    }
+    foreach ($file in $sourceEntries | Where-Object { -not $_.PSIsContainer }) {
         $files.Add($file.FullName)
     }
 
