@@ -336,6 +336,11 @@ async function main() {
         " model=" + (call.model || "unknown") +
         " id=" + call.id,
       );
+      // Stop before preparing request 13; the request cap is per model run.
+      if (preparedRequests >= MAX_PREPARED_REQUESTS && !requestCapHit) {
+        requestCapHit = true;
+        controller.abort(new Error("G1 Architect dry-run exceeded the prepared-request cap."));
+      }
       return;
     }
 
