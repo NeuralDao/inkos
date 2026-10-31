@@ -3,7 +3,7 @@
 **АКТУАЛЬНОЕ ОБНОВЛЕНИЕ — 31.10.2026: исправление OpenRouter reasoning подготовлено в отдельной ветке.**
 
 - `custom/main` подтверждена на `05a0f0dbbcd0a85f49c731ac1357083ab6b9d10a`; основная ветка не изменялась.
-- Task branch: `fix/g1-openrouter-reasoning-defaults`; кодовый commit: `7f9bb2a0ed7aef11ab6432db419c5f4fe8a21dfb`; docs commit / PR HEAD: `a1bcd0a7a4cae3486dc92d782e39db9642b3b2a6`.
+- Task branch: `fix/g1-openrouter-reasoning-defaults`; implementation commit: `7f9bb2a0ed7aef11ab6432db419c5f4fe8a21dfb`; test commit: `1d5d29d16d15fe7ae8fa6832578618c2224be382`.
 - Draft PR #15: https://github.com/NeuralDao/inkos/pull/15; Codex review pending.
 - Изменены `provider.ts` и `pi-stream.ts`; добавлен `openrouter-reasoning.test.ts`. SDK-generated `reasoning.effort=none` удаляется только для официального OpenRouter при отсутствии явного выбора; explicit `extra.reasoning` сохраняется. Политика применяется к прямым текстовым вызовам и общему Pi transport boundary (structured workers и sessions).
 - В execution evidence добавлены поля `reasoning`, `reasoning_effort`, `enable_thinking`.
