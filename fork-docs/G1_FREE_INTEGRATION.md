@@ -49,7 +49,7 @@ pnpm --filter @actalk/inkos-core typecheck
 pnpm --filter @actalk/inkos-studio typecheck
 ```
 
-Это **предлагаемые команды, NOT RUN**, без `pnpm install` и без полного suite. Если разрешение распространяется только на один файл, сократить запуск. Затем (после отдельного API-разрешения) синтетический короткий live smoke на `openrouter/free`: обязательный tool call, валидные аргументы, provider model/response ID (или честный `UNKNOWN`), счётчик usage, контроль отсутствия расходов, ограниченный retry. При FAIL остановка, не переключаться на платную модель, документировать конкретную ошибку; для Responses `stream=false` в структурированных агентах пока возвращается к streaming — **не выдавать non-stream за проверенный**.
+Это **предлагаемые команды, NOT RUN**, без `pnpm install` и без полного suite. Если разрешение распространяется только на один файл, сократить запуск. Этот раздел описывает исторический preflight динамического `openrouter/free`. Для текущего fixed-ID G1 после отдельного разрешения использовать synthetic qualification из [G1_MODEL_STACK.md](./G1_MODEL_STACK.md): точный `:free` ID, `modelOverrides` in-memory, free-only guard, запись actual serving model/provider, usage и ошибки. Для Responses `stream=false` в структурированных агентах пока возвращается к streaming — **не выдавать non-stream за проверенный**.
 
 ## Архив и риски
 
