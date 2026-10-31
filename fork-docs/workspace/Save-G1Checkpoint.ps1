@@ -96,6 +96,13 @@ $unsafe = @($staged | Where-Object {
 if ($unsafe.Count -gt 0) {
   throw "Sensitive/cache path(s) staged: $($unsafe -join ', ')"
 }
+# A lightweight guard for common token prefixes. Do not print matched secrets.
+# This cannot replace review: secrets can appear in other formats.
+& git -C $Workspace grep -I -q -E 'sk-or-v1-|sk-proj-|sk-ant-|ghp_|github_pat_' --cached -- "works/$WorkId"
+if ($LASTEXITCODE -eq 0) {
+  throw 'A possible API token is present in staged Work text. Remove it before committing.'
+}
+if ($LASTEXITCODE -ne 1) { throw 'Staged secret scan could not complete safely.' }
 & git -C $Workspace diff --cached --check
 if ($LASTEXITCODE -ne 0) { throw 'Staged diff failed whitespace/error check.' }
 
