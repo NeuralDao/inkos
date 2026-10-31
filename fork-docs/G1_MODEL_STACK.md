@@ -37,7 +37,7 @@
 ### Протокол квалификации
 
 1. Использовать один и тот же synthetic fixture `submit_foundation_cast_index`: Anna (major), Pavel (minor), Irina (minor).
-2. Проверять точные IDs через существующий `PipelineRunner.createAgentContext("architect")` + in-memory `modelOverrides.architect` + `runWorkerAgentTool()`; `service=openrouter`, официальный endpoint, `openai-responses`, `tool_choice=required`, `maxTokens=2048`, `temperature=0.8`.
+2. Перед live smoke локально синхронизировать branch PR #15 и пересобрать Core `dist` именно из него: build на этой ветке ещё NOT RUN, а тестовый harness импортирует `packages/core/dist`. Проверять точные IDs через существующий `PipelineRunner.createAgentContext("architect")` + in-memory `modelOverrides.architect` + `runWorkerAgentTool()`; `service=openrouter`, официальный endpoint, `openai-responses`, `tool_choice=required`, `maxTokens=2048`, `temperature=0.8`.
 3. Запускать только с `INKOS_OPENROUTER_FREE_ONLY=1`. Не отключать guard, не задавать paid fallback, не записывать overrides в `inkos.json`, не создавать Work.
 4. Для первой серии — Nemotron 3 Ultra и Gemma 4 26B A4B. Super VL — следующий кандидат; Xing4.0 повторять отдельно, если нужно подтвердить прежний результат после устранения возможной reasoning-несовместимости.
 5. Ограничение — один логический тест на модель; остановка при первом 400/429/timeout, без циклических повторов. Записывать requested model, фактический `response.model`/provider или `UNKNOWN`, tool call, stop reason, usage, число prepared requests и безопасную причину ошибки. Фактическую стоимость сверять по OpenRouter Activity.
