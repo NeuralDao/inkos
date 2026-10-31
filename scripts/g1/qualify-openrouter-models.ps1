@@ -75,6 +75,7 @@ if ($diffExitCode -ne 0) {
 $distPaths = @(
     "packages/core/dist/index.js",
     "packages/core/dist/agent/worker-agent.js",
+    "packages/core/dist/llm/provider.js",
     "packages/core/dist/agents/architect-tool.js",
     "packages/core/dist/harness/execution-evidence.js"
 )
@@ -117,6 +118,10 @@ Write-Host "=== LOCAL SOURCE PRECHECK ==="
 
 $previousGuardExists = Test-Path Env:INKOS_OPENROUTER_FREE_ONLY
 $previousGuardValue = if ($previousGuardExists) { $env:INKOS_OPENROUTER_FREE_ONLY } else { $null }
+$previousDiagnosticEnv = @{}
+foreach ($name in @("INKOS_G1_REPO_ROOT", "INKOS_G1_WORKSPACE_ROOT", "INKOS_G1_MAX_TOKENS", "INKOS_G1_TIMEOUT_SECONDS", "INKOS_G1_SCRIPT_COMMIT", "INKOS_G1_SCRIPT_SHA256")) {
+    $previousDiagnosticEnv[$name] = [Environment]::GetEnvironmentVariable($name, "Process")
+}
 
 $env:INKOS_G1_REPO_ROOT = $ResolvedRepo
 $env:INKOS_G1_WORKSPACE_ROOT = $ResolvedWorkspace
@@ -155,11 +160,14 @@ const expectedRoles = [
   { tier: "minor", name: "Irina" },
 ];
 
-const maxPreparedRequestsPerModel = 18;
+// Pi's OpenAI SDK uses two internal retries per prepared payload. These
+// attempts do not emit model-request-prepared evidence again.
+const sdkAttemptsPerPreparedRequest = 3;
+const maxPreparedRequestsPerModel = 6;
 const priceCap = { prompt: 0.15, completion: 0.75 };
 const assumedInputTokensPerRequest = 8500;
 const authorizedBudgetUsd = 0.20;
-const totalRequestCeiling = models.length * maxPreparedRequestsPerModel;
+const totalRequestCeiling = models.length * maxPreparedRequestsPerModel * sdkAttemptsPerPreparedRequest;
 const estimatedWorstCaseUsd =
   (totalRequestCeiling * assumedInputTokensPerRequest * priceCap.prompt
     + totalRequestCeiling * maxTokens * priceCap.completion) / 1_000_000;
@@ -309,11 +317,13 @@ async function main() {
   const workerModule = await importCore("packages/core/dist/agent/worker-agent.js");
   const architectModule = await importCore("packages/core/dist/agents/architect-tool.js");
   const evidenceModule = await importCore("packages/core/dist/harness/execution-evidence.js");
+  const providerModule = await importCore("packages/core/dist/llm/provider.js");
 
   const { loadProjectConfig, createLLMClient, PipelineRunner } = core;
   const { runWorkerAgentTool } = workerModule;
   const { FoundationCastIndexToolSchema } = architectModule;
   const { withExecutionEvidence } = evidenceModule;
+  const { estimatePiContextTokens } = providerModule;
 
   if (
     typeof loadProjectConfig !== "function"
@@ -321,6 +331,7 @@ async function main() {
     || typeof PipelineRunner !== "function"
     || typeof runWorkerAgentTool !== "function"
     || typeof withExecutionEvidence !== "function"
+    || typeof estimatePiContextTokens !== "function"
     || !FoundationCastIndexToolSchema
   ) {
     throw new Error("Required Core exports are missing from the local dist");
@@ -515,10 +526,16 @@ async function main() {
       }, timeoutMs);
 
       const sink = (type, payload) => {
+        if (type === "model-call-started"
+          && estimatePiContextTokens(payload.context) > assumedInputTokensPerRequest) {
+          controller.abort(new Error("Input exceeds the budget estimate assumption"));
+          throw new Error("Input exceeds the budget estimate assumption");
+        }
         if (type === "model-request-prepared") {
           preparedRequests += 1;
           if (preparedRequests > maxPreparedRequestsPerModel) {
             controller.abort(new Error("Prepared-request safety ceiling exceeded"));
+            throw new Error("Prepared-request safety ceiling exceeded");
           }
         }
 
@@ -592,6 +609,7 @@ async function main() {
     budget: {
       authorizedUsd: authorizedBudgetUsd,
       maxPreparedRequestsPerModel,
+      sdkAttemptsPerPreparedRequest,
       maxTokensPerRequest: maxTokens,
       maxPricePerMillion: priceCap,
       assumedInputTokensPerRequest: assumedInputTokensPerRequest,
@@ -645,6 +663,6 @@ finally {
         "INKOS_G1_SCRIPT_COMMIT",
         "INKOS_G1_SCRIPT_SHA256"
     )) {
-        Remove-Item ("Env:" + $name) -ErrorAction SilentlyContinue
+        [Environment]::SetEnvironmentVariable($name, $previousDiagnosticEnv[$name], "Process")
     }
 }
