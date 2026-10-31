@@ -27,9 +27,10 @@ $env:INKOS_OPENROUTER_FREE_ONLY = '1'
 
 ## Критерии проверки Codex
 
-Сначала независимый review GitHub diff и регрессионных тестов; исправлять лишь подтверждённые проблемы в той же ветке. Минимальные проверки **только после отдельного разрешения пользователя** и на синхронизированном, чистом Windows-репозитории:
+Сначала независимый review GitHub diff и регрессионных тестов; исправлять лишь подтверждённые проблемы в той же ветке. Минимальные проверки **только после отдельного разрешения пользователя**, на синхронизированном, чистом Windows-репозитории **и без глобально включённого G1-флага**: отдельные новые тесты сами включают и выключают флаг через `vi.stubEnv`. Не запускать обычный набор Core тестов из той же PowerShell-сессии с `INKOS_OPENROUTER_FREE_ONLY=1` — этот режим намеренно блокирует тестовые модели других провайдеров.
 
 ```powershell
+Remove-Item Env:INKOS_OPENROUTER_FREE_ONLY -ErrorAction SilentlyContinue
 pnpm --filter @actalk/inkos-core exec vitest run src/__tests__/effective-llm-config.test.ts src/__tests__/provider.test.ts
 pnpm --filter @actalk/inkos-core typecheck
 ```
