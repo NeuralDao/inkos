@@ -70,7 +70,7 @@ import { withExecutionEvidence } from "../harness/execution-evidence.js";
 import { opaqueConversationId, runWithAgentTrajectory } from "../llm/agent-trajectory.js";
 import { guardedPiNonStreaming, guardedPiStream } from "./pi-stream.js";
 import { splitTextByEstimatedTokens } from "../llm/semantic-input.js";
-import { estimateTextTokens } from "../llm/provider.js";
+import { assertOpenRouterFreeOnly, estimateTextTokens } from "../llm/provider.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -753,6 +753,10 @@ export async function runAgentSession(
   config: AgentSessionConfig,
   userMessage: string,
 ): Promise<AgentSessionResult> {
+  if (process.env.INKOS_OPENROUTER_FREE_ONLY === "1") {
+    const model = resolveModel(config.model);
+    assertOpenRouterFreeOnly({ service: model.provider, baseUrl: model.baseUrl, model: model.id });
+  }
   return runInAgentSessionQueue(config.projectRoot, config.sessionId, async () => {
     let currentConfig = config;
     const visited = new Set<string>();

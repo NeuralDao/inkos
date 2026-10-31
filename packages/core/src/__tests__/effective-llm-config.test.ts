@@ -460,7 +460,28 @@ describe("resolveEffectiveLLMConfig", () => {
     });
 
     expect(result.llm.service).toBe("openrouter");
-    expect(result.llm.model).toBe("openrouter/auto");
+    expect(result.llm.model).toBe("openrouter/free");
+  });
+
+  it("openrouter/free can be selected explicitly without appearing in the user's model list", async () => {
+    await writeProject({
+      configSource: "studio",
+      service: "openrouter",
+      services: [{ service: "openrouter" }],
+      defaultModel: "openrouter/free",
+    });
+    await writeSecrets({ openrouter: { apiKey: "sk-or" } });
+
+    const result = await resolveEffectiveLLMConfig({
+      consumer: "studio",
+      projectRoot: root,
+      envLayers: { global: {}, project: {}, process: {} },
+      requireApiKey: true,
+    });
+
+    expect(result.llm.service).toBe("openrouter");
+    expect(result.llm.model).toBe("openrouter/free");
+    expect(result.llm.baseUrl).toBe("https://openrouter.ai/api/v1");
   });
 
   it("CLI env 指向 Ollama 时允许用户本地安装的动态模型", async () => {

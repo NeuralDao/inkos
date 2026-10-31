@@ -207,6 +207,14 @@ export class PipelineRunner {
   constructor(config: PipelineConfig) {
     this.config = config;
     this.state = new StateManager(config.projectRoot);
+    if (process.env.INKOS_OPENROUTER_FREE_ONLY === "1") {
+      // Check all potential agent deployments before creating a Work or making
+      // the first free API call. Otherwise a paid override could fail midway.
+      clientWithModel(config.client, config.model);
+      for (const agent of Object.keys(config.modelOverrides ?? {})) {
+        this.resolveOverride(agent);
+      }
+    }
   }
 
   async runWithAbortSignal<T>(

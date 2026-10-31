@@ -334,7 +334,38 @@ export interface LLMClient {
 
 // === Factory ===
 
+/**
+ * Opt-in G1 guard: fail before an HTTP request if any agent (including a
+ * model override) resolves to a paid model or another service. The normal
+ * OpenRouter model selection remains unrestricted when the guard is disabled.
+ *
+ * Enable with INKOS_OPENROUTER_FREE_ONLY=1 in the InkOS process environment.
+ */
+export function assertOpenRouterFreeOnly(selection: {
+  readonly service?: string;
+  readonly baseUrl?: string;
+  readonly model: string;
+  readonly extra?: Readonly<Record<string, unknown>>;
+}): void {
+  if (process.env.INKOS_OPENROUTER_FREE_ONLY !== "1") return;
+  const id = selection.model.toLowerCase();
+  const isFree = id === "openrouter/free" || id.endsWith(":free");
+  const endpoint = selection.baseUrl || "https://openrouter.ai/api/v1";
+  const isOfficialOpenRouter = new URL(endpoint).origin === "https://openrouter.ai";
+  if (selection.service !== "openrouter" || !isOfficialOpenRouter || !isFree) {
+    throw new Error(
+      `INKOS_OPENROUTER_FREE_ONLY=1: only free OpenRouter models are allowed (got service=${selection.service}, model=${selection.model}).`,
+    );
+  }
+  // OpenRouter's multi-model fallbacks and plugins may route or bill
+  // independently of the primary free model, so disable them in G1 mode.
+  if (selection.extra && ["models", "route", "plugins"].some(key => key in selection.extra!)) {
+    throw new Error("INKOS_OPENROUTER_FREE_ONLY=1: extra models, route and plugins are not allowed.");
+  }
+}
+
 export function createLLMClient(config: LLMConfig): LLMClient {
+  assertOpenRouterFreeOnly(config);
   const _earlyCard = lookupModel(config.service ?? "custom", config.model);
   const defaults = {
     temperature: config.temperature ?? 0.7,
@@ -1510,6 +1541,14 @@ export async function chatCompletion(
     readonly retry?: boolean;
   },
 ): Promise<LLMResponse> {
+  // Text-generating agents can pass a model ID directly without rebuilding the
+  // LLM client. Guard each such request, not only client construction/overrides.
+  assertOpenRouterFreeOnly({
+    service: client.service,
+    baseUrl: client._piModel?.baseUrl,
+    model,
+    extra: client.defaults.extra,
+  });
   const resolved = {
     temperature: clampTemperatureForModel(
       client.service,
