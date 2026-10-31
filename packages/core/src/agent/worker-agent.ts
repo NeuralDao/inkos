@@ -14,6 +14,7 @@ import type { Static, TSchema } from "@sinclair/typebox";
 import { Value } from "@sinclair/typebox/value";
 import {
   chatCompletion,
+  assertOpenRouterFreeOnly,
   clientWithModel,
   clampTemperatureForModel,
   createStreamMonitor,
@@ -324,6 +325,8 @@ export async function runWorkerAgentTool<TParameters extends TSchema>(
   }
   if (client._piModel.id !== modelId && client._piModel.name !== modelId) client = clientWithModel(client, modelId);
   const model = workerModel(client, modelId, options.maxTokens);
+  assertOpenRouterFreeOnly({ service: client.service, baseUrl: model.baseUrl, model: modelId, extra: client.defaults.extra });
+  assertOpenRouterFreeOnly({ service: client.service, baseUrl: model.baseUrl, model: model.id, extra: client.defaults.extra });
   const systemPrompt = [
     ...messages.filter((message) => message.role === "system").map((message) => message.content),
     `Finish by calling ${resultTool.name} exactly once. Do not print the result as prose or JSON.`,

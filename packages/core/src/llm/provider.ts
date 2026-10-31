@@ -341,7 +341,7 @@ export interface LLMClient {
  *
  * Enable with INKOS_OPENROUTER_FREE_ONLY=1 in the InkOS process environment.
  */
-function assertOpenRouterFreeOnly(selection: {
+export function assertOpenRouterFreeOnly(selection: {
   readonly service?: string;
   readonly baseUrl?: string;
   readonly model: string;

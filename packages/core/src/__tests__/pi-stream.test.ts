@@ -35,6 +35,35 @@ import {ComposerAgent} from '../agents/composer.js';
 const fetchWithProxyMock = vi.hoisted(() => vi.fn());
 
 describe("structured alias routing", () => {
+  it("blocks a pre-existing paid structured client before transport when free-only is enabled", async () => {
+    vi.stubEnv("INKOS_OPENROUTER_FREE_ONLY", "0");
+    const client = createLLMClient(LLMConfigSchema.parse({ provider: "openai", service: "openrouter", baseUrl: "https://openrouter.ai/api/v1", model: "openrouter/auto", apiKey: "fixture", stream: false }));
+    vi.stubEnv("INKOS_OPENROUTER_FREE_ONLY", "1");
+    fetchWithProxyMock.mockReset();
+    const network = vi.spyOn(globalThis, "fetch");
+    try {
+      await expect(runWorkerAgentTool(client, "openrouter/auto", [{ role: "user", content: "Fixture." }], {
+        name: "submit_fixture", label: "Fixture", description: "Fixture", parameters: Type.Object({ ok: Type.Boolean() }),
+      })).rejects.toThrow(/INKOS_OPENROUTER_FREE_ONLY/);
+      expect(fetchWithProxyMock).not.toHaveBeenCalled();
+      expect(network).not.toHaveBeenCalled();
+    } finally { network.mockRestore(); vi.unstubAllEnvs(); }
+  });
+
+  it("blocks an independently resolved paid Pi model in an agent session before transport", async () => {
+    vi.stubEnv("INKOS_OPENROUTER_FREE_ONLY", "0");
+    const paid = createLLMClient(LLMConfigSchema.parse({ provider: "openai", service: "openrouter", baseUrl: "https://openrouter.ai/api/v1", model: "openrouter/auto", apiKey: "fixture" }));
+    vi.stubEnv("INKOS_OPENROUTER_FREE_ONLY", "1");
+    fetchWithProxyMock.mockReset();
+    const network = vi.spyOn(globalThis, "fetch");
+    try {
+      await expect(runAgentSession({ projectRoot: "", sessionId: "free-only-fixture", bookId: null, language: "en", model: paid._piModel!, pipeline: {} as never }, "Fixture."))
+        .rejects.toThrow(/INKOS_OPENROUTER_FREE_ONLY/);
+      expect(fetchWithProxyMock).not.toHaveBeenCalled();
+      expect(network).not.toHaveBeenCalled();
+    } finally { network.mockRestore(); vi.unstubAllEnvs(); }
+  });
+
   it("rejects paid PipelineRunner overrides in free-only G1 mode before HTTP", () => {
     const base = createLLMClient(LLMConfigSchema.parse({
       provider: "openai",
