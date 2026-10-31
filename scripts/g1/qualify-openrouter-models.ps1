@@ -41,11 +41,14 @@ $branch = Invoke-GitText -Arguments @("branch", "--show-current")
 $head = Invoke-GitText -Arguments @("rev-parse", "HEAD")
 $sourceHead = Invoke-GitText -Arguments @("rev-parse", "--verify", $ExpectedSourceRef)
 
-if ($branch -ne "custom/main") {
-    throw "Expected local branch custom/main; found '$branch'. No branch switch was attempted."
-}
-
+# The local branch name is not itself a safety boundary: a task branch is
+# acceptable when every execution-critical source/config path is clean and
+# byte-for-byte equal to the explicitly selected source ref below.
 $corePaths = @(
+    "package.json",
+    "pnpm-lock.yaml",
+    "pnpm-workspace.yaml",
+    "packages/core/package.json",
     "packages/core/src/agent/worker-agent.ts",
     "packages/core/src/agent/pi-stream.ts",
     "packages/core/src/pipeline/runner.ts",
@@ -72,9 +75,13 @@ if ($diffExitCode -ne 0) {
     throw "Git could not compare Core source against $ExpectedSourceRef (exit $diffExitCode)."
 }
 
+Write-Host "Source verification: branch '$branch' is accepted because all protected source/config paths are clean and match $ExpectedSourceRef at $sourceHead."
+
 $distPaths = @(
     "packages/core/dist/index.js",
     "packages/core/dist/agent/worker-agent.js",
+    "packages/core/dist/agent/pi-stream.js",
+    "packages/core/dist/pipeline/runner.js",
     "packages/core/dist/llm/provider.js",
     "packages/core/dist/agents/architect-tool.js",
     "packages/core/dist/harness/execution-evidence.js"
