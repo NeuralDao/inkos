@@ -1,37 +1,21 @@
 # Текущее состояние форка
 
-**АКТУАЛЬНОЕ ОБНОВЛЕНИЕ — 31.10.2026: reasoning fix проверен; Core build PASS; fixed-free qualification продолжается с Activity reconciliation.**
+**АКТУАЛЬНОЕ ОБНОВЛЕНИЕ — 31.10.2026: reasoning fix проверен; Core build PASS; Nemotron 3.5 Super VL прошёл первый synthetic structured-tool smoke.**
 
-
-
-- База custom/main: 05a0f0dbbcd0a85f49c731ac1357083ab6b9d10a.
-
-- Task branch: fix/g1-openrouter-reasoning-defaults. Последний проверенный локальный code HEAD: ee4c57e496db561b3d0ad9675d604a886e950941; последующие удалённые коммиты меняли только `fork-docs/`. Перед следующим этапом синхронизировать документацию; Core dist остаётся собранным из того же code HEAD.
-
+- База `custom/main`: `05a0f0dbbcd0a85f49c731ac1357083ab6b9d10a`.
+- Task branch: `fix/g1-openrouter-reasoning-defaults`; последний проверенный локальный code HEAD: `ee4c57e496db561b3d0ad9675d604a886e950941`. Последующие удалённые коммиты меняли только `fork-docs/`; синхронизировать docs перед следующим этапом.
 - Draft PR #15: https://github.com/NeuralDao/inkos/pull/15; открыт, **не объединён**. Merge — только с отдельного разрешения.
+- Статический review reasoning fix: **ACCEPT по коду**. Пользователь сообщил целевой Vitest `openrouter-reasoning.test.ts` **10/10 PASS**, Core `pnpm exec tsc --noEmit` **PASS** и `pnpm --filter @actalk/inkos-core build` **PASS** на code HEAD `ee4c57e`. ChatGPT команды самостоятельно не запускал. Lint/E2E/полный Studio smoke — **NOT RUN**.
+- Nemotron 3.5 Super VL (`nvidia/nemotron-3.5-super-vl:free`): preflight **PASS**; direct `runWorkerAgentTool(submit_foundation_cast_index)` **PASS**. Точный результат: Anna major, Pavel minor, Irina minor. Usage: 470 prompt / 125 completion / 595 total tokens. Cost не указан; Activity row не сопоставлена.
+- Статус Super VL — **STRUCTURED TOOL SMOKE PASS**, но это не полная квалификация Architect: тест вызывает `runWorkerAgentTool()` напрямую с коротким англоязычным prompt и схемой `FoundationCastIndexToolSchema`; не выполняет реальный `ArchitectAgent.generateFoundation()` с outline/details/cast/cards. Литературное качество и повторяемость не проверены.
+- Nemotron 3 Ultra: preflight **PASS**, structured cast-index **FAIL** `MODEL_REQUIRED_TOOL_MISSING`; Activity показывает две генерации Nvidia serving ID `nvidia/nemotron-3-ultra-550b-a55b-20260604`, обе `stop` без `tool_calls` (940 prompt / 370 completion / 274 reasoning tokens суммарно; cost $0). В общей Activity 30/55 генераций Ultra завершились `tool_calls`, то есть общий tool use поддерживается, но exact cast fixture провален.
+- Gemma 4: preflight **PASS**, structured test **FAIL** `WORKER_MODEL_ERROR` / `429 Provider returned error`; в Activity CSV нет Gemma rows, serving model, retry count, usage и cost неизвестны. Tool compatibility не проверена.
+- Activity CSV: 213 строк, все `InkOS-G1`, `free`, `cost_total=0`; Super VL — 47 rows / 35 `tool_calls` / 12 `length`, но нет requested alias/task label. Не привязывать новый PASS к одной из этих строк без timestamp/request ID.
+- **Где логи:** Studio text log ожидается в `C:\Projects\inkos-workspace\inkos.log`; экран Logs/`GET /api/v1/logs` показывает последние 100 строк, но endpoint только читает файл и не создаёт его. Work execution events находятся в `C:\Projects\inkos-workspace\.inkos\harness.sqlite`; Studio Work Inspector → Execution history, API `/api/v1/episodes` и `/api/v1/episodes/:id`.
+- Важно: использованный direct smoke обходит `CreativeHarnessRuntime` и `withExecutionEvidence`; поэтому он не создаёт Episode и не пишет execution events в `harness.sqlite`. `recordExecutionEvidence()` без AsyncLocalStorage sink — no-op. Для следующего direct test добавить wrapper `withExecutionEvidence((type,payload)=>evidence.push({type,payload}), () => runWorkerAgentTool(...))`; тогда будут доступны model-call-completed/retry и assistant response/usage.
+- Сохранённые Studio `modelOverrides` **не менялись**; старый Work `последняя-ведомость` сохранён; новый Work/Foundation не запускался. Использовались только синтетические данные. PR #14 с платным qualification script не использовать.
 
-- Статический review reasoning fix: **ACCEPT по коду**. Пользователь сообщил целевой Vitest openrouter-reasoning.test.ts **10/10 PASS**, Core pnpm exec tsc --noEmit **PASS** и pnpm --filter @actalk/inkos-core build **PASS** на code HEAD ee4c57e. ChatGPT команды самостоятельно не запускал. Lint/E2E/полный Studio smoke — **NOT RUN**.
-
-- Nemotron 3 Ultra fixed ID: preflight/routing **PASS**; structured `submit_foundation_cast_index` **FAIL** `MODEL_REQUIRED_TOOL_MISSING`. Activity содержит две соседние записи (20:50:43.703 и 20:50:46.484), вероятно initial + один retry: обе фактические генерации обслужены Nvidia `nvidia/nemotron-3-ultra-550b-a55b-20260604`, обе `finish_reason=stop`, без `tool_calls`; каждая 470 prompt, 194/176 completion, 148/126 reasoning; пара суммарно 940 input / 370 completion / 274 reasoning; cost $0.
-
-- В общей выгрузке Nemotron Ultra — 55 генераций: 30 `tool_calls`, 19 `stop`, 1 cancelled, 6 без finish reason. Следовательно, модель вызывала tools в других запросах; провал относится к конкретному обязательному `submit_foundation_cast_index` вызову, а не доказывает полное отсутствие function calling.
-
-- Gemma 4 fixed ID: preflight/routing **PASS**; structured call **FAIL** `WORKER_MODEL_ERROR`, cause `429 Provider returned error`. В Activity CSV нет ни одной записи Gemma. Поэтому фактические upstream retry count, serving provider/model, usage и cost **UNKNOWN**; отсутствие строки не доказывает $0. По коду возможно до трёх upstream requests на один worker turn (initial + два transient retries), но это не подтверждено Activity.
-
-- Activity CSV содержит 213 строк (14:02:35–20:50:46), все под API key `InkOS-G1`, variant `free`, `cost_total=0`. `model_permaslug` — фактический serving model; requested model ID, tool name и task label в CSV отсутствуют.
-
-- Важная новая улика по следующему кандидату: `nvidia/nemotron-3.5-super-vl-20261015` имеет 47 generation rows, provider Nvidia, 35 `tool_calls`, 12 `length`, cost $0; 801 814 prompt / 116 247 completion / 103 716 reasoning tokens. Это предварительное свидетельство tool use, но неизвестно, относятся ли эти rows к fixed alias и точному Architect fixture. Сначала сопоставить generation IDs/time с локальными harness/Studio logs; не дублировать тест, если он уже есть.
-
-- Другие агрегаты Activity: Nemotron 3.5 Lightning — 48 rows / 40 `tool_calls` / 6 `length`; Cohere North Mini — 45 / 35 `tool_calls` / 6 `stop` / 2 `length` / 1 `error`; Liquid LFM — 17 / 17 `tool_calls`; Xing4.0 — 1 / 1 `tool_calls`. Это разнородные запросы, не единый benchmark и не pass rates.
-
-- Предыдущие результаты остаются: Xing4.0 — один PASS на облегчённом тесте с двумя персонажами и отдельный FAIL на трёх персонажах; стабильность не доказана. Dots — положительной проверки нет.
-
-- Сохранённые Studio modelOverrides **не менялись**; старый Work последняя-ведомость сохранён; новый Work/Foundation не запускался. Использовались только синтетические данные. PR #14 с платным qualification script не использовать.
-
-
-
-Следующий шаг: сопоставить 47 Super VL generation rows с локальными task logs и установить, есть ли среди них нужный `submit_foundation_cast_index` тест. Если нет — один ограниченный synthetic smoke exact fixed ID; Gemma не повторять только ради Activity.
-
+Следующий шаг: проверить репрезентативность теста. Подготовить synthetic dry-run полного `ArchitectAgent.generateFoundation()` без `writeFoundationFiles()`, с `withExecutionEvidence`, и проверить outline/details/cast-index/cast-cards. До отдельного разрешения не запускать новые live API-вызовы и не менять постоянные overrides.
 **ИСТОРИЧЕСКИЙ ЖУРНАЛ ДО ИССЛЕДОВАНИЯ REASONING (31.10.2026; текущий статус см. выше):** Нижеследующие G1-записи сохраняют хронологию прежних проб и решений. Старые формулировки `NOT RUN`, `следующий шаг`, динамический маршрут и статусы Work относятся к моменту записи и не являются текущими инструкциями. Актуальный следующий шаг — synthetic qualification fixed `:free` IDs по [G1_HANDOFF_2026-10-31.md](./G1_HANDOFF_2026-10-31.md).
 
 **Историческая запись до reasoning fix:** пользователь сообщил **новый реальный PASS для Xing4.0** после предыдущего FAILED smoke: in-memory `modelOverrides.architect` → `xingchen-agi/xing4.0-29b-a4b:free`, `ctx.model` корректен, `api=openai-responses`, API-key есть; один настоящий `runWorkerAgentTool(submit_foundation_cast_index)` с **двумя персонажами** (Anna major, Pavel minor) при `maxTokens=2048`, temperature 0.8 **PASS**, вернул точный typed `roles`. Ранний smoke на **трёх персонажах** для Xing и Dots — по **одному WORKER_MODEL_ERROR** без полной причины, не «3/3 FAIL». Следовательно, routing PASS, совместимость Xing **частично подтверждена (1 PASS + 1 FAIL в разных условиях)**; стабильность не проверена; Dots NOT VERIFIED. `modelOverrides` в Studio **не записаны**, стоимость последнего запроса **UNKNOWN**, новая Foundation **NOT RUN**, старый failed draft `works/последняя-ведомость` сохранён. Пользователь предпочёл **новую книгу с фиксированным отобранным стеком**, а не recovery/рефакторинг. Следующий шаг — повторить **исходный одинаковый 3-ролевой** synthetic test Xing с полной безопасной ошибкой при FAIL и сверкой Activity, затем проверить persistent override/readback и выбрать модель, **до** удаления draft или повторной генерации. Новый чат сначала читает handoff и указанный код; прежние статусы внизу — история.
