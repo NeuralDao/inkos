@@ -16,6 +16,7 @@ import {
   estimatePiContextTokens,
   guardAssistantMessageStream,
   withTransientLLMRetry,
+  normalizeOpenRouterReasoningPayload,
   type StreamDeadlineOptions,
 } from "../llm/provider.js";
 import {
@@ -59,6 +60,9 @@ export function guardedPiStream<TApi extends Api>(
       headers: { ...(options?.headers ?? {}), ...traceHeaders },
       onPayload: async (payload, activeModel) => {
         let configured = explicitDeepSeekThinkingMode(payload, activeModel);
+        configured = normalizeOpenRouterReasoningPayload(configured, activeModel, {
+          reasoningRequested: options?.reasoning !== undefined,
+        });
         const choice = (options as SimpleStreamOptions & { toolChoice?: unknown } | undefined)?.toolChoice;
         if (choice !== undefined && configured && typeof configured === "object") {
           if (activeModel.api === "openai-completions") configured = { ...configured, tool_choice: choice };
@@ -78,7 +82,7 @@ export function guardedPiStream<TApi extends Api>(
         const prepared = await options?.onPayload?.(configured, activeModel) ?? configured;
         recordExecutionEvidence("model-request-prepared", { modelCallId: modelCall?.modelCallId, model: activeModel.id,
           api: activeModel.api,
-          parameters: prepared && typeof prepared === "object" ? Object.fromEntries(Object.entries(prepared).filter(([key]) => ["stream", "thinking", "max_tokens", "max_completion_tokens", "max_output_tokens", "tool_choice"].includes(key))) : {} });
+          parameters: prepared && typeof prepared === "object" ? Object.fromEntries(Object.entries(prepared).filter(([key]) => ["stream", "thinking", "reasoning", "reasoning_effort", "enable_thinking", "max_tokens", "max_completion_tokens", "max_output_tokens", "tool_choice"].includes(key))) : {} });
         return prepared;
       },
       signal,
