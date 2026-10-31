@@ -65,8 +65,10 @@ if ($trackedSensitive.Count -gt 0) {
 }
 $pending = @(& git -c core.quotepath=false -C $Workspace diff --cached --name-only)
 if ($LASTEXITCODE -ne 0) { throw 'Cannot inspect existing staged changes.' }
-if ($pending.Count -gt 0) {
-  throw 'Git index already has staged files. Commit/review them before running this helper.'
+$workPrefix = '^works/' + [Regex]::Escape($WorkId) + '/'
+$pendingUnexpected = @($pending | Where-Object { $_ -ne 'g1-run.md' -and $_ -notmatch $workPrefix })
+if ($pendingUnexpected.Count -gt 0) {
+  throw "Existing staged files belong to another Work: $($pendingUnexpected -join ', ')"
 }
 
 & git -C $Workspace add -A -- "works/$WorkId"
@@ -83,7 +85,6 @@ if ($staged.Count -eq 0) {
   return
 }
 
-$workPrefix = '^works/' + [Regex]::Escape($WorkId) + '/'
 $outside = @($staged | Where-Object { $_ -ne 'g1-run.md' -and $_ -notmatch $workPrefix })
 if ($outside.Count -gt 0) {
   throw "Unexpected staged path(s): $($outside -join ', ')"
