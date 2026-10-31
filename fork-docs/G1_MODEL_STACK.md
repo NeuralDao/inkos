@@ -1,6 +1,6 @@
 # G1 — OpenRouter: текущая стратегия выбора моделей
 
-**АКТУАЛЬНОЕ УТОЧНЕНИЕ 31.10.2026 — reasoning fix и fixed-free qualification:** PR #15 прошёл статический review ACCEPT; пользователь сообщил целевой Vitest **10/10 PASS**, Core typecheck **PASS** и Core build **PASS** на code HEAD ee4c57e496db561b3d0ad9675d604a886e950941. На одном и том же трёхперсонажном `submit_foundation_cast_index` synthetic smoke теперь **3 PASS**: Nemotron 3.5 Super VL (470/125 tokens), Xing4.0 (404/122), Cohere North Mini Code (190/305). Все три вернули Anna major, Pavel minor, Irina minor; суммарно 1616 tokens. Nemotron 3 Ultra — MODEL_REQUIRED_TOOL_MISSING; Gemma 4 — upstream 429. Три PASS подтверждают базовую совместимость fixed IDs с обязательным structured tool call, но не полный `ArchitectAgent.generateFoundation()`, повторяемость или литературное качество. PR #15 открыт и не объединён.
+**АКТУАЛЬНОЕ УТОЧНЕНИЕ 31.10.2026 — три fixed-free structured PASS; полный Architect harness подготовлен:** PR #15 прошёл статический review ACCEPT; пользователь сообщил целевой Vitest **10/10 PASS**, Core typecheck **PASS** и Core build **PASS** на code HEAD `ee4c57e496db561b3d0ad9675d604a886e950941`. На одном и том же трёхперсонажном `submit_foundation_cast_index` smoke **3 PASS**: Nemotron 3.5 Super VL (470/125), Xing4.0 (404/122), Cohere North Mini Code (190/305). Пользователь разрешил полный synthetic Architect dry-run на этих трёх моделях. Harness опубликован в [Draft PR #16](https://github.com/NeuralDao/inkos/pull/16), stacked on PR #15; live full Architect runs пока NOT RUN. Nemotron 3 Ultra — `MODEL_REQUIRED_TOOL_MISSING`; Gemma 4 — upstream 429. Ни один из трёх PASS пока не доказывает повторяемость или RU prose quality.
 
 Фикс подготовлен в ветке `fix/g1-openrouter-reasoning-defaults`, [draft PR #15](https://github.com/NeuralDao/inkos/pull/15). Codex исправил два замечания (реальный выбор Chat Completions в тесте; удаление только точной формы `{effort:"none"}`). Повторный статический review ChatGPT: **ACCEPT по коду**. Пользовательский целевой Vitest: **10/10 PASS**; Core typecheck после исправления fetch mock — **PASS по сообщению пользователя**. Implementation commit `7f9bb2a0ed7aef11ab6432db419c5f4fe8a21dfb`; Codex correction commit `35eb7c28ddeb209857fb59380f5aa3144b23947a`; type fix `4f5aa4999eb3816d7dd701c55b6447ab35dee6f5`.
 
@@ -86,6 +86,30 @@
 **Статус кандидата:** Cohere North Mini Code — **STRUCTURED TOOL SMOKE PASS**; полный Architect pipeline, повторяемость и литературное качество не проверены.
 
 **Сводка успешных smoke:** Super VL — 470/125 (595); Xing4.0 — 404/122 (526); Cohere North Mini Code — 190/305 (495). Всего 1616 tokens. Это сумма usage трёх отдельных smoke, не цена; в предоставленных выводах cost отсутствует.
+
+## Полный Architect dry-run: harness подготовлен (31.10.2026)
+
+- Скрипт: `scripts/g1-architect-dry-run.mjs`; [Draft PR #16](https://github.com/NeuralDao/inkos/pull/16), ветка `feat/g1-architect-dry-run-harness`, stacked base `fix/g1-openrouter-reasoning-defaults` (PR #15).
+- Вызов: реальный `ArchitectAgent.generateFoundation()` через `PipelineRunner.createAgentContext('architect')`, in-memory `modelOverrides.architect` и longform-novel profile. Четыре обязательных tools: `submit_foundation_outline`, `submit_foundation_details`, `submit_foundation_cast_index`, `submit_foundation_cast_documents`.
+- Evidence: `withExecutionEvidence` + `runWithAgentTrajectory`; собираются model-call IDs, tool names, prepared parameters, completion/tool calls, retries, timestamps, per-response token usage и ошибки. Raw prompts и API key не записываются в отчёт.
+- Safety: только три allowlisted `:free` IDs; `INKOS_OPENROUTER_FREE_ONLY=1`; 4096 max output tokens per stage, 12 prepared requests per model, 15-minute timeout. Модели запускать последовательно.
+- Input: синтетический `BookConfig` The Glass Ledger (5 chapters) и одинаковый synthetic brief. Скрипт не вызывает `initBook()` или `writeFoundationFiles()`, не создаёт Work/Episode/Foundation files, не меняет `inkos.json` и persistent Studio overrides.
+- Output JSON сохраняется вне репозитория: `C:\Projects\inkos-review-artifacts\g1-architect-dry-run\`. В нём — synthetic result и sanitized evidence; фактический serving provider/model и cost затем сверить по Activity timestamps.
+- **Языковая граница:** `ArchitectAgent.generateFoundation()` выбирает prompt language из `book.language`. Harness использует `language=en`, `narrativeLanguage=ru`; тест проверяет полный протокол и story architecture, но не русскую прозу.
+- Пользователь разрешил три full Architect API runs, однако они пока **NOT RUN**. Для harness не запускались `node --check`, build/typecheck/tests. Core dist должен соответствовать уже собранному пользователем code HEAD `ee4c57e`.
+
+PowerShell: сначала `node --check scripts/g1-architect-dry-run.mjs` и проверка наличия `packages/core/dist/index.js`; затем выполнить **только первый** live run. После анализа отчёта и Activity переходить к следующей модели.
+
+```powershell
+node scripts/g1-architect-dry-run.mjs --model nvidia/nemotron-3.5-super-vl:free
+```
+
+Следующие кандидаты — отдельными запусками после review:
+
+```powershell
+node scripts/g1-architect-dry-run.mjs --model xingchen-agi/xing4.0-29b-a4b:free
+node scripts/g1-architect-dry-run.mjs --model cohere/north-mini-code:free
+```
 
 ## Сверка OpenRouter Activity CSV (31.10.2026)
 
