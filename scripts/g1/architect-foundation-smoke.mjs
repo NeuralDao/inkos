@@ -5,8 +5,8 @@ import { access, mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 
-const EXPECTED_CODE_BASE = "ee4c57e496db561b3d0ad9675d604a886e950941";
-const ALLOWED_MODELS = new Set([
+const CODE_BASE = "ee4c57e496db561b3d0ad9675d604a886e950941";
+const MODELS = new Set([
   "nvidia/nemotron-3.5-super-vl:free",
   "xingchen-agi/xing4.0-29b-a4b:free",
   "cohere/north-mini-code:free",
@@ -17,781 +17,424 @@ const STAGES = [
   "submit_foundation_cast_index",
   "submit_foundation_cast_documents",
 ];
-const PROTECTED_PATHS = [
-  "packages/core/src",
-  "packages/core/package.json",
-  "packages/core/tsconfig.json",
-  "tsconfig.json",
-  "pnpm-lock.yaml",
-  "pnpm-workspace.yaml",
-  ".npmrc",
+const CORE_PATHS = [
+  "packages/core/src", "packages/core/package.json", "packages/core/tsconfig.json",
+  "tsconfig.json", "pnpm-lock.yaml", "pnpm-workspace.yaml", ".npmrc",
   "scripts/clean-package-dist.mjs",
 ];
-const LANGUAGE_CONTRACT_WARNING =
-  "ArchitectAgent.generateFoundation currently selects its prompt language from BookConfig.language and explicitly requests English when language='en'; it does not use narrativeLanguage. With the benchmark's language='en', narrativeLanguage='ru' pair, this run can validate the four-stage pipeline but cannot qualify Russian foundation prose.";
-
-function usage() {
-  return [
-    "G1 full Architect foundation smoke",
-    "",
-    "Required:",
-    "  --repo-root <path>       Local NeuralDao/inkos checkout (default: cwd)",
-    "  --project-root <path>    Studio workspace containing inkos.json",
-    "  --model <exact-free-id>  One of the three qualified fixed IDs",
-    "",
-    "Optional:",
-    "  --output <path>          Write JSON report outside repo/workspace; otherwise stdout",
-    "  --run                    Perform one live Architect.generateFoundation call",
-    "  --confirm-live-llm       Required together with --run",
-    "  --dry-run                Preflight only (default)",
-    "  --help",
-    "",
-    "The default mode performs no LLM API calls. No Work or Foundation files are created.",
-  ].join("\n");
-}
+const LANGUAGE_WARNING =
+  "ArchitectAgent.generateFoundation selects its prompt language from BookConfig.language and explicitly requests English for language='en'; it does not use narrativeLanguage. With R3's language='en', narrativeLanguage='ru' pair, this run validates the four-stage pipeline but cannot qualify Russian foundation prose.";
 
 function parseArgs(argv) {
-  const args = {
-    repoRoot: process.cwd(),
-    projectRoot: "",
-    model: "",
-    output: "",
-    run: false,
-    confirmLive: false,
-    help: false,
-  };
-  for (let index = 0; index < argv.length; index += 1) {
-    const arg = argv[index];
-    if (arg === "--help" || arg === "-h") {
-      args.help = true;
-      continue;
-    }
-    if (arg === "--run") {
-      args.run = true;
-      continue;
-    }
-    if (arg === "--dry-run") {
-      args.run = false;
-      continue;
-    }
-    if (arg === "--confirm-live-llm") {
-      args.confirmLive = true;
-      continue;
-    }
-    const valueOptions = new Map([
-      ["--repo-root", "repoRoot"],
-      ["--project-root", "projectRoot"],
-      ["--model", "model"],
-      ["--output", "output"],
-    ]);
-    const key = valueOptions.get(arg);
-    if (!key) throw new Error("Unknown argument: " + arg);
-    const value = argv[index + 1];
-    if (!value || value.startsWith("--")) throw new Error("Missing value for " + arg);
-    args[key] = value;
-    index += 1;
+  const args = { repoRoot: process.cwd(), projectRoot: "", model: "", output: "", run: false, confirm: false };
+  for (let i = 0; i < argv.length; i += 1) {
+    const key = argv[i];
+    if (key === "--help" || key === "-h") return { help: true };
+    if (key === "--run") { args.run = true; continue; }
+    if (key === "--dry-run") { args.run = false; continue; }
+    if (key === "--confirm-live-llm") { args.confirm = true; continue; }
+    const fields = { "--repo-root": "repoRoot", "--project-root": "projectRoot", "--model": "model", "--output": "output" };
+    if (!fields[key] || !argv[i + 1] || argv[i + 1].startsWith("--")) throw new Error("Invalid or missing argument: " + key);
+    args[fields[key]] = argv[++i];
   }
-  if (args.help) return args;
-  if (!args.projectRoot) throw new Error("--project-root is required.");
-  if (!args.model) throw new Error("--model is required.");
-  if (!ALLOWED_MODELS.has(args.model)) {
-    throw new Error("Model is not in the approved G1 allowlist: " + args.model);
-  }
-  if (args.run && !args.confirmLive) {
-    throw new Error("Live calls require both --run and --confirm-live-llm.");
-  }
-  if (!args.run && args.confirmLive) {
-    throw new Error("--confirm-live-llm is only valid together with --run.");
-  }
+  if (!args.projectRoot || !args.model) throw new Error("--project-root and --model are required.");
+  if (!MODELS.has(args.model)) throw new Error("Model is not in the G1 allowlist: " + args.model);
+  if (args.run !== args.confirm) throw new Error("Live calls require both --run and --confirm-live-llm.");
   args.repoRoot = resolve(args.repoRoot);
   args.projectRoot = resolve(args.projectRoot);
   if (args.output) args.output = resolve(args.output);
   return args;
 }
 
-function git(repoRoot, gitArgs) {
-  return execFileSync("git", gitArgs, {
-    cwd: repoRoot,
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "pipe"],
-  }).trim();
+function git(root, args) {
+  return execFileSync("git", args, { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
 }
 
-function assertGitCommand(repoRoot, gitArgs, message) {
-  try {
-    execFileSync("git", gitArgs, {
-      cwd: repoRoot,
-      stdio: "ignore",
-    });
-  } catch {
-    throw new Error(message);
+function assertGit(root, args, message) {
+  try { execFileSync("git", args, { cwd: root, stdio: "ignore" }); }
+  catch { throw new Error(message); }
+}
+
+function assertSourceBaseline(root) {
+  const head = git(root, ["rev-parse", "HEAD"]);
+  assertGit(root, ["merge-base", "--is-ancestor", CODE_BASE, "HEAD"],
+    "Checkout must be at or after reviewed PR #15 code baseline " + CODE_BASE + ".");
+  assertGit(root, ["diff", "--quiet", CODE_BASE, "HEAD", "--", ...CORE_PATHS],
+    "Core source/build files differ from the reviewed PR #15 baseline.");
+  assertGit(root, ["diff", "--quiet", "--", ...CORE_PATHS], "Core source has unstaged changes.");
+  assertGit(root, ["diff", "--cached", "--quiet", "--", ...CORE_PATHS], "Core source has staged changes.");
+  if (git(root, ["status", "--porcelain", "--untracked-files=all", "--", ...CORE_PATHS])) {
+    throw new Error("Untracked files exist under Core source/build paths.");
   }
+  return head;
 }
 
-function assertLocalCoreSource(repoRoot) {
-  const head = git(repoRoot, ["rev-parse", "HEAD"]);
-  assertGitCommand(
-    repoRoot,
-    ["merge-base", "--is-ancestor", EXPECTED_CODE_BASE, "HEAD"],
-    "Local checkout must be at or after the reviewed PR #15 code baseline " + EXPECTED_CODE_BASE + ".",
-  );
-  assertGitCommand(
-    repoRoot,
-    ["diff", "--quiet", EXPECTED_CODE_BASE, "HEAD", "--", ...PROTECTED_PATHS],
-    "Core source/build files differ from the reviewed PR #15 baseline. Stop and reconcile before running.",
-  );
-  assertGitCommand(
-    repoRoot,
-    ["diff", "--quiet", "--", ...PROTECTED_PATHS],
-    "Core source/build files have unstaged local changes. Stop before running.",
-  );
-  assertGitCommand(
-    repoRoot,
-    ["diff", "--cached", "--quiet", "--", ...PROTECTED_PATHS],
-    "Core source/build files have staged local changes. Stop before running.",
-  );
-  const untracked = git(repoRoot, [
-    "status", "--porcelain", "--untracked-files=all", "--", ...PROTECTED_PATHS,
-  ]);
-  if (untracked) {
-    throw new Error("Untracked files exist under Core source/build paths. Stop before running.");
-  }
-  return { head, expectedCodeBase: EXPECTED_CODE_BASE };
-}
-
-function isInside(parent, candidate) {
-  const rel = relative(resolve(parent), resolve(candidate));
+function inside(parent, target) {
+  const rel = relative(resolve(parent), resolve(target));
   return rel === "" || (rel !== ".." && !rel.startsWith(".." + sep) && !isAbsolute(rel));
 }
 
-async function importCoreDist(repoRoot, relativePath) {
-  const filePath = join(repoRoot, "packages", "core", "dist", relativePath);
-  await access(filePath);
-  return import(pathToFileURL(filePath).href);
+async function distImport(root, file) {
+  const path = join(root, "packages", "core", "dist", file);
+  await access(path);
+  return import(pathToFileURL(path).href);
 }
 
-function asObject(value) {
-  return value && typeof value === "object" && !Array.isArray(value) ? value : {};
+const obj = (value) => value && typeof value === "object" && !Array.isArray(value) ? value : {};
+const str = (value) => typeof value === "string" ? value : "";
+const num = (value) => typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : 0;
+const redact = (value) => String(value ?? "")
+  .replace(/Bearer\s+\S+/gi, "Bearer [REDACTED]")
+  .replace(/\bsk-[A-Za-z0-9_-]{12,}\b/gi, "[REDACTED]")
+  .replace(/\bor-v1-[A-Za-z0-9_-]{12,}\b/gi, "[REDACTED]");
+
+function usageOf(value) {
+  const u = obj(value);
+  const promptTokens = num(u.input ?? u.promptTokens ?? u.prompt_tokens);
+  const completionTokens = num(u.output ?? u.completionTokens ?? u.completion_tokens);
+  return {
+    promptTokens,
+    completionTokens,
+    totalTokens: num(u.totalTokens ?? u.total_tokens) || promptTokens + completionTokens,
+  };
 }
 
-function asString(value) {
-  return typeof value === "string" ? value : "";
-}
-
-function finiteNumber(value) {
-  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : 0;
-}
-
-function redact(value) {
-  return String(value ?? "")
-    .replace(/Bearer\s+\S+/gi, "Bearer [REDACTED]")
-    .replace(/\bsk-[A-Za-z0-9_-]{12,}\b/gi, "[REDACTED]")
-    .replace(/\bor-v1-[A-Za-z0-9_-]{12,}\b/gi, "[REDACTED]");
-}
-
-function errorSummary(error) {
+function errorChain(error) {
   const result = [];
-  let current = error;
-  for (let depth = 0; current && depth < 4; depth += 1) {
-    const item = asObject(current);
+  for (let current = error, depth = 0; current && depth < 4; current = obj(current).cause, depth += 1) {
+    const item = obj(current);
     result.push({
-      name: asString(item.name) || "Error",
-      code: asString(item.code) || null,
+      name: str(item.name) || "Error",
+      code: str(item.code) || null,
       message: redact(item.message ?? current).slice(0, 2000),
     });
-    current = item.cause;
   }
   return result;
 }
 
-function textLength(value) {
-  if (typeof value === "string") return value.length;
-  if (Array.isArray(value)) return value.reduce((sum, item) => sum + textLength(item), 0);
-  if (value && typeof value === "object") {
-    const item = asObject(value);
-    if (item.type === "text" && typeof item.text === "string") return item.text.length;
-    return Object.values(item).reduce((sum, child) => sum + textLength(child), 0);
-  }
-  return 0;
+function parseToolArgs(value) {
+  if (typeof value !== "string") return value ?? {};
+  try { return JSON.parse(value); } catch { return { unparsed: value }; }
 }
 
-function normalizeToolArguments(value) {
-  if (typeof value === "string") {
-    try {
-      return JSON.parse(value);
-    } catch {
-      return { unparsed: value };
-    }
-  }
-  return value ?? {};
-}
-
-function normalizeUsage(value) {
-  const usage = asObject(value);
-  const promptTokens = finiteNumber(usage.input ?? usage.promptTokens ?? usage.prompt_tokens);
-  const completionTokens = finiteNumber(usage.output ?? usage.completionTokens ?? usage.completion_tokens);
-  const totalTokens = finiteNumber(usage.totalTokens ?? usage.total_tokens) || promptTokens + completionTokens;
-  return { promptTokens, completionTokens, totalTokens };
-}
-
-function createEvidenceCollector() {
+function createEvidence() {
   const events = [];
-  const stageByCallId = new Map();
-
-  function record(type, payload) {
-    const item = asObject(payload);
+  const stageByCall = new Map();
+  const record = (type, payload) => {
+    const p = obj(payload);
     if (type === "model-call-started") {
-      const trace = asObject(item.trace);
-      const modelCallId = asString(trace.modelCallId) || "untracked-" + events.length;
-      const context = asObject(item.context);
-      const tools = Array.isArray(context.tools) ? context.tools : [];
-      const toolNames = tools.map((tool) => asString(asObject(tool).name)).filter(Boolean);
-      const toolName = toolNames[0] || "unknown";
-      stageByCallId.set(modelCallId, toolName);
-      const messages = Array.isArray(context.messages) ? context.messages : [];
+      const id = str(obj(p.trace).modelCallId) || "untracked-" + events.length;
+      const tools = Array.isArray(obj(p.context).tools) ? obj(p.context).tools : [];
+      const names = tools.map((tool) => str(obj(tool).name)).filter(Boolean);
+      const stage = names[0] || "unknown";
+      stageByCall.set(id, stage);
+      events.push({ type, id, stage, model: str(p.model), maxTokens: num(p.maxTokens) });
+    } else if (type === "model-request-prepared") {
+      const id = str(p.modelCallId);
       events.push({
-        type,
-        modelCallId,
-        toolName,
-        model: asString(item.model) || null,
-        maxTokens: finiteNumber(item.maxTokens),
-        context: {
-          systemPromptChars: textLength(context.systemPrompt),
-          messageCount: messages.length,
-          messageChars: messages.reduce((sum, message) => sum + textLength(asObject(message).content), 0),
-          toolNames,
-        },
+        type, id, stage: stageByCall.get(id) || "unknown",
+        model: str(p.model), api: str(p.api), parameters: obj(p.parameters),
       });
-      return;
-    }
-
-    if (type === "model-request-prepared") {
-      const modelCallId = asString(item.modelCallId) || null;
-      events.push({
-        type,
-        modelCallId,
-        toolName: stageByCallId.get(modelCallId) || "unknown",
-        model: asString(item.model) || null,
-        api: asString(item.api) || null,
-        parameters: asObject(item.parameters),
-      });
-      return;
-    }
-
-    if (type === "model-call-completed") {
-      const modelCallId = asString(item.modelCallId) || null;
-      const response = asObject(item.response);
+    } else if (type === "model-call-completed") {
+      const id = str(p.modelCallId);
+      const response = obj(p.response);
       const content = Array.isArray(response.content) ? response.content : [];
-      const toolCalls = content
-        .filter((part) => asObject(part).type === "toolCall")
-        .map((part) => {
-          const call = asObject(part);
-          return {
-            name: asString(call.name) || null,
-            arguments: normalizeToolArguments(call.arguments),
-          };
-        });
+      const toolCalls = content.filter((part) => obj(part).type === "toolCall").map((part) => ({
+        name: str(obj(part).name),
+        arguments: parseToolArgs(obj(part).arguments),
+      }));
       events.push({
-        type,
-        modelCallId,
-        toolName: stageByCallId.get(modelCallId) || "unknown",
-        status: asString(item.status) || null,
+        type, id, stage: stageByCall.get(id) || "unknown", status: str(p.status),
         response: {
-          model: asString(response.model) || null,
-          provider: asString(response.provider) || null,
-          api: asString(response.api) || null,
-          stopReason: asString(response.stopReason) || null,
-          errorCode: asString(response.errorCode) || null,
-          errorMessage: redact(response.errorMessage).slice(0, 2000) || null,
-          usage: normalizeUsage(response.usage),
-          textChars: content
-            .filter((part) => asObject(part).type === "text")
-            .reduce((sum, part) => sum + textLength(part), 0),
+          model: str(response.model), provider: str(response.provider), api: str(response.api),
+          stopReason: str(response.stopReason), errorCode: str(response.errorCode),
+          errorMessage: redact(response.errorMessage).slice(0, 1600) || null,
+          usage: usageOf(response.usage),
         },
         toolCalls,
       });
-      return;
-    }
-
-    if (type === "model-call-retry") {
-      const modelCallId = asString(item.modelCallId) || null;
+    } else if (type === "model-call-retry") {
+      const id = str(p.modelCallId);
+      events.push({ type, id, stage: stageByCall.get(id) || "unknown", reason: str(p.reason) });
+    } else if (type === "worker-result-invalid") {
       events.push({
-        type,
-        modelCallId,
-        toolName: stageByCallId.get(modelCallId) || "unknown",
-        reason: asString(item.reason) || null,
+        type, stage: str(p.resultTool), code: str(p.code),
+        issueCount: Array.isArray(p.issues) ? p.issues.length : null,
+        message: redact(p.message).slice(0, 1000) || null,
       });
-      return;
-    }
-
-    if (type === "worker-result-invalid") {
+    } else if (type === "skills-applied") {
       events.push({
-        type,
-        resultTool: asString(item.resultTool) || null,
-        code: asString(item.code) || null,
-        message: redact(item.message).slice(0, 1200) || null,
-        issueCount: Array.isArray(item.issues) ? item.issues.length : null,
-      });
-      return;
-    }
-
-    if (type === "skills-applied") {
-      const skills = Array.isArray(item.skills) ? item.skills : [];
-      events.push({
-        type,
-        worker: asString(item.worker) || null,
-        skills: skills.map((skill) => {
-          const entry = asObject(skill);
-          return {
-            id: asString(entry.id) || null,
-            source: asString(entry.source) || null,
-            hash: asString(entry.hash) || null,
-          };
-        }),
-      });
-      return;
-    }
-
-    if (type === "worker-arguments-decoded") {
-      events.push({
-        type,
-        resultTool: asString(item.resultTool) || null,
-        paths: Array.isArray(item.paths) ? item.paths.filter((path) => typeof path === "string") : [],
-      });
-      return;
-    }
-
-    if (type === "model-tool-output-discarded") {
-      events.push({
-        type,
-        reason: asString(item.reason) || null,
-        toolCount: finiteNumber(item.toolCount),
+        type, worker: str(p.worker),
+        skills: (Array.isArray(p.skills) ? p.skills : []).map((skill) => ({
+          id: str(obj(skill).id), source: str(obj(skill).source), hash: str(obj(skill).hash),
+        })),
       });
     }
-  }
-
+  };
   return { events, record };
 }
 
-function summarizeStages(events, foundationReturned) {
-  const started = events.filter((event) => event.type === "model-call-started");
-  const prepared = events.filter((event) => event.type === "model-request-prepared");
-  const completed = events.filter((event) => event.type === "model-call-completed");
-  const retries = events.filter((event) => event.type === "model-call-retry");
-  const invalid = events.filter((event) => event.type === "worker-result-invalid");
-  const highestStageIndex = Math.max(
-    -1,
-    ...started.map((event) => STAGES.indexOf(event.toolName)),
-  );
-
-  return STAGES.map((toolName, index) => {
-    const calls = started.filter((event) => event.toolName === toolName);
-    const callIds = new Set(calls.map((event) => event.modelCallId));
-    const stageCompleted = completed.filter((event) => callIds.has(event.modelCallId));
-    const stagePrepared = prepared.filter((event) => callIds.has(event.modelCallId));
-    const stageRetries = retries.filter((event) => callIds.has(event.modelCallId));
-    const stageInvalid = invalid.filter((event) => event.resultTool === toolName);
-    const toolCallCount = stageCompleted.reduce(
-      (sum, event) => sum + event.toolCalls.filter((call) => call.name === toolName).length,
-      0,
-    );
-    const usage = stageCompleted.reduce((total, event) => ({
-      promptTokens: total.promptTokens + event.response.usage.promptTokens,
-      completionTokens: total.completionTokens + event.response.usage.completionTokens,
-      totalTokens: total.totalTokens + event.response.usage.totalTokens,
+function stageSummary(events, returned) {
+  const started = events.filter((e) => e.type === "model-call-started");
+  const prepared = events.filter((e) => e.type === "model-request-prepared");
+  const completed = events.filter((e) => e.type === "model-call-completed");
+  const retries = events.filter((e) => e.type === "model-call-retry");
+  const invalid = events.filter((e) => e.type === "worker-result-invalid");
+  return STAGES.map((stage, index) => {
+    const calls = started.filter((e) => e.stage === stage);
+    const ids = new Set(calls.map((e) => e.id));
+    const done = completed.filter((e) => ids.has(e.id));
+    const usage = done.reduce((sum, e) => ({
+      promptTokens: sum.promptTokens + e.response.usage.promptTokens,
+      completionTokens: sum.completionTokens + e.response.usage.completionTokens,
+      totalTokens: sum.totalTokens + e.response.usage.totalTokens,
     }), { promptTokens: 0, completionTokens: 0, totalTokens: 0 });
-    const nextStageStarted = index < STAGES.length - 1
-      && started.some((event) => event.toolName === STAGES[index + 1]);
     return {
-      toolName,
+      stage,
       modelCalls: calls.length,
-      preparedRequests: stagePrepared.length,
-      toolCallsReturned: toolCallCount,
-      invalidResults: stageInvalid.length,
-      retryReasons: stageRetries.map((event) => event.reason),
-      acceptedByPipeline: Boolean(foundationReturned) || nextStageStarted,
+      preparedRequests: prepared.filter((e) => ids.has(e.id)).length,
+      toolCallsReturned: done.reduce((sum, e) => sum + e.toolCalls.filter((call) => call.name === stage).length, 0),
+      invalidResults: invalid.filter((e) => e.stage === stage).length,
+      retryReasons: retries.filter((e) => ids.has(e.id)).map((e) => e.reason),
+      acceptedByPipeline: Boolean(returned) || (index < STAGES.length - 1
+        && started.some((e) => e.stage === STAGES[index + 1])),
       usage,
     };
   });
 }
 
-function sumUsage(events) {
-  return events
-    .filter((event) => event.type === "model-call-completed")
-    .reduce((total, event) => ({
-      promptTokens: total.promptTokens + event.response.usage.promptTokens,
-      completionTokens: total.completionTokens + event.response.usage.completionTokens,
-      totalTokens: total.totalTokens + event.response.usage.totalTokens,
-    }), { promptTokens: 0, completionTokens: 0, totalTokens: 0 });
+function totalUsage(events) {
+  return events.filter((e) => e.type === "model-call-completed").reduce((sum, e) => ({
+    promptTokens: sum.promptTokens + e.response.usage.promptTokens,
+    completionTokens: sum.completionTokens + e.response.usage.completionTokens,
+    totalTokens: sum.totalTokens + e.response.usage.totalTokens,
+  }), { promptTokens: 0, completionTokens: 0, totalTokens: 0 });
 }
 
-function collectText(value, output = []) {
-  if (typeof value === "string") {
-    output.push(value);
-  } else if (Array.isArray(value)) {
-    for (const item of value) collectText(item, output);
-  } else if (value && typeof value === "object") {
-    for (const child of Object.values(value)) collectText(child, output);
-  }
+function textValues(value, output = []) {
+  if (typeof value === "string") output.push(value);
+  else if (Array.isArray(value)) value.forEach((item) => textValues(item, output));
+  else if (value && typeof value === "object") Object.values(value).forEach((item) => textValues(item, output));
   return output;
 }
 
-function assessLanguage(value) {
-  const text = collectText(value).join("\n");
-  const cyrillicLetters = (text.match(/[А-Яа-яЁё]/g) || []).length;
-  const latinLetters = (text.match(/[A-Za-z]/g) || []).length;
-  const totalLetters = cyrillicLetters + latinLetters;
-  const cyrillicRatio = totalLetters ? cyrillicLetters / totalLetters : null;
+function languageCheck(value) {
+  const text = textValues(value).join("\n");
+  const cyr = (text.match(/[А-Яа-яЁё]/g) || []).length;
+  const latin = (text.match(/[A-Za-z]/g) || []).length;
+  const ratio = cyr + latin ? cyr / (cyr + latin) : null;
   return {
-    expected: "ru",
-    cyrillicLetters,
-    latinLetters,
-    cyrillicRatio,
-    heuristic: cyrillicRatio === null
-      ? "UNKNOWN"
-      : cyrillicRatio >= 0.45
-        ? "LIKELY_RUSSIAN"
-        : "LIKELY_NOT_RUSSIAN",
+    expected: "ru", cyrillicLetters: cyr, latinLetters: latin, cyrillicRatio: ratio,
+    heuristic: ratio === null ? "UNKNOWN" : ratio >= 0.45 ? "LIKELY_RUSSIAN" : "LIKELY_NOT_RUSSIAN",
     note: "Heuristic only; not a literary-quality score.",
   };
 }
 
-function validateFoundation(output) {
-  if (!output) return null;
+function validateFoundation(value) {
+  if (!value) return null;
   const issues = [];
-  if (!asString(output.storyFrame).trim()) issues.push("storyFrame is empty");
-  if (!asString(output.volumeMap).trim()) issues.push("volumeMap is empty");
-  if (!asString(output.bookRules).trim()) issues.push("bookRules is empty");
-  if (!output.bookRulesData || typeof output.bookRulesData !== "object") issues.push("bookRulesData is missing");
-  if (!Array.isArray(output.roles) || output.roles.length === 0) {
-    issues.push("roles is empty");
-  } else {
-    const names = output.roles.map((role) => asString(asObject(role).name).trim().toLocaleLowerCase());
-    if (names.some((name) => !name)) issues.push("a role has an empty name");
-    if (new Set(names).size !== names.length) issues.push("role names are not unique");
-    for (const role of output.roles) {
-      const item = asObject(role);
-      if (!asString(item.content).trim()) issues.push("role card is empty: " + asString(item.name));
-      if (item.tier !== "major" && item.tier !== "minor") issues.push("invalid role tier: " + asString(item.name));
-    }
+  if (!str(value.storyFrame).trim()) issues.push("storyFrame is empty");
+  if (!str(value.volumeMap).trim()) issues.push("volumeMap is empty");
+  if (!str(value.bookRules).trim()) issues.push("bookRules is empty");
+  if (!value.bookRulesData || typeof value.bookRulesData !== "object") issues.push("bookRulesData is missing");
+  const roles = Array.isArray(value.roles) ? value.roles : [];
+  if (!roles.length) issues.push("roles is empty");
+  const names = roles.map((role) => str(obj(role).name).trim().toLocaleLowerCase());
+  if (names.some((name) => !name)) issues.push("a role has an empty name");
+  if (new Set(names).size !== names.length) issues.push("role names are not unique");
+  for (const role of roles) {
+    if (!str(obj(role).content).trim()) issues.push("empty character card: " + str(obj(role).name));
+    if (obj(role).tier !== "major" && obj(role).tier !== "minor") issues.push("invalid role tier: " + str(obj(role).name));
   }
   return {
-    passed: issues.length === 0,
-    issues,
-    roleCount: Array.isArray(output.roles) ? output.roles.length : 0,
-    majorRoleCount: Array.isArray(output.roles)
-      ? output.roles.filter((role) => asObject(role).tier === "major").length
-      : 0,
-    minorRoleCount: Array.isArray(output.roles)
-      ? output.roles.filter((role) => asObject(role).tier === "minor").length
-      : 0,
-    hookCount: Array.isArray(output.initialHooks) ? output.initialHooks.length : 0,
+    passed: issues.length === 0, issues, roleCount: roles.length,
+    majorRoleCount: roles.filter((role) => obj(role).tier === "major").length,
+    minorRoleCount: roles.filter((role) => obj(role).tier === "minor").length,
+    hookCount: Array.isArray(value.initialHooks) ? value.initialHooks.length : 0,
   };
 }
 
-async function loadBenchmarkBrief(repoRoot) {
-  const path = join(repoRoot, "fork-docs", "BENCHMARK_LONGFORM.md");
-  const source = await readFile(path, "utf8");
-  const startMarker = "**BEGIN STORY BRIEF v1.0**";
-  const endMarker = "**END STORY BRIEF v1.0**";
-  const start = source.indexOf(startMarker);
-  const end = source.indexOf(endMarker, start + startMarker.length);
-  if (start < 0 || end < 0) {
-    throw new Error("Could not find the exact R3 v1.0 brief markers in fork-docs/BENCHMARK_LONGFORM.md.");
-  }
-  const brief = source.slice(start + startMarker.length, end).trim();
-  if (!brief.includes("RiverLine") || !brief.includes("19:00")) {
-    throw new Error("The extracted R3 brief does not match the expected v1.0 fixture.");
-  }
-  return {
-    brief,
-    sha256: createHash("sha256").update(brief, "utf8").digest("hex"),
-    sourcePath: "fork-docs/BENCHMARK_LONGFORM.md",
-  };
+async function benchmarkBrief(repoRoot) {
+  const source = await readFile(join(repoRoot, "fork-docs", "BENCHMARK_LONGFORM.md"), "utf8");
+  const begin = "**BEGIN STORY BRIEF v1.0**";
+  const end = "**END STORY BRIEF v1.0**";
+  const start = source.indexOf(begin);
+  const finish = source.indexOf(end, start + begin.length);
+  if (start < 0 || finish < 0) throw new Error("R3 v1.0 brief markers are missing.");
+  const brief = source.slice(start + begin.length, finish).trim();
+  if (!brief.includes("RiverLine") || !brief.includes("19:00")) throw new Error("R3 fixture fingerprint mismatch.");
+  return { brief, sha256: createHash("sha256").update(brief).digest("hex") };
 }
 
-function validateOutputPath(outputPath, repoRoot, projectRoot) {
-  if (!outputPath) return;
-  if (isInside(repoRoot, outputPath) || isInside(projectRoot, outputPath)) {
-    throw new Error("--output must be outside both the repository and Studio workspace.");
-  }
-}
-
-async function emitReport(report, outputPath) {
+async function outputReport(report, path) {
   const json = JSON.stringify(report, null, 2) + "\n";
-  if (!outputPath) {
-    process.stdout.write(json);
-    return;
-  }
-  await mkdir(dirname(outputPath), { recursive: true });
-  await writeFile(outputPath, json, "utf8");
+  if (!path) return process.stdout.write(json);
+  await mkdir(dirname(path), { recursive: true });
+  await writeFile(path, json, "utf8");
   process.stdout.write(JSON.stringify({
-    status: report.status,
-    reportPath: outputPath,
-    model: report.model?.requestedModel ?? null,
-    liveApiCalled: report.liveApiCalled,
-    usage: report.usage ?? null,
+    status: report.status, reportPath: path, model: report.model.requestedModel,
+    liveApiCalled: report.liveApiCalled, usage: report.usage,
   }, null, 2) + "\n");
 }
 
 async function main() {
   const args = parseArgs(process.argv.slice(2));
-  if (args.help) {
-    process.stdout.write(usage() + "\n");
-    return;
-  }
-  validateOutputPath(args.output, args.repoRoot, args.projectRoot);
+  if (args.help) return process.stdout.write([
+    "G1 Architect foundation smoke (one model per run)",
+    "Required: --project-root <path> --model <allowlisted :free ID>",
+    "Optional: --repo-root <path> --output <path> --dry-run",
+    "Live only: --run --confirm-live-llm",
+    "Default is a no-API preflight. No Work or Foundation files are created.",
+  ].join("\n") + "\n");
 
-  // This guard exists only in this child process and is never written to disk.
+  if (args.output && (inside(args.repoRoot, args.output) || inside(args.projectRoot, args.output))) {
+    throw new Error("--output must be outside the repository and Studio workspace.");
+  }
+
   process.env.INKOS_OPENROUTER_FREE_ONLY = "1";
-
-  const code = assertLocalCoreSource(args.repoRoot);
-  const providerDist = await readFile(join(args.repoRoot, "packages", "core", "dist", "llm", "provider.js"), "utf8");
-  const piStreamDist = await readFile(join(args.repoRoot, "packages", "core", "dist", "agent", "pi-stream.js"), "utf8");
+  const head = assertSourceBaseline(args.repoRoot);
+  const providerDist = await readFile(join(args.repoRoot, "packages/core/dist/llm/provider.js"), "utf8");
+  const streamDist = await readFile(join(args.repoRoot, "packages/core/dist/agent/pi-stream.js"), "utf8");
   if (!providerDist.includes("normalizeOpenRouterReasoningPayload")
-    || !piStreamDist.includes("normalizeOpenRouterReasoningPayload")) {
-    throw new Error("Built Core dist does not contain the PR #15 OpenRouter reasoning fix. Rebuild from the reviewed code baseline first.");
+    || !streamDist.includes("normalizeOpenRouterReasoningPayload")) {
+    throw new Error("Core dist is missing the PR #15 reasoning fix; rebuild from the reviewed code baseline.");
   }
-  await access(join(args.repoRoot, "packages", "core", "dist", "index.js"));
 
   const [
-    { loadProjectConfig },
-    { createLLMClient },
-    { PipelineRunner },
-    { ArchitectAgent },
-    { BookConfigSchema },
-    { withExecutionEvidence },
-    { createBuiltInWorkProfileRegistry },
-    { loadAvailableAgentSkills },
-    { resolveProfileSkillActivations },
-    { runWithAgentTrajectory, opaqueConversationId },
-    { resolveNarrativeLanguage },
+    { loadProjectConfig }, { createLLMClient }, { PipelineRunner }, { ArchitectAgent },
+    { BookConfigSchema }, { withExecutionEvidence }, { createBuiltInWorkProfileRegistry },
+    { runWithAgentTrajectory, opaqueConversationId }, { resolveNarrativeLanguage },
   ] = await Promise.all([
-    importCoreDist(args.repoRoot, "utils/config-loader.js"),
-    importCoreDist(args.repoRoot, "llm/provider.js"),
-    importCoreDist(args.repoRoot, "pipeline/runner.js"),
-    importCoreDist(args.repoRoot, "agents/architect.js"),
-    importCoreDist(args.repoRoot, "models/book.js"),
-    importCoreDist(args.repoRoot, "harness/execution-evidence.js"),
-    importCoreDist(args.repoRoot, "harness/builtin-profiles.js"),
-    importCoreDist(args.repoRoot, "skills/builtin-loader.js"),
-    importCoreDist(args.repoRoot, "skills/activations.js"),
-    importCoreDist(args.repoRoot, "llm/agent-trajectory.js"),
-    importCoreDist(args.repoRoot, "utils/book-language.js"),
+    distImport(args.repoRoot, "utils/config-loader.js"),
+    distImport(args.repoRoot, "llm/provider.js"),
+    distImport(args.repoRoot, "pipeline/runner.js"),
+    distImport(args.repoRoot, "agents/architect.js"),
+    distImport(args.repoRoot, "models/book.js"),
+    distImport(args.repoRoot, "harness/execution-evidence.js"),
+    distImport(args.repoRoot, "harness/builtin-profiles.js"),
+    distImport(args.repoRoot, "llm/agent-trajectory.js"),
+    distImport(args.repoRoot, "utils/book-language.js"),
   ]);
 
-  const project = await loadProjectConfig(args.projectRoot, {
-    consumer: "studio",
-    requireApiKey: true,
-  });
+  const project = await loadProjectConfig(args.projectRoot, { consumer: "studio", requireApiKey: true });
   const llm = project.llm;
-  if (llm.service !== "openrouter") throw new Error("Studio service must be openrouter; got " + llm.service);
-  if (new URL(llm.baseUrl).origin !== "https://openrouter.ai") {
-    throw new Error("Only the official https://openrouter.ai endpoint is allowed.");
+  if (llm.service !== "openrouter" || new URL(llm.baseUrl).origin !== "https://openrouter.ai") {
+    throw new Error("Studio must use the official OpenRouter endpoint.");
   }
-  if (llm.apiFormat !== "responses") throw new Error("Studio apiFormat must be responses; got " + llm.apiFormat);
+  if (llm.apiFormat !== "responses") throw new Error("Studio apiFormat must be responses.");
   if (!(llm.model === "openrouter/free" || llm.model.toLowerCase().endsWith(":free"))) {
-    throw new Error("The configured base model must itself be free (openrouter/free or a :free ID).");
+    throw new Error("Configured base model must be openrouter/free or a :free ID.");
   }
   if (!llm.apiKey) throw new Error("Studio OpenRouter API key is missing.");
-  const forbiddenExtra = ["models", "route", "plugins"].filter((key) => key in (llm.extra || {}));
-  if (forbiddenExtra.length) {
-    throw new Error("Free-only mode forbids these LLM extra fields: " + forbiddenExtra.join(", "));
-  }
+  const forbidden = ["models", "route", "plugins"].filter((key) => key in (llm.extra || {}));
+  if (forbidden.length) throw new Error("Free-only mode forbids LLM extra fields: " + forbidden.join(", "));
 
-  const baseClient = createLLMClient(llm);
+  const client = createLLMClient(llm);
   const runner = new PipelineRunner({
-    client: baseClient,
-    model: llm.model,
-    projectRoot: args.projectRoot,
-    // Deliberately replace, not merge, persistent overrides: this run has one
-    // in-memory Architect override and cannot mutate inkos.json.
+    client, model: llm.model, projectRoot: args.projectRoot,
     modelOverrides: { architect: { model: args.model } },
   });
-
-  const profileRegistry = createBuiltInWorkProfileRegistry(args.projectRoot);
-  const profile = profileRegistry.require("longform-novel");
-  const skillLoad = await loadAvailableAgentSkills({ projectRoot: args.projectRoot });
-  const skillActivations = resolveProfileSkillActivations(skillLoad.skills, profile);
-  const workerSkills = (agent) => agent === "architect" ? skillActivations : [];
-  const benchmark = await loadBenchmarkBrief(args.repoRoot);
-
+  const profile = createBuiltInWorkProfileRegistry(args.projectRoot).require("longform-novel");
+  const benchmark = await benchmarkBrief(args.repoRoot);
   const runId = randomUUID();
-  const startedAt = new Date().toISOString();
+  const now = new Date().toISOString();
   const book = BookConfigSchema.parse({
     id: "g1-architect-smoke-" + runId.slice(0, 8),
-    title: "Последняя ведомость",
-    platform: "Author.Today",
-    genre: "камерный социальный триллер",
-    status: "outlining",
-    targetChapters: 5,
-    chapterWordCount: 1350,
-    language: "en",
-    narrativeLanguage: "ru",
-    createdAt: startedAt,
-    updatedAt: startedAt,
+    title: "Последняя ведомость", platform: "Author.Today",
+    genre: "камерный социальный триллер", status: "outlining",
+    targetChapters: 5, chapterWordCount: 1350,
+    language: "en", narrativeLanguage: "ru", createdAt: now, updatedAt: now,
   });
-  const expectedNarrativeLanguage = resolveNarrativeLanguage(book);
-  const context = await runner.runWithAgentContext(
-    { workerSkills },
-    async () => runner.createAgentContext("architect", book.id),
-  );
-  const piModel = asObject(context.client._piModel);
-  const modelInfo = {
-    requestedModel: args.model,
-    resolvedModel: context.model,
-    piModelId: asString(piModel.id) || null,
-    piModelName: asString(piModel.name) || null,
-    piApi: asString(piModel.api) || null,
-    service: context.client.service,
-    apiFormat: context.client.apiFormat,
-    baseUrl: asString(piModel.baseUrl) || null,
-    stream: context.client.stream,
-    contextWindow: finiteNumber(piModel.contextWindow),
-    maxTokens: finiteNumber(context.client.defaults.maxTokens),
-    hasKey: Boolean(context.client._apiKey),
+  const expectedLanguage = resolveNarrativeLanguage(book);
+  const context = runner.createAgentContext("architect", book.id);
+  const piModel = obj(context.client._piModel);
+  const model = {
+    requestedModel: args.model, resolvedModel: context.model,
+    piModelId: str(piModel.id), piModelName: str(piModel.name),
+    piApi: str(piModel.api), service: context.client.service,
+    apiFormat: context.client.apiFormat, baseUrl: str(piModel.baseUrl),
+    stream: context.client.stream, contextWindow: num(piModel.contextWindow),
+    maxTokens: num(context.client.defaults.maxTokens), hasKey: Boolean(context.client._apiKey),
   };
-  if (modelInfo.resolvedModel !== args.model || modelInfo.piModelName !== args.model) {
-    throw new Error("In-memory Architect model override did not resolve to the requested fixed ID.");
+  if (model.resolvedModel !== args.model || model.piModelName !== args.model
+    || model.service !== "openrouter" || model.apiFormat !== "responses"
+    || model.piApi !== "openai-responses" || !model.hasKey
+    || new URL(model.baseUrl).origin !== "https://openrouter.ai") {
+    throw new Error("Resolved Architect override does not match the required OpenRouter Responses deployment.");
   }
 
   const report = {
-    schemaVersion: 1,
-    task: "G1_ARCHITECT_FOUNDATION_SMOKE",
+    schemaVersion: 1, task: "G1_ARCHITECT_FOUNDATION_SMOKE",
     status: args.run ? "PENDING" : "PREFLIGHT_PASS_NO_API",
-    liveApiCalled: false,
-    startedAt,
-    finishedAt: null,
-    durationMs: 0,
-    code: {
-      localHead: code.head,
-      requiredCodeBase: code.expectedCodeBase,
-      sourceMatchesRequiredBaseline: true,
-      reasoningFixFingerprintPresentInDist: true,
-      distBuildProvenance: "The script checks the PR #15 code ancestry and reasoning-fix fingerprint; it cannot prove when the local dist was built. User-confirmed Core build from the reviewed code baseline is required.",
-    },
+    liveApiCalled: false, code: { head, requiredBase: CODE_BASE, reasoningFixFingerprintPresent: true },
     project: {
-      projectRoot: args.projectRoot,
-      service: llm.service,
-      baseModel: llm.model,
-      apiFormat: llm.apiFormat,
-      stream: llm.stream,
-      hasKey: Boolean(llm.apiKey),
-      persistentModelOverridesIgnored: true,
-      freeOnlyGuard: "INKOS_OPENROUTER_FREE_ONLY=1 (child process only)",
+      root: args.projectRoot, service: llm.service, baseModel: llm.model,
+      apiFormat: llm.apiFormat, stream: llm.stream, hasKey: Boolean(llm.apiKey),
+      persistentModelOverridesIgnored: true, freeOnlyGuard: "INKOS_OPENROUTER_FREE_ONLY=1 (child process only)",
     },
-    model: modelInfo,
-    profile: {
-      id: profile.id,
-      requiredSkillIds: profile.requiredSkillIds,
-      activatedSkillIds: skillActivations.map((item) => item.skill.id),
-      skillDiagnosticCount: skillLoad.diagnostics.length,
-    },
-    benchmark: {
-      id: "R3",
-      version: "1.0",
-      sourcePath: benchmark.sourcePath,
-      briefSha256: benchmark.sha256,
-    },
+    model, profile: { id: profile.id, requiredSkillIds: profile.requiredSkillIds },
+    benchmark: { id: "R3", version: "1.0", briefSha256: benchmark.sha256 },
     book: {
-      id: book.id,
-      title: book.title,
-      genre: book.genre,
-      platform: book.platform,
-      language: book.language,
-      narrativeLanguage: book.narrativeLanguage,
-      resolvedNarrativeLanguage: expectedNarrativeLanguage,
-      targetChapters: book.targetChapters,
-      chapterWordCount: book.chapterWordCount,
+      id: book.id, title: book.title, genre: book.genre, language: book.language,
+      narrativeLanguage: book.narrativeLanguage, resolvedNarrativeLanguage: expectedLanguage,
+      targetChapters: book.targetChapters, chapterWordCount: book.chapterWordCount,
     },
     generationParameters: {
-      temperature: 0.8,
+      temperature: 0.8, requiredToolChoice: true, stream: model.stream,
       maxTokensByStage: {
-        submit_foundation_outline: Math.min(8192, modelInfo.maxTokens),
-        submit_foundation_details: modelInfo.maxTokens,
-        submit_foundation_cast_index: Math.min(2048, modelInfo.maxTokens),
-        submit_foundation_cast_documents: Math.min(8192, modelInfo.maxTokens),
+        submit_foundation_outline: Math.min(8192, model.maxTokens),
+        submit_foundation_details: model.maxTokens,
+        submit_foundation_cast_index: Math.min(2048, model.maxTokens),
+        submit_foundation_cast_documents: Math.min(8192, model.maxTokens),
       },
-      stream: modelInfo.stream,
-      requiredToolChoice: true,
     },
-    languageContract: {
-      expected: expectedNarrativeLanguage,
-      promptLanguageSelectedByArchitect: book.language,
-      warning: LANGUAGE_CONTRACT_WARNING,
-    },
-    writes: {
-      workCreated: false,
-      foundationFilesWritten: false,
-      workspaceFilesWritten: false,
-      note: "ArchitectAgent.generateFoundation is called directly; initBook and writeFoundationFiles are never called.",
-    },
-    usage: null,
-    stages: null,
-    evidence: [],
-    partialOutline: null,
-    foundation: null,
-    foundationValidation: null,
-    languageAssessment: null,
-    errors: [],
-    cost: "Not inferred from token usage; reconcile with OpenRouter Activity after the run.",
+    languageContract: { expected: expectedLanguage, promptLanguageSelectedByArchitect: book.language, warning: LANGUAGE_WARNING },
+    writes: { workCreated: false, foundationFilesWritten: false, workspaceFilesWritten: false },
+    usage: null, stages: null, evidence: [], partialOutline: null,
+    foundation: null, foundationValidation: null, languageAssessment: null, errors: [],
+    cost: "Not inferred from tokens; reconcile with OpenRouter Activity.",
   };
 
-  if (!args.run) {
-    report.finishedAt = new Date().toISOString();
-    await emitReport(report, args.output);
-    return;
-  }
+  if (!args.run) return outputReport(report, args.output);
 
-  const collector = createEvidenceCollector();
+  const evidence = createEvidence();
   let partialOutline = null;
   let foundation = null;
-  const startTime = Date.now();
+  const started = Date.now();
   report.liveApiCalled = true;
   try {
     const architect = new ArchitectAgent(context);
     foundation = await runWithAgentTrajectory({
-      conversationId: opaqueConversationId(runId),
-      runId,
-      agentRole: "main",
+      conversationId: opaqueConversationId(runId), runId, agentRole: "main",
     }, () => withExecutionEvidence(
-      collector.record,
+      evidence.record,
       () => architect.generateFoundation(book, benchmark.brief, undefined, {
         onOutline: (outline) => { partialOutline = outline; },
       }),
       profile,
       null,
     ));
-    report.status = "STRUCTURED_PIPELINE_PASS";
   } catch (error) {
-    report.status = "FAIL";
-    report.errors = errorSummary(error);
-  } finally {
-    report.finishedAt = new Date().toISOString();
-    report.durationMs = Date.now() - startTime;
-    report.evidence = collector.events;
-    report.stages = summarizeStages(collector.events, Boolean(foundation));
-    report.usage = sumUsage(collector.events);
-    report.partialOutline = partialOutline;
-    report.foundation = foundation;
-    report.foundationValidation = validateFoundation(foundation);
-    report.languageAssessment = assessLanguage(foundation ?? {
-      partialOutline,
-      toolCalls: collector.events
-        .filter((event) => event.type === "model-call-completed")
-        .flatMap((event) => event.toolCalls),
-    });
-    const allStagesAccepted = report.stages.every((stage) => stage.acceptedByPipeline);
-    if (foundation && report.foundationValidation?.passed && allStagesAccepted) {
-      report.status = "STRUCTURED_PIPELINE_PASS";
-    } else if (foundation) {
-      report.status = "PIPELINE_RETURNED_WITH_VALIDATION_OR_EVIDENCE_GAPS";
-    } else {
-      report.status = "FAIL";
-    }
+    report.errors = errorChain(error);
   }
 
-  await emitReport(report, args.output);
+  report.finishedAt = new Date().toISOString();
+  report.durationMs = Date.now() - started;
+  report.evidence = evidence.events;
+  report.stages = stageSummary(evidence.events, Boolean(foundation));
+  report.usage = totalUsage(evidence.events);
+  report.partialOutline = partialOutline;
+  report.foundation = foundation;
+  report.foundationValidation = validateFoundation(foundation);
+  report.languageAssessment = languageCheck(foundation || {
+    partialOutline,
+    toolCalls: evidence.events.filter((e) => e.type === "model-call-completed").flatMap((e) => e.toolCalls),
+  });
+  const allAccepted = report.stages.every((stage) => stage.acceptedByPipeline);
+  report.status = foundation && report.foundationValidation.passed && allAccepted
+    ? "STRUCTURED_PIPELINE_PASS"
+    : foundation ? "PIPELINE_RETURNED_WITH_VALIDATION_OR_EVIDENCE_GAPS" : "FAIL";
+  await outputReport(report, args.output);
   if (report.status !== "STRUCTURED_PIPELINE_PASS") process.exitCode = 1;
 }
 
