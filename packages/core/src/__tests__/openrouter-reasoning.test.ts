@@ -32,7 +32,7 @@ function createOpenRouterClient(
 
 function captureRejectedOpenRouterRequests() {
   const requests: Array<{ url: string; body: Record<string, unknown> }> = [];
-  const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+  const fetchMock = vi.fn(async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
     const request = input instanceof Request ? input.clone() : undefined;
     const bodyText = typeof init?.body === "string"
       ? init.body
