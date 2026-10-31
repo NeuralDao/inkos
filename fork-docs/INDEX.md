@@ -1,6 +1,6 @@
 # InkOS — навигация и источники рабочего контекста
 
-**Репозиторий:** `NeuralDao/inkos`, рабочая ветка `custom/main`. **Цель:** качественная, интересная и экономичная **оригинальная русскоязычная литература**. Не развивать переводческий конвейер без отдельного запроса. Пользователь определяет цели, бюджет и разрешения; ChatGPT исследует, принимает решения и ревьюит; **только Codex меняет код**. ChatGPT самостоятельно ведёт **только `fork-docs/`**. Детали — [WORKFLOW.md](./WORKFLOW.md).
+**Репозиторий:** `NeuralDao/inkos`, рабочая ветка `custom/main`. **Текущий API-провайдер для будущих проверок: OpenRouter (решение 31.10.2026; реальных вызовов ещё не было).** **Цель:** качественная, интересная и экономичная **оригинальная русскоязычная литература**. Не развивать переводческий конвейер без отдельного запроса. Пользователь определяет цели, бюджет и разрешения; ChatGPT исследует, принимает решения и ревьюит; **только Codex меняет код**. ChatGPT самостоятельно ведёт **только `fork-docs/`**. Детали — [WORKFLOW.md](./WORKFLOW.md).
 
 ## Сначала определить задачу — два постоянных направления
 
@@ -23,7 +23,7 @@
 | Актуальный статус исследования, незакрытые вопросы и условия возобновления | [RESEARCH_CURRENT_STATE.md](./RESEARCH_CURRENT_STATE.md) | [RESEARCH.md](./RESEARCH.md) — **журнал проходов, исторические «следующие шаги» не действуют** |
 | Инженерный статус, фактические PASS/NOT RUN, блокеры | [CURRENT_STATE.md](./CURRENT_STATE.md) | [ROADMAP.md](./ROADMAP.md) — этапы, зависимости, G0–G4 |
 | Требования литературного G1–G4, неизменный brief и A/B | [BENCHMARK_LONGFORM.md](./BENCHMARK_LONGFORM.md) | [RESEARCH_RU_RUBRIC.md](./RESEARCH_RU_RUBRIC.md) — редакторские признаки; [RESEARCH_R3_STRESS_BRIEF.md](./RESEARCH_R3_STRESS_BRIEF.md) — **архив R3 v0**, не ввод для G1 |
-| Модели Selectel и экономика | [G1_MODEL_STACK.md](./G1_MODEL_STACK.md) — **кандидат v0, не проверенная baseline** | [RESEARCH_R6_MODELS.md](./RESEARCH_R6_MODELS.md) — выбор и риски, **OpenRouter — архив**; [RESEARCH_R6_TOKEN_ECONOMY.md](./RESEARCH_R6_TOKEN_ECONOMY.md) — вход/выход, reasoning, историческая статистика |
+| OpenRouter, бесплатные модели и экономика G1 | [G1_MODEL_STACK.md](./G1_MODEL_STACK.md) — **новое решение 31.10, модели ещё не подтверждены** | [RESEARCH_R6_MODELS.md](./RESEARCH_R6_MODELS.md) — исторический Selectel и предыдущий OpenRouter shortlist; [RESEARCH_R6_TOKEN_ECONOMY.md](./RESEARCH_R6_TOKEN_ECONOMY.md) — токены, reasoning и историческая статистика |
 | Открытые upstream Issues: что реально осталось в форке 2.0 | [RESEARCH_UPSTREAM_ISSUES_2026-10-30.md](./RESEARCH_UPSTREAM_ISSUES_2026-10-30.md) | Триаж 195 Issues, проверенный код, потенциальный доступ к секретам, CLI `write next`, context window 128K и старые уже исправленные пути |
 | Русский longform, счётчик, заголовки и экспорт | [RESEARCH_R5_LENGTH_EXPORT.md](./RESEARCH_R5_LENGTH_EXPORT.md) | [LANGUAGE_AUDIT.md](./LANGUAGE_AUDIT.md) — **исторический снимок**, [ARCHITECTURE.md](./ARCHITECTURE.md) — карта кода, тоже датированный снимок |
 | Литературные методики и офлайн-проверки | [RESEARCH_RU_RUBRIC.md](./RESEARCH_RU_RUBRIC.md) | [RESEARCH_LITERARY_EVAL.md](./RESEARCH_LITERARY_EVAL.md) — первичный обзор источников; [RESEARCH_LLM_OFFLINE.md](./RESEARCH_LLM_OFFLINE.md) — моки/микромодель |
