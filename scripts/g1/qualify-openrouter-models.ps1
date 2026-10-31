@@ -58,7 +58,6 @@ if (-not $buildEvidence -or $buildEvidence.status -ne "BUILD_PROVENANCE_VERIFIED
 }
 $distHashes = @($buildEvidence.distFiles)
 
-
 $nodeVersion = & node --version
 if ($LASTEXITCODE -ne 0) {
     throw "Node.js is not available."
@@ -73,7 +72,8 @@ Write-Host "=== LOCAL SOURCE PRECHECK ==="
     localHead = $head
     comparedSourceRef = $ExpectedSourceRef
     comparedSourceHead = $sourceHead
-    coreSourceMatches = $true
+    sourceAndBuildInputsMatch = $true
+    buildProvenanceVerified = $true
     buildSourceCommit = $buildEvidence.sourceCommit
     expectedSourceCommit = $buildEvidence.expectedSourceCommit
     buildScriptSha256 = $buildEvidence.buildScriptSha256
