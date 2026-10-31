@@ -1,5 +1,7 @@
 # Эталонный рассказ и сравнительные прогоны InkOS longform
 
+**Операционный статус 31.10.2026:** требование короткого live preflight выполнено для **главной Studio chat-сессии** с `openrouter/free` (`finish_turn → G1_PREFLIGHT_OK`, OpenRouter NVIDIA Nemotron 3 Ultra free, HTTP 200, native 8 495 input / 31 output, cost $0.00). Это **не** проверка цепочки Architect/Writer и не запуск литературного benchmark; **книги/глав пока нет**. [PR #13](https://github.com/NeuralDao/inkos/pull/13) объединён в `custom/main`; локальные Core и Studio собраны. У free-исполнителя указано **Training allowed**. Перед отправкой оригинального R3 v1.0 в реальную генерацию требуется отдельное согласие пользователя на условия обработки данных и на запуск Architect/глав. Фразы ниже «API ещё не выполнялся» или старые SHA относятся к историческим срезам.
+
 **Согласовано:** 30.10.2026; **режим G1 изменён 31.10.2026:** первый live G1 использует **`openrouter/free`**, а не платные вызовы. Неизменный литературный brief R3 v1.0 и R4-протокол сохранены; **реальные API, главы и baseline ещё не проверены**. [Текущая стратегия моделей](./G1_MODEL_STACK.md). Статус исследований — [RESEARCH_CURRENT_STATE.md](./RESEARCH_CURRENT_STATE.md). Проверенный код текущего форка: `NeuralDao/inkos custom/main@7ceac36d63b7072a625ad79097847ac78acdeb97` (последний интегрированный исходный код `24bdd47c`, последующие GitHub-коммиты — документационные). Историческая сверка: `Narcooo/inkos@v1.8.0`.
 
 ## Зачем и границы
