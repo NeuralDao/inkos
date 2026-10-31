@@ -45,4 +45,4 @@ pnpm --filter @actalk/inkos-studio typecheck
 
 **Проверки на момент подготовки:** статический просмотр исходников и GitHub diff; Vitest **NOT RUN**, typecheck **NOT RUN**, build/Studio/CI **NOT RUN**, реальные LLM API **NOT RUN**.
 
-**Примечание к Studio-проверкам:** имя pnpm workspace-фильтра Studio и наличие его скрипта проверить по `packages/studio/package.json` **перед запуском**. Studio typecheck добавлен как рекомендуемая проверка из-за изменения `packages/studio/src/api/server.ts`, а не как исполненная команда.
+**Studio-проверка:** команда `pnpm --filter @actalk/inkos-studio typecheck` подтверждена по `packages/studio/package.json` (скрипт включает клиентский и серверный TypeScript). Она лишь рекомендована из-за изменения `packages/studio/src/api/server.ts`; **NOT RUN**.
