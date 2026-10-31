@@ -111,6 +111,31 @@ git -C $workspace push origin main
 
 Для нескольких книг не использовать бездумное `git add -A` на корне: оно захватит все пользовательские Work. Путь `works/$workId` ограничивает staged изменения конкретной книгой. Проверить также файлы, которые могли быть staged ранее.
 
+### Необязательная команда-обёртка (без Codex и ручного ZIP)
+
+После синхронизации публичного кода `C:\Projects\inkos\` с обновлённым `custom/main` доступен [fork-docs/workspace/Save-G1Checkpoint.ps1](./workspace/Save-G1Checkpoint.ps1). Скрипт **подготовлен и статически прочитан, но НЕ запускался (NOT RUN)**. Он не создаёт репозиторий и не настраивает Studio; сначала нужно выполнить одноразовые шаги выше. В отличие от ручного `git add`, он проверяет, что:
+- Git-root действительно совпадает с выбранным workspace, ветка `main`, а `origin` не ведёт в публичный `NeuralDao/inkos`;
+- `.gitignore` запрещает файлы корня, секретные пути уже не отслеживаются;
+- staged пути относятся **только** к выбранному `workId` и, при наличии, к `g1-run.md`;
+- SQLite и подозрительные пути секретов не добавлены; `git diff --cached --check` не сообщает ошибок.
+
+По умолчанию скрипт **только готовит staged diff**, не выполняет commit/push:
+
+```powershell
+$checkpoint = 'C:\Projects\inkos\fork-docs\workspace\Save-G1Checkpoint.ps1'
+& $checkpoint -WorkId '<реальный-work-id>' -Label 'foundation'
+git -C 'C:\Projects\inkos-workspace' diff --cached
+```
+
+После просмотра diff и **проверки Private в GitHub** повторить для тех же staged данных:
+
+```powershell
+& $checkpoint -WorkId '<реальный-work-id>' -Label 'foundation' -Publish -PrivateConfirmed
+```
+
+Будет отдельное ручное подтверждение `PUSH`. Флаг `-PrivateConfirmed` — **утверждение самого пользователя**, не автоматическая проверка видимости; перед первым отправлением рукописи ChatGPT должен проверить её через подключённый GitHub. Если push не удастся после commit, **не делать reset**: локальный commit сохранён, отдельно разобраться с `git push origin main`. Если нужна ещё более простая автоматизация после успешного первого цикла, обсудить её на фактической установленной среде, без CI и автопуша.
+
+
 ## Что передавать ChatGPT и что анализировать
 
 После каждого завершённого push достаточно написать **ссылку на приватный репозиторий, имя Work и commit SHA (или сообщение «пушнул foundation/главу N»)**. ChatGPT независимо проверяет доступ и актуальный commit, читает `works/<work-id>/work.json`, `source/book.json`, нужный `story/` и `chapters/`, а также изменения с прошлого checkpoint. **Исходники InkOS в приватный репозиторий не дублировать.**
