@@ -11,7 +11,8 @@
 - Встроенный дефолт OpenRouter (`checkModel`) переключён с потенциально платного `openrouter/auto` на **`openrouter/free`**; явно выбранный `openrouter/auto` за пределами защитного режима остаётся допустимым. В модельный каталог добавлена карточка `openrouter/free`: **200K** контекст по описанию OpenRouter, **8192** — **локальный консервативный лимит вывода InkOS**, не гарантированный лимит всех исполнителей.
 - **Transport не менялся:** остаётся `openai-responses` и существующий Pi/worker путь. Статический код поддерживает `tool_choice=required`, но совместимость случайного фактического исполнителя с tools/structured output, Responses SSE/reasoning и повторами требует локальной проверки и live preflight.
 - **Опциональный предохранитель G1:** при `INKOS_OPENROUTER_FREE_ONLY=1` создание LLM-клиента, включая клиентов для агентных `modelOverrides`, отказывает при любом сервисе, кроме `openrouter`, неофициальном endpoint или модели, отличной от `openrouter/free`/`*:free`. Также отклоняются дополнительные поля `extra.models`, `extra.route`, `extra.plugins`, способные переопределить маршрутизацию/расходы. Ошибка до HTTP-запроса; другие обычные конфигурации при выключенном режиме не меняются.
-- Добавлены проверки выбора свободного fallback, явной модели, Responses-метаданных, paid/auto/alternate-service и agent overrides, запрета дополнительного fallback и работы без флага. **Тесты написаны, но не запускались.**
+- **Дополнительное статическое ревью (31.10):** в `chatCompletion(client, model)` обнаружен путь подмены модели без `clientWithModel`. В этом методе добавлена отдельная проверка **перед запросом**; `PipelineRunner` при активном free-only режиме **сразу в конструкторе** проверяет базовую модель и **все** `modelOverrides`, чтобы не начать создание книги с заранее неверной конфигурацией и не тратить бесплатную квоту до ошибки на поздней фазе. Это статически подтверждённые пути к контролю, не доказательство успешной LLM-генерации.
+- Добавлены проверки выбора бесплатного fallback, явной модели, Responses-метаданных, paid/auto/alternate-service и overrides, запрета дополнительного fallback и работы без флага. Дополнительные регрессии проверяют `chatCompletion()` с подменённым ID и `PipelineRunner`: разрешение бесплатных overrides и отказ на платных **в конструкторе, до API и создания Work**. **Тесты написаны, но не запускались.**
 
 ## Настройка на Windows (после ревью и отдельного разрешения)
 
@@ -31,7 +32,7 @@ $env:INKOS_OPENROUTER_FREE_ONLY = '1'
 
 ```powershell
 Remove-Item Env:INKOS_OPENROUTER_FREE_ONLY -ErrorAction SilentlyContinue
-pnpm --filter @actalk/inkos-core exec vitest run src/__tests__/effective-llm-config.test.ts src/__tests__/provider.test.ts
+pnpm --filter @actalk/inkos-core exec vitest run src/__tests__/effective-llm-config.test.ts src/__tests__/provider.test.ts src/__tests__/pi-stream.test.ts
 pnpm --filter @actalk/inkos-core typecheck
 ```
 
