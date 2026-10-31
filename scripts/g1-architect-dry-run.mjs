@@ -389,6 +389,8 @@ async function main() {
         usage: readUsage(response),
         toolCalls: readToolCalls(response),
         textPreview: readTextPreview(response),
+        partialToolCalls: readToolCalls(data.partialOutput),
+        partialTextPreview: readTextPreview(data.partialOutput),
       };
 
       call.completed.push(completion);
