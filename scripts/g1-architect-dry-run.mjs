@@ -504,10 +504,12 @@ async function main() {
   const stageEvidenceComplete = stageSummary.every((stage) => stage.acceptedToolCall);
 
   let status = "FAIL";
-  if (outputValid && !error) status = "PASS";
-  else if (requestCapHit) status = "REQUEST_CAP_EXCEEDED";
+  if (requestCapHit) status = "REQUEST_CAP_EXCEEDED";
   else if (timeoutSignal.aborted) status = "TIMEOUT";
   else if (signal.aborted) status = "ABORTED";
+  else if (!error && !outputValid) status = "INVALID_OUTPUT";
+  else if (!error && outputValid && !stageEvidenceComplete) status = "INCOMPLETE_EVIDENCE";
+  else if (!error && outputValid && stageEvidenceComplete) status = "PASS";
 
   const finishedAt = new Date().toISOString();
   const report = {
@@ -542,7 +544,7 @@ async function main() {
       narrativeLanguage: book.narrativeLanguage,
     },
     languageNote: "ArchitectAgent.generateFoundation currently selects its prompt language from book.language. This run uses operational English with narrativeLanguage=ru; it tests the real four-stage Architect protocol, not Russian prose quality.",
-    passDefinition: "PASS means generateFoundation returned a non-empty, schema-accepted foundation with the expected output fields. It is not a judgment of literary quality or Russian prose.",
+    passDefinition: "PASS means generateFoundation returned a non-empty, schema-accepted foundation and evidence confirms all four required structured stages. It is not a judgment of literary quality or Russian prose.",
     servingNote: "reportedProvider/reportedModel are values exposed by the model response, not guaranteed OpenRouter serving metadata. Match call timestamps with OpenRouter Activity for actual provider, serving ID, and cost.",
     usageNote: "Usage sums every observed model-call-completed response, including failed/retried attempts when the provider returned usage. It is token usage, not price.",
     syntheticBrief: SYNTHETIC_BRIEF,
