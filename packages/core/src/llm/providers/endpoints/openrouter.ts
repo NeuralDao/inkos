@@ -18,13 +18,16 @@ export const OPENROUTER: InkosEndpoint = {
   group: "aggregator",
   api: "openai-responses",
   baseUrl: "https://openrouter.ai/api/v1",
-  // openrouter/auto 是 OpenRouter 官方的自动路由入口，长期存在；
-  // 具体模型 id（如 google/gemma-2-9b-it:free）会随上游下架失效（issue #300）。
-  checkModel: "openrouter/auto",
+  // Default to the free router. The paid "openrouter/auto" remains an explicit opt-in.
+  // Individual :free IDs change frequently; "openrouter/free" selects a suitable free model.
+  checkModel: "openrouter/free",
   temperatureRange: [0, 2],
   defaultTemperature: 0.7,
   writingTemperature: 1,
   models: [
+    // OpenRouter advertises 200K context for the free router; keep the local
+    // output budget conservative because the selected model varies per call.
+    { id: "openrouter/free", maxOutput: 8192, contextWindowTokens: 200000, enabled: true },
     { id: "openrouter/auto", maxOutput: 4096, contextWindowTokens: 2000000, enabled: true },
     { id: "deepseek/deepseek-chat-v3.1", maxOutput: 4096, contextWindowTokens: 163840, releasedAt: "2025-08-21" },
     { id: "google/gemini-3.1-flash-image-preview", maxOutput: 65536, contextWindowTokens: 131072, releasedAt: "2026-02-26" },
