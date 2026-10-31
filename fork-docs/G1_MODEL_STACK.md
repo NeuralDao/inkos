@@ -17,13 +17,13 @@
 - Requested/resolved/PI model: nvidia/nemotron-3-ultra-550b-a55b:free.
 - Preflight: **PASS** — service openrouter, openai-responses, официальный endpoint, ключ присутствует.
 - Structured call: **FAIL** — MODEL_REQUIRED_TOOL_MISSING, stopReason=error, resultTool=submit_foundation_cast_index, attempts=1.
-- Результат трёхперсонажного cast index не получен. usage=null; фактическая стоимость и serving model пока **UNKNOWN**.
+- Результат трёхперсонажного cast index не получен. CSV Activity содержит две соседние записи, с высокой вероятностью соответствующие initial + tool-missing retry: `gen-1793479843-1bvpeVlPRj9ZZ4QiL1G5` (20:50:43.703) и `gen-1793479846-PlJJdLK83qw3WW3zhvGt` (20:50:46.484). Обе обслужены `Nvidia`, фактический serving ID `nvidia/nemotron-3-ultra-550b-a55b-20260604`, variant `free`; обе завершились `stop`, не `tool_calls`. На каждую: 470 prompt tokens; completion 194 и 176; reasoning 148 и 126. Итого по паре: 940 prompt / 370 completion / 274 reasoning; cost_total **$0.00**.
 - Это один логический вызов worker, а не три независимые попытки. По коду packages/core/src/agent/pi-stream.ts guardedPiStream делает один transport retry при отсутствии обязательного tool call; после повторного ответа без tool call локальный observeModelStream формирует MODEL_REQUIRED_TOOL_MISSING. Следовательно, attempts=1 в worker не является количеством HTTP-запросов; Activity должна подтвердить число фактических запросов (ожидается initial + один retry).
 - Код ошибки **не является HTTP 400/429** и не доказывает, что модель вообще не умеет function calling. Он означает, что завершённый ответ не содержал требуемого tool call после исчерпания одного transport retry.
-- usage=null не означает нулевой расход: runWorkerAgentTool вызывает onUsage только после успешного structured результата, а при ошибке выходит раньше подсчёта usage.
+- В более широкой Activity-выгрузке для этого serving ID есть 55 генераций: 30 с `tool_calls`, 19 с `stop`, 1 cancelled и 6 без finish reason; общий cost_total $0. Это показывает, что Nemotron 3 Ultra в других запросах вызывал инструменты, но не отменяет отказ именно на `submit_foundation_cast_index` с обязательным tool call. Общие 55 записей нельзя считать одним тестом или одной ролью.
 - Конфигурация inkos.json, сохранённые Studio overrides и существующий Work не изменялись; новая книга не создавалась. В запросе были только синтетические имена.
 
-**Статус кандидата:** Nemotron 3 Ultra — **NOT QUALIFIED** для Architect по этому тесту (1 structured FAIL; routing PASS). Не повторять его автоматически. Сначала сверить OpenRouter Activity: фактический serving ID для каждого запроса, число запросов, input/output tokens и стоимость. Затем перейти к следующему кандидату — google/gemma-4-26b-a4b-it:free — с тем же synthetic fixture и теми же параметрами. Не назначать постоянные overrides и не начинать Foundation до завершения отбора.
+**Статус кандидата:** Nemotron 3 Ultra — **NOT QUALIFIED** для Architect по точному трёхперсонажному `submit_foundation_cast_index` (routing PASS; две генерации завершились `stop` без tool call). При этом Activity подтверждает общее использование tools в других запросах (30/55); говорить о полной неспособности модели к function calling нельзя. Не повторять автоматически и не назначать постоянный override.
 
 ## Новое испытание: Gemma 4 26B A4B fixed ID (31.10.2026)
 
@@ -35,10 +35,25 @@
 - Это отказ провайдера до получения пригодного structured результата. Tool calling **NOT VERIFIED**; результат трёхперсонажного fixture не получен.
 - В packages/core/src/llm/provider.ts на code HEAD ee4c57e реализован guardAssistantMessageStream с TRANSIENT_LLM_RETRIES=2. HTTP 429 без видимых stream events распознаётся как transient и повторяется с backoff 800 мс и 1600 мс; следовательно, при одинаковом 429 на каждом ответе один worker turn может содержать до трёх upstream HTTP requests. attempts=1 — один Agent model turn, не число HTTP-запросов. Точное число и serving provider подтвердить OpenRouter Activity.
 - usage=null не означает нулевой расход: worker не вызывает onUsage для неуспешного structured результата. Токены и стоимость **UNKNOWN**.
-- Не считать Gemma провалившей tool calling: текущий результат подтверждает только upstream 429 после исчерпания retry budget. Не повторять немедленно и не делать циклических smoke.
+- CSV Activity (213 строк, 2026-10-31 14:02:35–20:50:46, API key `InkOS-G1`) не содержит ни одной записи с Gemma в `model_permaslug`. Поэтому он не подтверждает фактическое число HTTP-попыток, serving provider/model, usage или cost для этого 429. Код допускает до трёх upstream requests в одном worker turn (initial + два transient retry), но фактическое число из этой выгрузки **UNKNOWN**. Отсутствие generation row не доказывает $0 и не позволяет браковать tool calling. Не повторять немедленно и не делать циклических smoke.
 - Использовались только синтетические данные; persistent Studio overrides и старый Work не менялись.
 
-**Статус кандидата:** Gemma 4 — **BLOCKED / NOT QUALIFIED** по причине provider availability/rate limit; способность выполнять tools не проверена. Вместе с Nemotron 3 Ultra (MODEL_REQUIRED_TOOL_MISSING после одного tool-missing retry) первая пара кандидатов не дала Architect PASS. Сначала сверить OpenRouter Activity для обоих IDs: фактический serving model/provider, число HTTP-запросов, input/output tokens и стоимость. Следующий кандидат по утверждённому порядку — nvidia/nemotron-3.5-super-vl:free. Использовать тот же fixture и один логический тест только после фиксации Activity; не менять persistent overrides и не создавать Foundation.
+**Статус кандидата:** Gemma 4 — **BLOCKED / NOT QUALIFIED** по причине provider 429; способность выполнять tools не проверена. По Activity сверка для Gemma невозможна: generation rows отсутствуют. Первая пара кандидатов не дала Architect PASS. Следующий кандидат — Nemotron 3.5 Super VL, однако Activity уже содержит 47 генераций фактического serving ID `nvidia/nemotron-3.5-super-vl-20261015` (provider Nvidia): 35 завершились `tool_calls`, 12 — `length`, cost_total $0; суммарно 801 814 prompt / 116 247 completion / 103 716 reasoning tokens. CSV не содержит requested model ID, имён tools или task labels, поэтому неизвестно, относятся ли эти записи к fixed alias и к Architect fixture. Сначала сопоставить их с локальными harness/Studio logs; не запускать дублирующий smoke, если среди них уже есть тот же тест. Не менять persistent overrides и не создавать Foundation.
+
+## Сверка OpenRouter Activity CSV (31.10.2026)
+
+Пользователь предоставил `openrouter_activity_2026-10-31 (1).csv`. Выгрузка содержит 213 строк за 14:02:35.153–20:50:46.484; все строки относятся к API key `InkOS-G1`, variant `free`, `cost_total=0`. Поля requested model ID, tool name и task label отсутствуют; `model_permaslug` показывает фактический serving model.
+
+| Фактический serving model | Записей | `tool_calls` | Другие finish reasons | Cost |
+| --- | ---: | ---: | --- | ---: |
+| `nvidia/nemotron-3-ultra-550b-a55b-20260604` | 55 | 30 | 19 `stop`, 1 cancelled, 6 без finish reason | $0 |
+| `nvidia/nemotron-3.5-super-vl-20261015` | 47 | 35 | 12 `length` | $0 |
+| `nvidia/nemotron-3.5-lightning-20260807` | 48 | 40 | 6 `length`, 1 cancelled, 2 без finish reason | $0 |
+| `cohere/north-mini-code-20260617` | 45 | 35 | 6 `stop`, 2 `length`, 1 `error`, 1 без finish reason, 1 cancelled | $0 |
+| `liquid/lfm-2.5-2.6b-20260811` | 17 | 17 | — | $0 |
+| `xingchen-agi/xing4.0-29b-a4b-20261015` | 1 | 1 | — | $0 |
+
+**Интерпретация:** это агрегат разнородных вызовов, а не единый benchmark; проценты tool calls нельзя трактовать как pass rate Architect. Особенно важно сопоставить `tool_calls` Super VL с task logs, прежде чем запускать ещё один smoke. `finish_reason=length` — ограничение генерации по длине, а не доказательство tool failure.
 
 **Факт исполнения на 31.10.2026 (актуальнее исторических абзацев ниже):** интеграция OpenRouter Free [PR #13](https://github.com/NeuralDao/inkos/pull/13) **MERGED** в `custom/main` (`036f3b59`); fallback исправлен на `openrouter/free`, opt-in `INKOS_OPENROUTER_FREE_ONLY=1` реализован. Core Vitest 126 PASS на HEAD до последнего тестового typefix, Core typecheck PASS, Studio typecheck PASS по сообщению пользователя; Core и Studio локально собраны. **Один реальный synthetic preflight** в `New session`: `G1_PREFLIGHT_OK`, OpenRouter → NVIDIA Nemotron 3 Ultra (free), native **8 495 input / 31 output**, **$0.00**, HTTP 200, `tool_calls`, fallback не зафиксирован. Исторические утверждения ниже «API не выполнялся»/«fallback ещё не исправлен» устарели. `openrouter/free` динамический; реальный endpoint имеет **Training allowed**, NVIDIA предупреждает о логировании для улучшения продуктов. Перед передачей оригинального авторского материала требуется отдельное решение пользователя. Детали: [CURRENT_STATE.md](./CURRENT_STATE.md).
 
@@ -54,9 +69,9 @@
 
 | Приоритет | Точный ID | Публично заявленные возможности | Статус в InkOS |
 | --- | --- | --- | --- |
-| 1 | `nvidia/nemotron-3-ultra-550b-a55b:free` | 1M контекст; `tools` и `tool_choice`; без `response_format` | Ранее chat preflight был обслужен фактическим ID `nvidia/nemotron-3-ultra-550b-a55b-20260604:free`; direct fixed-ID structured worker не проверен |
-| 2 | `nvidia/nemotron-3.5-super-vl:free` | 1M контекст; `tools`, `tool_choice`, JSON-schema `response_format` | Новый кандидат; реальный InkOS tool path и русский текст не проверены |
-| 3 | `google/gemma-4-26b-a4b-it:free` | 262K контекст; native function calling; `tools`, `tool_choice`; `response_format` без JSON-schema enforcement | Preflight PASS; structured call завершился `WORKER_MODEL_ERROR` / `429 Provider returned error` после retry budget; tool compatibility NOT VERIFIED; проверить Activity, не повторять немедленно |
+| 1 | `nvidia/nemotron-3-ultra-550b-a55b:free` | 1M контекст; `tools` и `tool_choice`; без `response_format` | Fixed Architect cast-index smoke: 2 generation rows, обе `stop` без tool call; serving ID `...-20260604`, Nvidia. В общей Activity 30/55 запросов завершились `tool_calls`; точная Architect-задача всё ещё FAIL |
+| 2 | `nvidia/nemotron-3.5-super-vl:free` | 1M контекст; `tools`, `tool_choice`, JSON-schema `response_format` | Activity: 47 генераций serving ID `...-20261015`, 35 `tool_calls`, 12 `length`; requested alias/task labels отсутствуют. Предварительное tool evidence, точный Architect fixture не подтверждён |
+| 3 | `google/gemma-4-26b-a4b-it:free` | 262K контекст; native function calling; `tools`, `tool_choice`; `response_format` без JSON-schema enforcement | Preflight PASS; structured call завершился `WORKER_MODEL_ERROR` / `429 Provider returned error`; в Activity CSV нет generation rows для Gemma, поэтому retries/usage/cost UNKNOWN; tool compatibility NOT VERIFIED |
 | 4 | `xingchen-agi/xing4.0-29b-a4b:free` | 262K контекст; заявлены tool calling и multi-step planning | Один PASS на 2 персонажах; 3-персонажный тест дал 429 Provider returned error; повторяемость не доказана |
 | HOLD | `dots-studio/dots-3-note-preview:free` | 512K контекст; reasoning и agent workflows | Единственный structured вызов не прошёл; снятие с OpenRouter заявлено на 31.12.2026 |
 
