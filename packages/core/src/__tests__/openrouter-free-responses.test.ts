@@ -100,6 +100,35 @@ describe("OpenRouter free: offline Responses structured boundary", () => {
     ]));
   });
 
+  it("refuses an oversized free-route context before the SDK call", () => {
+    const model = { ...freeResponsesModel(), contextWindow: 1024 };
+    const oversized: Context = {
+      ...context,
+      messages: [{ role: "user", content: "Synthetic oversized input. ".repeat(2000), timestamp: 1 }],
+    };
+    expect(() => guardedPiStream(model, oversized, { toolChoice: "required", maxTokens: 256 }, 0))
+      .toThrow(/InkOS context window guard/);
+    expect(fakeStreamSimple).not.toHaveBeenCalled();
+  });
+
+  it("does not accept a tool call cut off by the upstream output limit", async () => {
+    fakeStreamSimple.mockImplementation((model: Model<Api>) => {
+      const stream = createAssistantMessageEventStream();
+      const reply = assistant(model, true);
+      reply.stopReason = "length";
+      queueMicrotask(() => {
+        stream.push({ type: "start", partial: reply });
+        stream.push({ type: "done", reason: "length", message: reply });
+        stream.end();
+      });
+      return stream;
+    });
+    const response = await guardedPiStream(freeResponsesModel(), context, { toolChoice: "required", maxTokens: 256 }, 0).result();
+    expect(response.stopReason).toBe("length");
+    expect(response.content.some(part => part.type === "toolCall")).toBe(false);
+    expect(fakeStreamSimple).toHaveBeenCalledTimes(1);
+  });
+
   it("rejects a plain-text answer when a structured tool is mandatory", async () => {
     fakeStreamSimple.mockImplementation((model: Model<Api>) => {
       const stream = createAssistantMessageEventStream();
