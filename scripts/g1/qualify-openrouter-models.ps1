@@ -13,7 +13,7 @@ param(
     [ValidateRange(30, 300)]
     [int]$TimeoutSeconds = 90,
 
-    [ValidateRange(256, 8192)]
+    [ValidateRange(256, 2048)]
     [int]$MaxTokens = 2048
 )
 
@@ -158,6 +158,7 @@ const expectedRoles = [
 const maxPreparedRequestsPerModel = 18;
 const priceCap = { prompt: 0.15, completion: 0.75 };
 const assumedInputTokensPerRequest = 8500;
+const authorizedBudgetUsd = 0.20;
 const totalRequestCeiling = models.length * maxPreparedRequestsPerModel;
 const estimatedWorstCaseUsd =
   (totalRequestCeiling * assumedInputTokensPerRequest * priceCap.prompt
@@ -298,8 +299,11 @@ async function importCore(relativePath) {
 
 async function main() {
   if (!workspaceRoot || !repoRoot) throw new Error("Repository/workspace root is missing");
-  if (!Number.isInteger(maxTokens) || maxTokens < 256) throw new Error("Invalid maxTokens");
+  if (!Number.isInteger(maxTokens) || maxTokens < 256 || maxTokens > 2048) throw new Error("maxTokens must be between 256 and 2048 for the approved budget");
   if (!Number.isFinite(timeoutMs) || timeoutMs < 30_000) throw new Error("Invalid timeout");
+  if (estimatedWorstCaseUsd > authorizedBudgetUsd) {
+    throw new Error("Estimated qualification ceiling exceeds the approved $0.20 budget");
+  }
 
   const core = await importCore("packages/core/dist/index.js");
   const workerModule = await importCore("packages/core/dist/agent/worker-agent.js");
@@ -586,7 +590,7 @@ async function main() {
     piApi: "openai-responses",
     freeOnlyGuard: process.env.INKOS_OPENROUTER_FREE_ONLY ?? null,
     budget: {
-      authorizedUsd: 0.20,
+      authorizedUsd: authorizedBudgetUsd,
       maxPreparedRequestsPerModel,
       maxTokensPerRequest: maxTokens,
       maxPricePerMillion: priceCap,
