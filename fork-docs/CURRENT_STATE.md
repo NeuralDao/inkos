@@ -1,15 +1,16 @@
 # Текущее состояние форка
 
-**АКТУАЛЬНОЕ ОБНОВЛЕНИЕ — 31.10.2026: исправление OpenRouter reasoning подготовлено в отдельной ветке.**
+**АКТУАЛЬНОЕ ОБНОВЛЕНИЕ — 31.10.2026: PR #15 прошёл статический повторный review ChatGPT; локальная валидация ожидается.**
 
 - `custom/main` подтверждена на `05a0f0dbbcd0a85f49c731ac1357083ab6b9d10a`; основная ветка не изменялась.
-- Task branch: `fix/g1-openrouter-reasoning-defaults`; implementation commit: `7f9bb2a0ed7aef11ab6432db419c5f4fe8a21dfb`; test commit: `1d5d29d16d15fe7ae8fa6832578618c2224be382`.
-- Draft PR #15: https://github.com/NeuralDao/inkos/pull/15; Codex review pending.
-- Изменены `provider.ts` и `pi-stream.ts`; добавлен `openrouter-reasoning.test.ts`. SDK-generated `reasoning.effort=none` удаляется только для официального OpenRouter при отсутствии явного выбора; explicit `extra.reasoning` сохраняется. Политика применяется к прямым текстовым вызовам и общему Pi transport boundary (structured workers и sessions).
-- В execution evidence добавлены поля `reasoning`, `reasoning_effort`, `enable_thinking`.
-- DeepSeek V4 и MiniMax special handling, `thinkingBudget`, transport и retries не переписывались.
-- **Draft PR #15 открыт.** Offline tests написаны, но не запускались. Build, typecheck, lint, Studio и реальные LLM/API — **NOT RUN**.
-- Следующий шаг: независимый review Codex; затем пользовательская точечная offline-проверка. Merge — только по отдельному разрешению.
+- Task branch: `fix/g1-openrouter-reasoning-defaults`; implementation commit: `7f9bb2a0ed7aef11ab6432db419c5f4fe8a21dfb`; initial test commit: `1d5d29d16d15fe7ae8fa6832578618c2224be382`; Codex correction commit: `35eb7c28ddeb209857fb59380f5aa3144b23947a`.
+- Draft PR #15: https://github.com/NeuralDao/inkos/pull/15; открыт, не объединён.
+- Codex исправил два замечания: тест Chat Completions теперь явно задаёт Pi model API `openai-completions`; normalizer удаляет только объект с единственным ключом `effort: "none"`, сохраняя объекты с дополнительными полями.
+- Повторный статический review ChatGPT: **ACCEPT по коду**. Проверены фактические ветви direct text, structured worker и agent session; отдельного блокирующего дефекта после двух исправлений не найдено.
+- Ограничение: Pi Agent сводит отсутствие уровня и `thinkingLevel="off"` к `reasoning: undefined`. В InkOS `LLMConfigSchema` отдельного `thinkingLevel` нет; явный provider override доступен через `extra.reasoning` и сохраняется. Если позже появится отдельный пользовательский переключатель off, потребуется явный контракт намерения.
+- В execution evidence включены `reasoning`, `reasoning_effort`, `enable_thinking`. DeepSeek V4/MiniMax, `thinkingBudget`, transport и retry policy не переписывались.
+- Codex сообщает `git diff --check` **PASS**; ChatGPT эту команду не запускал. Vitest, typecheck, build, lint, Studio и реальные LLM/API — **NOT RUN**.
+- Следующий шаг пользователя: локально выполнить точечный Vitest и Core typecheck (команды в handoff); передать PASS/FAIL и релевантный лог. При PASS — зафиксировать итоговую валидацию; merge только по отдельному разрешению.
 
 **ИСТОРИЧЕСКАЯ ПЕРЕДАЧА ДО ИССЛЕДОВАНИЯ REASONING (31.10.2026; текущий статус см. выше):** [G1_HANDOFF_2026-10-31.md](./G1_HANDOFF_2026-10-31.md). Пользователь сообщил **новый реальный PASS для Xing4.0** после предыдущего FAILED smoke: in-memory `modelOverrides.architect` → `xingchen-agi/xing4.0-29b-a4b:free`, `ctx.model` корректен, `api=openai-responses`, API-key есть; один настоящий `runWorkerAgentTool(submit_foundation_cast_index)` с **двумя персонажами** (Anna major, Pavel minor) при `maxTokens=2048`, temperature 0.8 **PASS**, вернул точный typed `roles`. Ранний smoke на **трёх персонажах** для Xing и Dots — по **одному WORKER_MODEL_ERROR** без полной причины, не «3/3 FAIL». Следовательно, routing PASS, совместимость Xing **частично подтверждена (1 PASS + 1 FAIL в разных условиях)**; стабильность не проверена; Dots NOT VERIFIED. `modelOverrides` в Studio **не записаны**, стоимость последнего запроса **UNKNOWN**, новая Foundation **NOT RUN**, старый failed draft `works/последняя-ведомость` сохранён. Пользователь предпочёл **новую книгу с фиксированным отобранным стеком**, а не recovery/рефакторинг. Следующий шаг — повторить **исходный одинаковый 3-ролевой** synthetic test Xing с полной безопасной ошибкой при FAIL и сверкой Activity, затем проверить persistent override/readback и выбрать модель, **до** удаления draft или повторной генерации. Новый чат сначала читает handoff и указанный код; прежние статусы внизу — история.
 
