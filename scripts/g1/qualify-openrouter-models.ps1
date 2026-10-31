@@ -46,7 +46,7 @@ if (-not (Test-Path -LiteralPath $provenanceScriptPath -PathType Leaf)) {
     throw "Core build provenance script is missing: $provenanceScriptPath"
 }
 
-$expectedProvenanceBlob = "cd51c496fe8981851217fe867fef882a68ff8295"
+$expectedProvenanceBlob = "fee83eec5467c94009c28cdf76c16436d7164019"
 $actualProvenanceBlob = Invoke-GitText -Arguments @("hash-object", "--", $provenanceScriptPath)
 if ($actualProvenanceBlob -ne $expectedProvenanceBlob) {
     throw "Core build provenance script integrity check failed: $actualProvenanceBlob"
