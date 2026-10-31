@@ -303,7 +303,7 @@ async function main() {
   const [
     { loadProjectConfig }, { createLLMClient }, { PipelineRunner }, { ArchitectAgent },
     { BookConfigSchema }, { withExecutionEvidence }, { createBuiltInWorkProfileRegistry },
-    { runWithAgentTrajectory, opaqueConversationId }, { resolveNarrativeLanguage },
+    { loadWorkManifest }, { runWithAgentTrajectory, opaqueConversationId }, { resolveNarrativeLanguage },
   ] = await Promise.all([
     distImport(args.repoRoot, "utils/config-loader.js"),
     distImport(args.repoRoot, "llm/provider.js"),
@@ -312,6 +312,7 @@ async function main() {
     distImport(args.repoRoot, "models/book.js"),
     distImport(args.repoRoot, "harness/execution-evidence.js"),
     distImport(args.repoRoot, "harness/builtin-profiles.js"),
+    distImport(args.repoRoot, "harness/work-store.js"),
     distImport(args.repoRoot, "llm/agent-trajectory.js"),
     distImport(args.repoRoot, "utils/book-language.js"),
   ]);
@@ -339,13 +340,19 @@ async function main() {
   const runId = randomUUID();
   const now = new Date().toISOString();
   const book = BookConfigSchema.parse({
-    id: "g1-architect-smoke-" + runId.slice(0, 8),
+    id: "g1-architect-smoke-" + runId,
     title: "Последняя ведомость", platform: "Author.Today",
     genre: "камерный социальный триллер", status: "outlining",
     targetChapters: 5, chapterWordCount: 1350,
     language: "en", narrativeLanguage: "ru", createdAt: now, updatedAt: now,
   });
   const expectedLanguage = resolveNarrativeLanguage(book);
+  try {
+    await loadWorkManifest(args.projectRoot, book.id);
+    throw new Error("Generated synthetic ID already belongs to an existing Work; aborting.");
+  } catch (error) {
+    if (error?.code !== "ENOENT") throw error;
+  }
   const context = runner.createAgentContext("architect", book.id);
   const piModel = obj(context.client._piModel);
   const model = {
@@ -366,13 +373,17 @@ async function main() {
   const report = {
     schemaVersion: 1, task: "G1_ARCHITECT_FOUNDATION_SMOKE",
     status: args.run ? "PENDING" : "PREFLIGHT_PASS_NO_API",
+    startedAt: now, finishedAt: null, durationMs: 0,
     liveApiCalled: false, code: { head, requiredBase: CODE_BASE, reasoningFixFingerprintPresent: true },
     project: {
       root: args.projectRoot, service: llm.service, baseModel: llm.model,
       apiFormat: llm.apiFormat, stream: llm.stream, hasKey: Boolean(llm.apiKey),
       persistentModelOverridesIgnored: true, freeOnlyGuard: "INKOS_OPENROUTER_FREE_ONLY=1 (child process only)",
     },
-    model, profile: { id: profile.id, requiredSkillIds: profile.requiredSkillIds },
+    model, profile: {
+      id: profile.id, requiredSkillIds: profile.requiredSkillIds,
+      sha256: createHash("sha256").update(JSON.stringify(profile)).digest("hex"),
+    },
     benchmark: { id: "R3", version: "1.0", briefSha256: benchmark.sha256 },
     book: {
       id: book.id, title: book.title, genre: book.genre, language: book.language,
@@ -382,10 +393,10 @@ async function main() {
     generationParameters: {
       temperature: 0.8, requiredToolChoice: true, stream: model.stream,
       maxTokensByStage: {
-        submit_foundation_outline: Math.min(8192, model.maxTokens),
-        submit_foundation_details: model.maxTokens,
-        submit_foundation_cast_index: Math.min(2048, model.maxTokens),
-        submit_foundation_cast_documents: Math.min(8192, model.maxTokens),
+        submit_foundation_outline: Math.min(8192, model.effectiveMaxTokens),
+        submit_foundation_details: model.effectiveMaxTokens,
+        submit_foundation_cast_index: Math.min(2048, model.effectiveMaxTokens),
+        submit_foundation_cast_documents: Math.min(8192, model.effectiveMaxTokens),
       },
     },
     languageContract: { expected: expectedLanguage, promptLanguageSelectedByArchitect: book.language, warning: LANGUAGE_WARNING },
@@ -401,7 +412,6 @@ async function main() {
   let partialOutline = null;
   let foundation = null;
   const started = Date.now();
-  report.liveApiCalled = true;
   try {
     const architect = new ArchitectAgent(context);
     foundation = await runWithAgentTrajectory({
@@ -420,6 +430,7 @@ async function main() {
 
   report.finishedAt = new Date().toISOString();
   report.durationMs = Date.now() - started;
+  report.liveApiCalled = evidence.events.some((event) => event.type === "model-call-started");
   report.evidence = evidence.events;
   report.stages = stageSummary(evidence.events, Boolean(foundation));
   report.usage = totalUsage(evidence.events);
