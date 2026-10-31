@@ -1,6 +1,6 @@
 # G1 — приватный Git-доступ к рабочим результатам Studio
 
-**Подготовлено:** 31.10.2026. **Статус:** инструкция для Windows/PowerShell; локальный каталог и приватный репозиторий **не созданы**, Git-синхронизация, Studio и API **NOT RUN**. Пока доступен только публичный `NeuralDao/inkos`; доступ ChatGPT к будущему приватному репозиторию необходимо проверить после его создания. Ни один фрагмент рукописи или ключа не размещён в публичном репозитории.
+**Подготовлено:** 31.10.2026. **Статус:** [NeuralDao/inkos-workspace](https://github.com/NeuralDao/inkos-workspace) **создан и проверен как Private через GitHub**; у подключённого ChatGPT есть read/write. В `main` безопасно инициализированы `.gitignore` и пустой `g1-run.md`. Локальный каталог и синхронизация с ним **не проверены**, Studio, API и генерация **NOT RUN**. Рукописи и ключи не загружены.
 
 ## Решение
 
@@ -31,54 +31,32 @@ C:\Projects\
 
 ## Один раз за компьютером: настройка без изменения исходников InkOS
 
-1. В интерфейсе GitHub **создать пустой приватный** репозиторий, например `NeuralDao/inkos-workspace`. **Visibility = Private**, без шаблонных README/LICENSE/.gitignore (чтобы первый push был простым). Не менять приватность на Public впоследствии.
-2. В настройках установки **GitHub-приложения ChatGPT** предоставить новому репозиторию доступ, если он выдаётся выборочно. До первой загрузки рукописи попросить ChatGPT проверить, что он **видит репозиторий как приватный**. В данный момент такой репозиторий не создан/не подтверждён.
-3. Убедиться, что `C:\Projects\inkos-workspace` не является `C:\Projects\inkos` и не лежит внутри него. Если Studio уже использует другую папку с данными — **не перемещать и не удалять её вслепую**; подставить существующий проектный путь и сначала сохранить резервную копию. Если папки ещё нет, создать её через `New-Item -ItemType Directory -Path 'C:\Projects\inkos-workspace' -Force` **до** создания `.gitignore` и `git init`.
-4. В корне рабочего проекта создать **собственный** `.gitignore` (не копировать `.gitignore` публичного исходного репозитория):
+**Уже готово на GitHub (проверено через подключённое приложение):** `NeuralDao/inkos-workspace`, **Private**, ветка `main`, права ChatGPT read/write. `.gitignore` и `g1-run.md` находятся в приватном remote. **Не делать `git init` и не создавать второй первый commit:** достаточно клонировать этот репозиторий.
 
-```gitignore
-# Default deny at project root: no inkos.json, .inkos/, .env, logs, keys.
-/*
-!/.gitignore
-!/works/
-!/g1-run.md
-
-# Generated search/cache stores are rebuildable; SQLite sidecars can mutate
-# during a Studio operation and should never go into Git.
-/works/**/memory.db*
-/works/**/*.db
-/works/**/*.db-*
-/works/**/*.sqlite
-/works/**/*.sqlite-*
-/works/**/*.sqlite3
-/works/**/*.sqlite3-*
-
-# Defensive exclusions for accidental nested secrets and local dependencies.
-/works/**/.env
-/works/**/.env.*
-/works/**/secrets*
-/works/**/credentials*
-/works/**/api-key*
-/works/**/node_modules/
-/works/**/.cache/
-/works/**/tmp/
-```
-
-**Ограничение:** `.gitignore` фильтрует **пути, а не содержимое**. Секрет, случайно записанный *внутрь* главы, JSON-артефакта или prompt-trace, автоматически не обнаружится. Перед первой публикацией и перед каждым push нужно проверить `git diff --cached`; если обнаружен секрет — **не коммитить**, исправить локально и сменить ключ. Даже из приватной истории Git удалить секрет впоследствии непросто. Не использовать `git add -f` для обхода правил.
-
-5. После создания и проверки приватного remote, в PowerShell (`<URL>` заменить фактической HTTPS-ссылкой с GitHub, **без токена в URL**):
+**Локально, PowerShell 7:**
 
 ```powershell
 $workspace = 'C:\Projects\inkos-workspace'
-git -C $workspace init -b main
-git -C $workspace remote add origin https://github.com/NeuralDao/inkos-workspace.git
-git -C $workspace add -- .gitignore
-git -C $workspace diff --cached --name-only
-git -C $workspace commit -m "chore: initialize private InkOS workspace"
-git -C $workspace push -u origin main
+if (Test-Path -LiteralPath $workspace) {
+  Write-Warning 'Каталог уже существует. Не клонировать и не перезаписывать данные; сначала проверить его содержимое.'
+} else {
+  git clone https://github.com/NeuralDao/inkos-workspace.git $workspace
+}
 ```
 
-`git init` и push выполнять **только после проверки пути, приватности remote и сохранения резервной копии при наличии старых данных**. Эти команды не выполнены ChatGPT. Не использовать токены в аргументах или git remote URL.
+После успешного `clone`, проверить именно этот каталог:
+
+```powershell
+git -C 'C:\Projects\inkos-workspace' remote -v
+git -C 'C:\Projects\inkos-workspace' branch --show-current
+git -C 'C:\Projects\inkos-workspace' status --short
+```
+
+Ожидается `origin` с адресом **приватного** `NeuralDao/inkos-workspace`, ветка `main`, чистое дерево. Если `C:\Projects\inkos-workspace` уже существует, или Studio ранее работала с другой папкой, **не перемещать/перезаписывать данные**: выяснить фактический project root и наличие книг, сохранить резервную копию и только затем выбирать способ подключения.
+
+**Правило безопасной выгрузки:** текущая `.gitignore` фильтрует пути, **не содержимое**; даже приватному GitHub не должны передаваться ключи. `inkos.json`, `.inkos/secrets.json`, `.env*` остаются локальными, как и SQLite-проекции памяти. Перед публикацией сверять `git diff --cached` и фактический `remote`; скрипт ниже дополнительно проверяет характерные префиксы ключей, но не заменяет ручного просмотра.
+
+**Настройка Studio:** указать локальный `$workspace` как отдельный project root — `packages/studio/src/api/index.ts` читает сначала аргумент запуска, затем `INKOS_PROJECT_ROOT`, затем рабочий каталог процесса. Запущенный ранее процесс необходимо остановить перед корректным запуском с новым root. Сами команды запуска Studio и проверки требуют отдельного разрешения и сверки локальной установки; не пытаться создавать книгу, пока [PR #13](https://github.com/NeuralDao/inkos/pull/13) не прошёл согласованные проверки/приёмку и не интегрирован по решению владельца.
 
 ## Цикл G1: один завершённый шаг Studio → один Git checkpoint
 
