@@ -3,12 +3,13 @@
 **АКТУАЛЬНОЕ ОБНОВЛЕНИЕ — 31.10.2026: исправление OpenRouter reasoning подготовлено в отдельной ветке.**
 
 - `custom/main` подтверждена на `05a0f0dbbcd0a85f49c731ac1357083ab6b9d10a`; основная ветка не изменялась.
-- Task branch: `fix/g1-openrouter-reasoning-defaults`; кодовый commit: `7f9bb2a0ed7aef11ab6432db419c5f4fe8a21dfb`.
+- Task branch: `fix/g1-openrouter-reasoning-defaults`; кодовый commit: `7f9bb2a0ed7aef11ab6432db419c5f4fe8a21dfb`; docs commit / PR HEAD: `a1bcd0a7a4cae3486dc92d782e39db9642b3b2a6`.
+- Draft PR #15: https://github.com/NeuralDao/inkos/pull/15; Codex review pending.
 - Изменены `provider.ts` и `pi-stream.ts`; добавлен `openrouter-reasoning.test.ts`. SDK-generated `reasoning.effort=none` удаляется только для официального OpenRouter при отсутствии явного выбора; explicit `extra.reasoning` сохраняется. Политика применяется к прямым текстовым вызовам и общему Pi transport boundary (structured workers и sessions).
 - В execution evidence добавлены поля `reasoning`, `reasoning_effort`, `enable_thinking`.
 - DeepSeek V4 и MiniMax special handling, `thinkingBudget`, transport и retries не переписывались.
-- **Draft PR ещё не создан на момент этой записи.** Offline tests написаны, но не запускались. Build, typecheck, lint, Studio и реальные LLM/API — **NOT RUN**.
-- Следующий шаг: открыть draft PR, передать Codex на независимый review; затем пользовательская точечная offline-проверка. Merge — только по отдельному разрешению.
+- **Draft PR #15 открыт.** Offline tests написаны, но не запускались. Build, typecheck, lint, Studio и реальные LLM/API — **NOT RUN**.
+- Следующий шаг: независимый review Codex; затем пользовательская точечная offline-проверка. Merge — только по отдельному разрешению.
 
 **ИСТОРИЧЕСКАЯ ПЕРЕДАЧА ДО ИССЛЕДОВАНИЯ REASONING (31.10.2026; текущий статус см. выше):** [G1_HANDOFF_2026-10-31.md](./G1_HANDOFF_2026-10-31.md). Пользователь сообщил **новый реальный PASS для Xing4.0** после предыдущего FAILED smoke: in-memory `modelOverrides.architect` → `xingchen-agi/xing4.0-29b-a4b:free`, `ctx.model` корректен, `api=openai-responses`, API-key есть; один настоящий `runWorkerAgentTool(submit_foundation_cast_index)` с **двумя персонажами** (Anna major, Pavel minor) при `maxTokens=2048`, temperature 0.8 **PASS**, вернул точный typed `roles`. Ранний smoke на **трёх персонажах** для Xing и Dots — по **одному WORKER_MODEL_ERROR** без полной причины, не «3/3 FAIL». Следовательно, routing PASS, совместимость Xing **частично подтверждена (1 PASS + 1 FAIL в разных условиях)**; стабильность не проверена; Dots NOT VERIFIED. `modelOverrides` в Studio **не записаны**, стоимость последнего запроса **UNKNOWN**, новая Foundation **NOT RUN**, старый failed draft `works/последняя-ведомость` сохранён. Пользователь предпочёл **новую книгу с фиксированным отобранным стеком**, а не recovery/рефакторинг. Следующий шаг — повторить **исходный одинаковый 3-ролевой** synthetic test Xing с полной безопасной ошибкой при FAIL и сверкой Activity, затем проверить persistent override/readback и выбрать модель, **до** удаления draft или повторной генерации. Новый чат сначала читает handoff и указанный код; прежние статусы внизу — история.
 
