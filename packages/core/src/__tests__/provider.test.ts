@@ -37,6 +37,80 @@ describe("explicit alias limits", () => {
   });
 });
 
+describe("OpenRouter free-only G1 guard", () => {
+  const free = () => LLMConfigSchema.parse({
+    provider: "openai",
+    service: "openrouter",
+    baseUrl: "https://openrouter.ai/api/v1",
+    model: "openrouter/free",
+    apiKey: "fixture-key",
+  });
+
+  it("uses the built-in Responses transport and conservative free-router limits", () => {
+    const client = createLLMClient(free());
+    expect(client._piModel).toMatchObject({
+      id: "openrouter/free",
+      provider: "openrouter",
+      api: "openai-responses",
+      contextWindow: 200_000,
+      maxTokens: 8192,
+    });
+  });
+
+  it("blocks an explicitly paid model and auto router when G1 guard is enabled", () => {
+    vi.stubEnv("INKOS_OPENROUTER_FREE_ONLY", "1");
+    try {
+      expect(createLLMClient(free())._piModel?.id).toBe("openrouter/free");
+      expect(createLLMClient({ ...free(), model: "nvidia/nemotron-3-ultra:free" })._piModel?.id)
+        .toBe("nvidia/nemotron-3-ultra:free");
+      for (const model of ["openrouter/auto", "openai/gpt-4o"]) {
+        expect(() => createLLMClient({ ...free(), model })).toThrow(/INKOS_OPENROUTER_FREE_ONLY/);
+      }
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("rejects paid, off-service, and off-endpoint agent overrides before a request", () => {
+    vi.stubEnv("INKOS_OPENROUTER_FREE_ONLY", "1");
+    try {
+      const client = createLLMClient(free());
+      expect(() => clientWithModel(client, "openrouter/auto")).toThrow(/INKOS_OPENROUTER_FREE_ONLY/);
+      expect(() => clientWithModel(client, "openai/gpt-4o")).toThrow(/INKOS_OPENROUTER_FREE_ONLY/);
+      expect(() => clientWithModel(client, "openrouter/free", { service: "custom" })).toThrow(/INKOS_OPENROUTER_FREE_ONLY/);
+      expect(() => clientWithModel(client, "openrouter/free", { baseUrl: "https://other-router.example/v1" }))
+        .toThrow(/INKOS_OPENROUTER_FREE_ONLY/);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("rejects paid fallback and plugin payload options in guarded mode", () => {
+    vi.stubEnv("INKOS_OPENROUTER_FREE_ONLY", "1");
+    try {
+      for (const extra of [
+        { models: ["openai/gpt-4o"] },
+        { route: "fallback" },
+        { plugins: [{ id: "web" }] },
+      ]) {
+        expect(() => createLLMClient({ ...free(), extra })).toThrow(/extra models, route and plugins/);
+      }
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("does not restrict explicit paid models outside the opt-in G1 mode", () => {
+    vi.stubEnv("INKOS_OPENROUTER_FREE_ONLY", "0");
+    try {
+      expect(createLLMClient({ ...free(), model: "openrouter/auto" })._piModel?.id)
+        .toBe("openrouter/auto");
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+});
+
 // ── Mock @mariozechner/pi-ai ──────────────────────────────────────────────────
 // We intercept streamSimple so tests don't hit the network.
 
