@@ -46,20 +46,24 @@ describe("structured alias routing", () => {
     }));
     vi.stubEnv("INKOS_OPENROUTER_FREE_ONLY", "1");
     try {
-      const runner = new PipelineRunner({
+      const safe = new PipelineRunner({
         projectRoot: "",
         client: base,
         model: "openrouter/free",
-        modelOverrides: {
-          writer: "openrouter/auto",
-          auditor: { model: "openai/gpt-4o" },
-          composer: { model: "openrouter/free", baseUrl: "https://example.test/v1" },
-        },
+        modelOverrides: { writer: "openrouter/free", auditor: { model: "nvidia/nemotron-3-ultra:free" } },
       });
-      expect(runner.createAgentContext("planner").client._piModel?.id).toBe("openrouter/free");
-      expect(() => runner.createAgentContext("writer")).toThrow(/INKOS_OPENROUTER_FREE_ONLY/);
-      expect(() => runner.createAgentContext("auditor")).toThrow(/INKOS_OPENROUTER_FREE_ONLY/);
-      expect(() => runner.createAgentContext("composer")).toThrow(/INKOS_OPENROUTER_FREE_ONLY/);
+      expect(safe.createAgentContext("planner").client._piModel?.id).toBe("openrouter/free");
+      expect(safe.createAgentContext("writer").client._piModel?.id).toBe("openrouter/free");
+      expect(safe.createAgentContext("auditor").client._piModel?.id).toBe("nvidia/nemotron-3-ultra:free");
+      for (const blocked of [
+        { writer: "openrouter/auto" },
+        { auditor: { model: "openai/gpt-4o" } },
+        { composer: { model: "openrouter/free", baseUrl: "https://example.test/v1" } },
+      ]) {
+        expect(() => new PipelineRunner({
+          projectRoot: "", client: base, model: "openrouter/free", modelOverrides: blocked,
+        })).toThrow(/INKOS_OPENROUTER_FREE_ONLY/);
+      }
     } finally {
       vi.unstubAllEnvs();
     }
