@@ -3,12 +3,13 @@ import { Type, type Static } from "@mariozechner/pi-ai";
 import type { AgentTool, AgentToolResult, AgentToolUpdateCallback } from "@mariozechner/pi-agent-core";
 import type { PipelineRunner } from "../pipeline/runner.js";
 import { defaultChapterLength } from "../utils/length-metrics.js";
-import { mkdir, readFile, writeFile, readdir, rm, stat } from "node:fs/promises";
-import { basename, isAbsolute, join, resolve } from "node:path";
+import { mkdir, readFile, writeFile, readdir, rm, stat, lstat } from "node:fs/promises";
+import { basename, join, relative, resolve } from "node:path";
 import { StateManager } from "../state/manager.js";
 import { deleteLatestChapter } from "../state/chapter-delete.js";
 import { assertSafeBookId, deriveBookIdFromTitle } from "../utils/book-id.js";
-import { safeChildPath } from "../utils/path-safety.js";
+import { resolveModelReadPath } from "../utils/model-read-path.js";
+import { WorkResourceIdSchema } from "../harness/contracts.js";
 import { readArtifactRevision } from "../harness/artifact-reader.js";
 import { currentExecutionAuthorRequest } from "../harness/execution-evidence.js";
 import { createPlayPresentation } from "../play/play-presentation.js";
@@ -64,12 +65,32 @@ function textResult<T = undefined>(text: string, details?: T): AgentToolResult<T
   return { content: [{ type: "text", text }], details: details as T };
 }
 
-/**
- * Resolve a user-supplied relative path against the books root and guard
- * against path-traversal (../ etc.).
- */
-function safeBooksPath(booksRoot: string, relativePath: string): string {
-  return safeChildPath(booksRoot, relativePath);
+/** Establish a single Work source without resolving a linked ancestor. */
+async function checkedWorkSource(projectRoot: string, bookId: string): Promise<string> {
+  if (!WorkResourceIdSchema.safeParse(bookId).success) throw new Error("Invalid Work ID.");
+  let path = projectRoot;
+  for (const part of ["works", bookId, "source"]) {
+    path = join(path, part);
+    if ((await lstat(path)).isSymbolicLink()) throw new Error("Linked Work directory is not allowed.");
+  }
+  await resolveModelReadPath(projectRoot, projectRoot, join("works", bookId, "source"));
+  return path;
+}
+
+async function checkedWorkDirectory(projectRoot: string, base: string, subdir: string): Promise<string> {
+  const normalized = toPosixPath(subdir);
+  if (normalized.split("/").includes("..")) throw new Error("Directory traversal is not allowed.");
+  await resolveModelReadPath(projectRoot, base, normalized || ".");
+  let path = base;
+  for (const part of normalized.split("/").filter(part => part && part !== ".")) {
+    path = join(path, part);
+    if ((await lstat(path)).isSymbolicLink()) throw new Error("Linked directory is not allowed.");
+  }
+  return resolve(base, normalized || ".");
+}
+
+function deniedModelRead(error: unknown): boolean {
+  return (error as NodeJS.ErrnoException).code === "MODEL_FILE_ACCESS_DENIED";
 }
 
 function resolveToolBookId(
@@ -869,6 +890,9 @@ export function createIngestMaterialTool(projectRoot: string): AgentTool<typeof 
       _signal?: AbortSignal,
       onUpdate?: AgentToolUpdateCallback,
     ): Promise<AgentToolResult<unknown>> {
+      if (params.sourceKind === "file" && params.filePath) {
+        await resolveModelReadPath(projectRoot, projectRoot, params.filePath);
+      }
       onUpdate?.(textResult(params.sourceKind === "url"
         ? `Extracting URL: ${params.url ?? "(missing)"}`
         : `Extracting file: ${params.filePath ?? params.filename ?? "(missing)"}`));
@@ -1094,7 +1118,7 @@ const ImportChaptersParams = Type.Object({
     description: "Target book ID to import into. In active-book sessions, omit it to use the current active book; if provided, it must match the active book. In general chat there is no active book, so it is required and must be an existing book.",
   })),
   sourcePath: Type.Optional(Type.String({
-    description: "Local path of the chapter source: either the stored_path from the Uploaded Files block (project-relative, e.g. .inkos/uploads/<session>/novel.txt) or an absolute path on this machine that the user provided. A directory imports each .md/.txt file as one chapter in filename order; a single file is split into chapters automatically by heading lines.",
+    description: "Project-relative path of the chapter source, e.g. .inkos/uploads/<session>/novel.txt. A directory imports each .md/.txt file as one chapter in filename order; a single file is split into chapters automatically by heading lines.",
   })),
   sourceText: Type.Optional(Type.String({
     description: "Complete source text supplied by a deterministic host surface. Agent callers should prefer sourcePath for uploaded or long material.",
@@ -1160,11 +1184,9 @@ export function createImportChaptersTool(
         onUpdate?.(textResult(`Reading chapters from ${params.sourceName?.trim() || "inline source"}...`));
         chapters = [...splitChapters(sourceText, params.splitPattern)];
       } else {
-        const resolvedSourcePath = isAbsolute(sourcePath!)
-          ? sourcePath!
-          : resolve(projectRoot, sourcePath!);
+        const resolvedSourcePath = await resolveModelReadPath(projectRoot, projectRoot, sourcePath!);
         onUpdate?.(textResult(`Reading chapters from ${resolvedSourcePath}...`));
-        const source=await loadChapterSource(projectRoot,resolvedSourcePath,params.splitPattern,targetWork.lineage);
+        const source=await loadChapterSource(projectRoot,resolvedSourcePath,params.splitPattern,targetWork.lineage,true);
         chapters=source.chapters;sourceReferences=source.lineage;
       }
       if(sourceReferences.length){
@@ -1530,10 +1552,7 @@ export function createContinuationImportTool(
     label: "Import for Continuation",
     parameters: ContinuationImportParams,
     async execute(_toolCallId, params: ContinuationImportParamsType, signal, onUpdate) {
-      if (isAbsolute(params.sourcePath)) {
-        throw new Error("continuation_import.sourcePath must be project-relative. Upload the source first.");
-      }
-      const sourcePath = safeChildPath(projectRoot, params.sourcePath);
+      const sourcePath = await resolveModelReadPath(projectRoot, projectRoot, params.sourcePath);
       const state = new StateManager(projectRoot);
       const requestedBookId = params.bookId ?? activeBookId ?? undefined;
       let bookId: string;
@@ -1547,6 +1566,9 @@ export function createContinuationImportTool(
         }
         const book = buildAgentBookConfig({ ...params, title: params.title.trim() });
         const resumingDraft = await assertBookCreatable(projectRoot, book.id);
+        // Validate before preparing a Work, retaining a resumed draft's pinned revision.
+        const priorLineage = resumingDraft ? (await loadWorkManifest(projectRoot, book.id)).lineage : [];
+        await loadChapterSource(projectRoot, sourcePath, params.splitPattern, priorLineage, true);
         await pipeline.prepareDraftBook(book);
         bookId = book.id;
         created = true;
@@ -1561,7 +1583,7 @@ export function createContinuationImportTool(
         throw new Error(`Book "${bookId}" already has ${existingChapterCount} chapter(s); resumeFrom is required.`);
       }
       const targetWork=await loadWorkManifest(projectRoot,bookId);
-      const source=await loadChapterSource(projectRoot,sourcePath,params.splitPattern,targetWork.lineage);
+      const source=await loadChapterSource(projectRoot,sourcePath,params.splitPattern,targetWork.lineage,true);
       const chapters=source.chapters;
       if(source.lineage.length){
         const lineage=[...targetWork.lineage];
@@ -3047,21 +3069,12 @@ export class WorkFileNotFoundError extends Error {
   }
 }
 
-function resolveReadPath(readRoot: string, requestedPath: string, options: ReadToolOptions): string {
-  if (options.allowSystemPaths && isAbsolute(requestedPath)) {
-    return resolve(requestedPath);
-  }
-  return safeChildPath(readRoot, requestedPath);
-}
-
 export function createReadTool(
   projectRoot: string,
   options: ReadToolOptions = {},
 ): AgentTool<typeof ReadParams> {
   const readRoot = options.scope === "project" ? projectRoot : join(projectRoot, "works");
-  const description = options.allowSystemPaths
-    ? "Read a file. Relative paths resolve under works/; absolute paths read from the system filesystem."
-    : options.scope === "project"
+  const description = options.scope === "project"
       ? "Read a UTF-8 file inside the current InkOS project. Path is relative to the project root."
     : "Read a file from the Work store. Path is relative to works/.";
 
@@ -3099,9 +3112,9 @@ export function createReadTool(
           nextRead: endLine < lines.length ? { artifactId: artifact.id, workId, revisionId: revision.id, startLine: endLine + 1, lineCount: params.lineCount ?? 200 } : null,
         });
       }
-      const filePath = resolveReadPath(readRoot, params.path!, options);
       let content: string;
       try {
+        const filePath = await resolveModelReadPath(projectRoot, readRoot, params.path!);
         content = await readFile(filePath, "utf-8");
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code === "ENOENT") {
@@ -3208,8 +3221,6 @@ const GrepParams = Type.Object({
 });
 
 export function createGrepTool(projectRoot: string): AgentTool<typeof GrepParams> {
-  const worksRoot = join(projectRoot, "works");
-
   return {
     name: "grep",
     description:
@@ -3221,24 +3232,31 @@ export function createGrepTool(projectRoot: string): AgentTool<typeof GrepParams
       params: Static<typeof GrepParams>,
     ): Promise<AgentToolResult<undefined>> {
       try {
-        const bookDir = safeBooksPath(worksRoot, join(params.bookId, "source"));
+        const bookDir = await checkedWorkSource(projectRoot, params.bookId);
         const regex = new RegExp(params.pattern, "gi");
         const results: string[] = [];
 
         async function searchDir(dir: string, prefix: string) {
           let entries: string[];
           try {
-            entries = await readdir(dir);
-          } catch {
-            return; // directory doesn't exist
+            if ((await lstat(dir)).isSymbolicLink()) return;
+            const safeDir = await checkedWorkDirectory(projectRoot, bookDir, relative(bookDir, dir));
+            entries = await readdir(safeDir);
+          } catch (error) {
+            if ((error as NodeJS.ErrnoException).code === "ENOENT" || deniedModelRead(error)) return;
+            throw error;
           }
           for (const entry of entries) {
             const fullPath = join(dir, entry);
-            const entryStat = await stat(fullPath);
+            const entryStat = await lstat(fullPath);
+            if (entryStat.isSymbolicLink()) continue;
             if (entryStat.isDirectory()) {
               await searchDir(fullPath, `${prefix}${entry}/`);
             } else if (entry.endsWith(".md") || entry.endsWith(".txt") || entry.endsWith(".json")) {
-              const content = await readFile(fullPath, "utf-8");
+              let safePath: string;
+              try { safePath = await resolveModelReadPath(projectRoot, bookDir, relative(bookDir, fullPath)); }
+              catch (error) { if (deniedModelRead(error)) continue; throw error; }
+              const content = await readFile(safePath, "utf-8");
               const lines = content.split("\n");
               for (let i = 0; i < lines.length; i++) {
                 if (regex.test(lines[i])) {
@@ -3256,12 +3274,12 @@ export function createGrepTool(projectRoot: string): AgentTool<typeof GrepParams
         ]);
 
         if (results.length === 0) {
-          return textResult(`No matches for "${params.pattern}" in book "${params.bookId}".`);
+          return textResult("No matches found.");
         }
 
         return textResult(results.join("\n"));
       } catch (err) {
-        throw new Error(`Grep failed: ${err instanceof Error ? err.message : String(err)}`, { cause: err });
+        throw new Error("Grep failed.", { cause: err });
       }
     },
   };
@@ -3279,8 +3297,6 @@ const LsParams = Type.Object({
 });
 
 export function createLsTool(projectRoot: string): AgentTool<typeof LsParams> {
-  const worksRoot = join(projectRoot, "works");
-
   return {
     name: "ls",
     description: "List files in a Work source directory. Returns canonical project-relative paths that can be passed directly to workspace__read.",
@@ -3291,22 +3307,21 @@ export function createLsTool(projectRoot: string): AgentTool<typeof LsParams> {
       params: Static<typeof LsParams>,
     ): Promise<AgentToolResult<undefined>> {
       try {
-        const base = safeBooksPath(worksRoot, join(params.bookId, "source"));
+        const base = await checkedWorkSource(projectRoot, params.bookId);
         const subdir=toPosixPath(params.subdir??'').replace(/^source(?:\/|$)/u,'');
-        const target = subdir ? safeBooksPath(base, subdir) : base;
+        const target = await checkedWorkDirectory(projectRoot, base, subdir);
 
         const entries = await readdir(target);
         const details: string[] = [];
 
         for (const entry of entries) {
           const fullPath = join(target, entry);
-          try {
-            const entryStat = await stat(fullPath);
-            const suffix = entryStat.isDirectory() ? "/" : ` (${entryStat.size} bytes)`;
-            details.push(`${toPosixPath(join("works", params.bookId, "source", subdir, entry))}${suffix}`);
-          } catch {
-            details.push(toPosixPath(join("works", params.bookId, "source", subdir, entry)));
-          }
+          const entryStat = await lstat(fullPath);
+          if (entryStat.isSymbolicLink()) continue;
+          try { await resolveModelReadPath(projectRoot, base, relative(base, fullPath)); }
+          catch (error) { if (deniedModelRead(error)) continue; throw error; }
+          const suffix = entryStat.isDirectory() ? "/" : ` (${entryStat.size} bytes)`;
+          details.push(`${toPosixPath(join("works", params.bookId, "source", subdir, entry))}${suffix}`);
         }
 
         if (details.length === 0) {
@@ -3315,10 +3330,7 @@ export function createLsTool(projectRoot: string): AgentTool<typeof LsParams> {
 
         return textResult(details.join("\n"));
       } catch (err) {
-        throw new Error(
-          `Failed to list "${params.bookId}/${params.subdir ?? ""}": ${err instanceof Error ? err.message : String(err)}`,
-          { cause: err },
-        );
+        throw new Error("Failed to list Work directory.", { cause: err });
       }
     },
   };

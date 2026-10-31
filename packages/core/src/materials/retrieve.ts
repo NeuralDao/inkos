@@ -1,6 +1,6 @@
-import { readdir, readFile } from "node:fs/promises";
+import { readdir, readFile, lstat } from "node:fs/promises";
 import { join } from "node:path";
-import { safeChildPath } from "../utils/path-safety.js";
+import { resolveModelReadPath } from "../utils/model-read-path.js";
 import { toPosixPath } from "../utils/posix-path.js";
 import { MaterialAssetSchema, type MaterialAsset, type MaterialPurpose } from "./ingest.js";
 import {
@@ -39,7 +39,12 @@ export async function retrieveMaterials(
   const assets = await listMaterialAssets(projectRoot);
   const documents: SearchDocument[] = [];
   for (const asset of assets) {
-    const markdownPath = safeChildPath(projectRoot, asset.markdownPath);
+    const parts = toPosixPath(asset.markdownPath).split("/");
+    if (parts[0] !== ".inkos" || parts[1] !== "materials" || parts.length < 3
+      || parts.some(part => !part || part === "." || part === "..") || !parts.at(-1)!.toLowerCase().endsWith(".md")) {
+      throw Object.assign(new Error("Invalid material path."), { code: "MODEL_FILE_ACCESS_DENIED" });
+    }
+    const markdownPath = await materialFile(projectRoot, parts.slice(2).join("/"));
     const markdown = await readFile(markdownPath, "utf-8");
     const normalizedPath = toPosixPath(asset.markdownPath);
     splitMarkdownForSearch(markdown).forEach((segment, index) => {
@@ -88,6 +93,10 @@ async function listMaterialAssets(projectRoot: string): Promise<MaterialAsset[]>
   const materialsDir = join(projectRoot, ".inkos", "materials");
   let entries: string[] = [];
   try {
+    for (const path of [join(projectRoot, ".inkos"), materialsDir]) {
+      if ((await lstat(path)).isSymbolicLink()) throw Object.assign(new Error("Invalid material directory."), { code: "MODEL_FILE_ACCESS_DENIED" });
+    }
+    await resolveModelReadPath(projectRoot, projectRoot, ".inkos/materials");
     entries = await readdir(materialsDir);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
@@ -96,10 +105,22 @@ async function listMaterialAssets(projectRoot: string): Promise<MaterialAsset[]>
   const assets: MaterialAsset[] = [];
   for (const entry of entries) {
     if (!entry.endsWith(".json")) continue;
-    const raw = await readFile(join(materialsDir, entry), "utf-8");
+    const raw = await readFile(await materialFile(projectRoot, entry), "utf-8");
     assets.push(MaterialAssetSchema.parse(JSON.parse(raw)));
   }
   return assets;
+}
+
+async function materialFile(projectRoot: string, relativePath: string): Promise<string> {
+  const materialsDir = join(projectRoot, ".inkos", "materials");
+  const safePath = await resolveModelReadPath(projectRoot, materialsDir, relativePath);
+  let path = materialsDir;
+  for (const part of relativePath.split(/[\\/]/u)) {
+    path = join(path, part);
+    if ((await lstat(path)).isSymbolicLink()) throw Object.assign(new Error("Invalid material path."), { code: "MODEL_FILE_ACCESS_DENIED" });
+  }
+  if (!(await lstat(path)).isFile()) throw Object.assign(new Error("Invalid material path."), { code: "MODEL_FILE_ACCESS_DENIED" });
+  return safePath;
 }
 
 function normalizeLimit(limit: number | undefined): number {
