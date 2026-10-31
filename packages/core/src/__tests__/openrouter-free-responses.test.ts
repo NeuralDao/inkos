@@ -49,6 +49,13 @@ const context: Context = {
   tools: [{ name: "submit_g1", description: "Submit a synthetic result.", parameters: Type.Object({ ok: Type.Boolean() }) }],
 };
 
+// Pi's SimpleStreamOptions does not declare InkOS's toolChoice extension.
+// A typed variable preserves the runtime option without an excess-property error.
+const requiredToolOptions: SimpleStreamOptions & { readonly toolChoice: "required" } = {
+  toolChoice: "required",
+  maxTokens: 256,
+};
+
 function freeResponsesModel(): Model<Api> {
   const client = createLLMClient(LLMConfigSchema.parse({
     provider: "openai",
@@ -89,7 +96,7 @@ describe("OpenRouter free: offline Responses structured boundary", () => {
 
     const model = freeResponsesModel();
     expect(model.api).toBe("openai-responses");
-    const response = await guardedPiStream(model, context, { toolChoice: "required", maxTokens: 256 }, 0).result();
+    const response = await guardedPiStream(model, context, requiredToolOptions, 0).result();
 
     expect(fakeStreamSimple).toHaveBeenCalledTimes(1);
     expect(outbound).toHaveLength(1);
@@ -106,7 +113,7 @@ describe("OpenRouter free: offline Responses structured boundary", () => {
       ...context,
       messages: [{ role: "user", content: "Synthetic oversized input. ".repeat(2000), timestamp: 1 }],
     };
-    expect(() => guardedPiStream(model, oversized, { toolChoice: "required", maxTokens: 256 }, 0))
+    expect(() => guardedPiStream(model, oversized, requiredToolOptions, 0))
       .toThrow(/InkOS context window guard/);
     expect(fakeStreamSimple).not.toHaveBeenCalled();
   });
@@ -123,7 +130,7 @@ describe("OpenRouter free: offline Responses structured boundary", () => {
       });
       return stream;
     });
-    const response = await guardedPiStream(freeResponsesModel(), context, { toolChoice: "required", maxTokens: 256 }, 0).result();
+    const response = await guardedPiStream(freeResponsesModel(), context, requiredToolOptions, 0).result();
     expect(response.stopReason).toBe("length");
     expect(response.content.some(part => part.type === "toolCall")).toBe(false);
     expect(fakeStreamSimple).toHaveBeenCalledTimes(1);
@@ -141,7 +148,7 @@ describe("OpenRouter free: offline Responses structured boundary", () => {
       return stream;
     });
 
-    const response = await guardedPiStream(freeResponsesModel(), context, { toolChoice: "required", maxTokens: 256 }, 0).result();
+    const response = await guardedPiStream(freeResponsesModel(), context, requiredToolOptions, 0).result();
     expect(fakeStreamSimple).toHaveBeenCalledTimes(1);
     expect(response.stopReason).toBe("error");
     expect(response.errorMessage).toMatch(/required tool call/);
