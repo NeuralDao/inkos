@@ -98,10 +98,15 @@
 - **Языковая граница:** `ArchitectAgent.generateFoundation()` выбирает prompt language из `book.language`. Harness использует `language=en`, `narrativeLanguage=ru`; тест проверяет полный протокол и story architecture, но не русскую прозу.
 - Пользователь разрешил три full Architect API runs, однако они пока **NOT RUN**. Для harness не запускались `node --check`, build/typecheck/tests. Core dist должен соответствовать уже собранному пользователем code HEAD `ee4c57e`.
 
-PowerShell (по одному запуску за раз):
+PowerShell: сначала `node --check scripts/g1-architect-dry-run.mjs` и проверка наличия `packages/core/dist/index.js`; затем выполнить **только первый** live run. После анализа отчёта и Activity переходить к следующей модели.
 
 ```powershell
 node scripts/g1-architect-dry-run.mjs --model nvidia/nemotron-3.5-super-vl:free
+```
+
+Следующие кандидаты — отдельными запусками после review:
+
+```powershell
 node scripts/g1-architect-dry-run.mjs --model xingchen-agi/xing4.0-29b-a4b:free
 node scripts/g1-architect-dry-run.mjs --model cohere/north-mini-code:free
 ```
