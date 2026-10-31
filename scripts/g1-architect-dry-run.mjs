@@ -312,6 +312,8 @@ async function main() {
         preparedRequests: 0,
         completed: [],
         retries: [],
+        startedAt: null,
+        preparedAt: [],
       });
     }
     return calls.get(key);
@@ -327,6 +329,7 @@ async function main() {
       const tools = Array.isArray(context.tools) ? context.tools : [];
 
       call.model = data.model ?? call.model;
+      call.startedAt = new Date().toISOString();
       call.toolNames = tools
         .map((tool) => tool?.name)
         .filter((name) => typeof name === "string" && name.length > 0);
@@ -350,6 +353,7 @@ async function main() {
       call.api = data.api ?? call.api;
       call.parameters = data.parameters ?? call.parameters;
       call.preparedRequests += 1;
+      call.preparedAt.push(new Date().toISOString());
       preparedRequests += 1;
 
       console.log(
@@ -369,6 +373,7 @@ async function main() {
       const call = ensureCall(data.modelCallId);
       const response = data.response && typeof data.response === "object" ? data.response : {};
       const completion = {
+        completedAt: new Date().toISOString(),
         status: data.status ?? null,
         reportedModel: response.model ?? null,
         reportedProvider: response.provider ?? null,
@@ -530,6 +535,9 @@ async function main() {
       narrativeLanguage: book.narrativeLanguage,
     },
     languageNote: "ArchitectAgent.generateFoundation currently selects its prompt language from book.language. This run uses operational English with narrativeLanguage=ru; it tests the real four-stage Architect protocol, not Russian prose quality.",
+    passDefinition: "PASS means generateFoundation returned a non-empty, schema-accepted foundation with the expected output fields. It is not a judgment of literary quality or Russian prose.",
+    servingNote: "reportedProvider/reportedModel are values exposed by the model response, not guaranteed OpenRouter serving metadata. Match call timestamps with OpenRouter Activity for actual provider, serving ID, and cost.",
+    usageNote: "Usage sums every observed model-call-completed response, including failed/retried attempts when the provider returned usage. It is token usage, not price.",
     syntheticBrief: SYNTHETIC_BRIEF,
     status,
     validation,
@@ -545,11 +553,17 @@ async function main() {
     error,
   };
 
-  await mkdir(reportDir, { recursive: true });
-  const stamp = finishedAt.replace(/[:.]/g, "-");
-  const modelSlug = modelId.replace(/[^A-Za-z0-9.-]+/g, "-");
-  const reportPath = join(reportDir, stamp + "-" + modelSlug + ".json");
-  await writeFile(reportPath, JSON.stringify(report, null, 2) + "\n", "utf8");
+  let reportPath = null;
+  let reportWriteError = null;
+  try {
+    await mkdir(reportDir, { recursive: true });
+    const stamp = finishedAt.replace(/[:.]/g, "-");
+    const modelSlug = modelId.replace(/[^A-Za-z0-9.-]+/g, "-");
+    reportPath = join(reportDir, stamp + "-" + modelSlug + ".json");
+    await writeFile(reportPath, JSON.stringify(report, null, 2) + "\n", "utf8");
+  } catch (writeError) {
+    reportWriteError = safeText(writeError?.message ?? writeError);
+  }
 
   console.log("RESULT: " + status);
   console.log("STAGE EVIDENCE COMPLETE: " + String(stageEvidenceComplete));
@@ -565,9 +579,13 @@ async function main() {
     );
   }
   if (error) console.log("ERROR: " + JSON.stringify(error));
-  console.log("REPORT: " + reportPath);
+  if (reportPath) console.log("REPORT: " + reportPath);
+  if (reportWriteError) {
+    console.error("REPORT WRITE FAIL: " + reportWriteError);
+    process.exitCode = 2;
+  }
 
-  if (status !== "PASS") process.exitCode = 1;
+  if (status !== "PASS" && process.exitCode !== 2) process.exitCode = 1;
 }
 
 main().catch((error) => {
