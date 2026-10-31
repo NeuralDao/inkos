@@ -56,6 +56,24 @@ git -C 'C:\Projects\inkos-workspace' status --short
 
 **Правило безопасной выгрузки:** текущая `.gitignore` фильтрует пути, **не содержимое**; даже приватному GitHub не должны передаваться ключи. `inkos.json`, `.inkos/secrets.json`, `.env*` остаются локальными, как и SQLite-проекции памяти. Перед публикацией сверять `git diff --cached` и фактический `remote`; скрипт ниже дополнительно проверяет характерные префиксы ключей, но не заменяет ручного просмотра.
 
+**Инициализация нового проекта до запуска Studio:** в `packages/cli/src/commands/studio.ts` запуск `inkos studio --project <path>` автоматически создаёт `inkos.json` при его отсутствии, но сейчас задаёт `language: zh`. Для G1 явно создать рабочую конфигурацию **`en`** через CLI `inkos init --lang en` в корне именно `inkos-workspace`, до первого запуска Studio. `packages/cli/src/project-bootstrap.ts` проверяет отсутствие `inkos.json` и не перезаписывает существующий проект; добавляет служебные файлы (`.env`, `.nvmrc`, `.node-version`) и дополняет существующий `.gitignore`, поэтому после инициализации необходимо ещё раз проверить tracked diff. **Это локальная конфигурационная операция, а не запуск генерации или LLM API.**
+
+```powershell
+$workspace = 'C:\Projects\inkos-workspace'
+$cli = 'C:\Projects\inkos\packages\cli\dist\index.js'
+if (-not (Test-Path -LiteralPath $cli -PathType Leaf)) {
+  Write-Warning 'CLI dist не найден. Не запускать install/build без отдельного согласования; проверить локальную установку.'
+} elseif (Test-Path -LiteralPath (Join-Path $workspace 'inkos.json')) {
+  Write-Warning 'inkos.json уже существует; не перезаписывать.'
+} else {
+  Push-Location -LiteralPath $workspace
+  try { node $cli init --lang en } finally { Pop-Location }
+}
+git -C $workspace status -sb
+```
+
+После этого конфигурацию сервиса OpenRouter и ключ заполнять через штатный интерфейс Studio **только локально**. `inkos.json` нельзя добавлять в Git независимо от его содержимого, `.inkos/secrets.json` также остаётся локальным.
+
 **Настройка Studio:** указать локальный `$workspace` как отдельный project root — `packages/studio/src/api/index.ts` читает сначала аргумент запуска, затем `INKOS_PROJECT_ROOT`, затем рабочий каталог процесса. Запущенный ранее процесс необходимо остановить перед корректным запуском с новым root. Сами команды запуска Studio и проверки требуют отдельного разрешения и сверки локальной установки; не пытаться создавать книгу, пока [PR #13](https://github.com/NeuralDao/inkos/pull/13) не прошёл согласованные проверки/приёмку и не интегрирован по решению владельца.
 
 ## Цикл G1: один завершённый шаг Studio → один Git checkpoint
