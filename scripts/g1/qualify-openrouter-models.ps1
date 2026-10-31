@@ -41,89 +41,23 @@ $branch = Invoke-GitText -Arguments @("branch", "--show-current")
 $head = Invoke-GitText -Arguments @("rev-parse", "HEAD")
 $sourceHead = Invoke-GitText -Arguments @("rev-parse", "--verify", $ExpectedSourceRef)
 
-# The local branch name is not itself a safety boundary: a task branch is
-# acceptable when every execution-critical source/config path is clean and
-# byte-for-byte equal to the explicitly selected source ref below.
-$corePaths = @(
-    "package.json",
-    "pnpm-lock.yaml",
-    "pnpm-workspace.yaml",
-    "packages/core/package.json",
-    "packages/core/src/agent/worker-agent.ts",
-    "packages/core/src/agent/pi-stream.ts",
-    "packages/core/src/pipeline/runner.ts",
-    "packages/core/src/llm/provider.ts",
-    "packages/core/src/agents/architect-tool.ts",
-    "packages/core/src/utils/config-loader.ts",
-    "packages/core/src/utils/effective-llm-config.ts",
-    "packages/core/src/harness/execution-evidence.ts",
-    "packages/core/src/index.ts"
-)
-
-$dirtyCore = Invoke-GitText -Arguments (@("status", "--porcelain", "--") + $corePaths)
-if ($dirtyCore) {
-    throw ("Core source has local changes. Review them before running: " + $dirtyCore)
+$provenanceScriptPath = Join-Path $PSScriptRoot "core-build-provenance.ps1"
+if (-not (Test-Path -LiteralPath $provenanceScriptPath -PathType Leaf)) {
+    throw "Core build provenance script is missing: $provenanceScriptPath"
 }
 
-$diffArguments = @("diff", "--quiet", $head, $ExpectedSourceRef, "--") + $corePaths
-& git -C $ResolvedRepo @diffArguments
-$diffExitCode = $LASTEXITCODE
-if ($diffExitCode -eq 1) {
-    throw "Core source at local HEAD differs from $ExpectedSourceRef. Update/reconcile the local source before running."
-}
-if ($diffExitCode -ne 0) {
-    throw "Git could not compare Core source against $ExpectedSourceRef (exit $diffExitCode)."
+$expectedProvenanceBlob = "cd51c496fe8981851217fe867fef882a68ff8295"
+$actualProvenanceBlob = Invoke-GitText -Arguments @("hash-object", "--", $provenanceScriptPath)
+if ($actualProvenanceBlob -ne $expectedProvenanceBlob) {
+    throw "Core build provenance script integrity check failed: $actualProvenanceBlob"
 }
 
-Write-Host "Source verification: branch '$branch' is accepted because all protected source/config paths are clean and match $ExpectedSourceRef at $sourceHead."
-
-$distPaths = @(
-    "packages/core/dist/index.js",
-    "packages/core/dist/agent/worker-agent.js",
-    "packages/core/dist/agent/pi-stream.js",
-    "packages/core/dist/pipeline/runner.js",
-    "packages/core/dist/llm/provider.js",
-    "packages/core/dist/agents/architect-tool.js",
-    "packages/core/dist/harness/execution-evidence.js"
-)
-
-$distHashes = @()
-foreach ($relativePath in $distPaths) {
-    $fullPath = Join-Path $ResolvedRepo $relativePath
-    if (-not (Test-Path -LiteralPath $fullPath -PathType Leaf)) {
-        throw "Required built Core file is missing: $fullPath. This script does not run build."
-    }
-
-    $hash = Get-FileHash -LiteralPath $fullPath -Algorithm SHA256
-    $distHashes += [pscustomobject]@{
-        path = $relativePath
-        sha256 = $hash.Hash.ToLowerInvariant()
-    }
+$buildEvidence = & $provenanceScriptPath -Mode Verify -RepoRoot $ResolvedRepo -ExpectedSourceRef $ExpectedSourceRef
+if (-not $buildEvidence -or $buildEvidence.status -ne "BUILD_PROVENANCE_VERIFIED") {
+    throw "Core build provenance verification did not return a verified result."
 }
+$distHashes = @($buildEvidence.distFiles)
 
-# Prove that the local dist contains the G1 free-only guard merged by PR #13.
-# Timestamps alone are not sufficient build provenance.
-$requiredDistMarkers = @(
-    [pscustomobject]@{
-        path = "packages/core/dist/llm/provider.js"
-        marker = "INKOS_OPENROUTER_FREE_ONLY=1: only free OpenRouter models are allowed"
-    },
-    [pscustomobject]@{
-        path = "packages/core/dist/agent/worker-agent.js"
-        marker = "assertOpenRouterFreeOnly"
-    },
-    [pscustomobject]@{
-        path = "packages/core/dist/pipeline/runner.js"
-        marker = "INKOS_OPENROUTER_FREE_ONLY"
-    }
-)
-foreach ($check in $requiredDistMarkers) {
-    $fullPath = Join-Path $ResolvedRepo $check.path
-    $distContent = Get-Content -LiteralPath $fullPath -Raw
-    if (-not $distContent.Contains($check.marker)) {
-        throw "Built Core dist does not contain the expected PR #13 marker '$($check.marker)' in $($check.path). Rebuild is required; this script does not run build."
-    }
-}
 
 $nodeVersion = & node --version
 if ($LASTEXITCODE -ne 0) {
@@ -140,6 +74,9 @@ Write-Host "=== LOCAL SOURCE PRECHECK ==="
     comparedSourceRef = $ExpectedSourceRef
     comparedSourceHead = $sourceHead
     coreSourceMatches = $true
+    buildSourceCommit = $buildEvidence.sourceCommit
+    expectedSourceCommit = $buildEvidence.expectedSourceCommit
+    buildScriptSha256 = $buildEvidence.buildScriptSha256
     node = $nodeVersion
     scriptCommit = $scriptCommit
     scriptSha256 = $scriptHash
