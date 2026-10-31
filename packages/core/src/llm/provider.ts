@@ -334,7 +334,33 @@ export interface LLMClient {
 
 // === Factory ===
 
+/**
+ * Opt-in G1 guard: fail before an HTTP request if any agent (including a
+ * model override) resolves to a paid model or another service. The normal
+ * OpenRouter model selection remains unrestricted when the guard is disabled.
+ *
+ * Enable with INKOS_OPENROUTER_FREE_ONLY=1 in the InkOS process environment.
+ */
+function assertOpenRouterFreeOnly(config: LLMConfig): void {
+  if (process.env.INKOS_OPENROUTER_FREE_ONLY !== "1") return;
+  const id = config.model.toLowerCase();
+  const isFree = id === "openrouter/free" || id.endsWith(":free");
+  const endpoint = config.baseUrl || "https://openrouter.ai/api/v1";
+  const isOfficialOpenRouter = new URL(endpoint).origin === "https://openrouter.ai";
+  if (config.service !== "openrouter" || !isOfficialOpenRouter || !isFree) {
+    throw new Error(
+      `INKOS_OPENROUTER_FREE_ONLY=1: only free OpenRouter models are allowed (got service=${config.service}, model=${config.model}).`,
+    );
+  }
+  // OpenRouter's multi-model fallbacks and plugins may route or bill
+  // independently of the primary free model, so disable them in G1 mode.
+  if (config.extra && ["models", "route", "plugins"].some(key => key in config.extra!)) {
+    throw new Error("INKOS_OPENROUTER_FREE_ONLY=1: extra models, route and plugins are not allowed.");
+  }
+}
+
 export function createLLMClient(config: LLMConfig): LLMClient {
+  assertOpenRouterFreeOnly(config);
   const _earlyCard = lookupModel(config.service ?? "custom", config.model);
   const defaults = {
     temperature: config.temperature ?? 0.7,
