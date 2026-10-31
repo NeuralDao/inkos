@@ -1,24 +1,143 @@
 # G1 — OpenRouter: текущая стратегия выбора моделей
 
-**РЕШЕНИЕ И ТЕСТЫ НА 31.10.2026 (ПРИОРИТЕТ НАД ОСТАЛЬНЫМ ТЕКСТОМ):** после реального отказа Foundation при динамическом `openrouter/free` пользователь **отказался от него как рабочего G1-стека**; отбираем **конкретные бесплатные `:free` IDs** и проверяем `modelOverrides` до новой книги. При `INKOS_OPENROUTER_FREE_ONLY=1`, `openai-responses`, `modelOverrides.architect` **in-memory routing PASS** для `xingchen-agi/xing4.0-29b-a4b:free` и `dots-studio/dots-3-note-preview:free`. Первые реальные синтетические вызовы `submit_foundation_cast_index` с **3 персонажами** у обоих закончились **одним WORKER_MODEL_ERROR** каждый, причины неизвестны. Затем **Xing4.0 успешно выполнил один короткий отдельный вызов с 2 персонажами**, вернул валидные `roles` при `maxTokens=2048`; это **частичная совместимость**, НЕ проверенная повторяемость и НЕ прохождение исходного 3-ролевого теста. Dots не доказан. **Сохранение Studio modelOverrides, Writer/Reviser и второй Foundation НЕ ЗАПУСКАЛИСЬ**. Прежние рекомендации ниже «G1 только на `openrouter/free`», «API ещё не было», «checkModel не исправлен» **устарели**, не применять. Новая точка входа: [G1_HANDOFF_2026-10-31.md](./G1_HANDOFF_2026-10-31.md).
+**АКТУАЛЬНОЕ УТОЧНЕНИЕ 31.10.2026 — reasoning fix и fixed-free qualification:** PR #15 прошёл статический review ACCEPT; пользователь сообщил целевой Vitest **10/10 PASS**, Core typecheck **PASS** и Core build **PASS** на code HEAD ee4c57e496db561b3d0ad9675d604a886e950941. На одном и том же трёхперсонажном `submit_foundation_cast_index` synthetic smoke теперь **3 PASS**: Nemotron 3.5 Super VL (470/125 tokens), Xing4.0 (404/122), Cohere North Mini Code (190/305). Все три вернули Anna major, Pavel minor, Irina minor; суммарно 1616 tokens. Nemotron 3 Ultra — MODEL_REQUIRED_TOOL_MISSING; Gemma 4 — upstream 429. Три PASS подтверждают базовую совместимость fixed IDs с обязательным structured tool call, но не полный `ArchitectAgent.generateFoundation()`, повторяемость или литературное качество. PR #15 открыт и не объединён.
+
+Фикс подготовлен в ветке `fix/g1-openrouter-reasoning-defaults`, [draft PR #15](https://github.com/NeuralDao/inkos/pull/15). Codex исправил два замечания (реальный выбор Chat Completions в тесте; удаление только точной формы `{effort:"none"}`). Повторный статический review ChatGPT: **ACCEPT по коду**. Пользовательский целевой Vitest: **10/10 PASS**; Core typecheck после исправления fetch mock — **PASS по сообщению пользователя**. Implementation commit `7f9bb2a0ed7aef11ab6432db419c5f4fe8a21dfb`; Codex correction commit `35eb7c28ddeb209857fb59380f5aa3144b23947a`; type fix `4f5aa4999eb3816d7dd701c55b6447ab35dee6f5`.
+
+Ограничение: Pi Agent не различает неустановленный уровень и `thinkingLevel="off"` — оба представлены как `reasoning: undefined`. В текущей InkOS схеме нет отдельного поля `thinkingLevel`; явное отключение на уровне provider config остаётся доступным через `extra.reasoning: { effort: "none" }` и сохраняется. Не считать UI-level off гарантированно сохранённым, если такой интерфейс появится в будущем без отдельного контракта.
+
+**Локальная проверка:** пользователь сообщил целевой Vitest openrouter-reasoning.test.ts **10/10 PASS**, Core pnpm exec tsc --noEmit **PASS** и pnpm --filter @actalk/inkos-core build **PASS** на ee4c57e496db561b3d0ad9675d604a886e950941. ChatGPT не запускал эти команды самостоятельно. Lint, E2E и полный Studio smoke — **NOT RUN**. Пять live synthetic structured-tool smoke описаны ниже (три PASS, два FAIL/blocked). Merge PR #15 — только по отдельному разрешению.
+
+**РЕШЕНИЕ И ТЕСТЫ НА 31.10.2026 (ПРИОРИТЕТ НАД ОСТАЛЬНЫМ ТЕКСТОМ):** динамический `openrouter/free` не использовать как рабочий G1-стек; отбираем конкретные `:free` IDs через существующий `modelOverrides`. Текущий одинаковый трёхперсонажный `submit_foundation_cast_index` synthetic smoke дал **3 PASS**: Nemotron 3.5 Super VL, Xing4.0 и Cohere North Mini Code. Ранее Xing на этом fixture получил 429, но последующий PASS показывает, что тот отказ не доказывал несовместимость. Nemotron 3 Ultra получил `MODEL_REQUIRED_TOOL_MISSING`; Gemma 4 — upstream 429; Dots остаётся HOLD. Эти результаты подтверждают только прямой structured-tool контракт, не полный Architect pipeline и не литературное качество. **Persistent Studio overrides, Writer/Reviser и новая Foundation НЕ ЗАПУСКАЛИСЬ**. Новая точка входа: [G1_HANDOFF_2026-10-31.md](./G1_HANDOFF_2026-10-31.md).
+
+## Новое испытание: Nemotron 3 Ultra fixed ID (31.10.2026)
+
+Пользователь запустил synthetic harness на локальном Core из ee4c57e496db561b3d0ad9675d604a886e950941, с INKOS_OPENROUTER_FREE_ONLY=1, проектом Studio C:\Projects\inkos-workspace и временным in-memory modelOverrides.architect:
+
+- Requested/resolved/PI model: nvidia/nemotron-3-ultra-550b-a55b:free.
+- Preflight: **PASS** — service openrouter, openai-responses, официальный endpoint, ключ присутствует.
+- Structured call: **FAIL** — MODEL_REQUIRED_TOOL_MISSING, stopReason=error, resultTool=submit_foundation_cast_index, attempts=1.
+- Результат трёхперсонажного cast index не получен. CSV Activity содержит две соседние записи, с высокой вероятностью соответствующие initial + tool-missing retry: `gen-1793479843-1bvpeVlPRj9ZZ4QiL1G5` (20:50:43.703) и `gen-1793479846-PlJJdLK83qw3WW3zhvGt` (20:50:46.484). Обе обслужены `Nvidia`, фактический serving ID `nvidia/nemotron-3-ultra-550b-a55b-20260604`, variant `free`; обе завершились `stop`, не `tool_calls`. На каждую: 470 prompt tokens; completion 194 и 176; reasoning 148 и 126. Итого по паре: 940 prompt / 370 completion / 274 reasoning; cost_total **$0.00**.
+- Это один логический вызов worker, а не три независимые попытки. По коду packages/core/src/agent/pi-stream.ts guardedPiStream делает один transport retry при отсутствии обязательного tool call; после повторного ответа без tool call локальный observeModelStream формирует MODEL_REQUIRED_TOOL_MISSING. Следовательно, attempts=1 в worker не является количеством HTTP-запросов; Activity должна подтвердить число фактических запросов (ожидается initial + один retry).
+- Код ошибки **не является HTTP 400/429** и не доказывает, что модель вообще не умеет function calling. Он означает, что завершённый ответ не содержал требуемого tool call после исчерпания одного transport retry.
+- В более широкой Activity-выгрузке для этого serving ID есть 55 генераций: 30 с `tool_calls`, 19 с `stop`, 1 cancelled и 6 без finish reason; общий cost_total $0. Это показывает, что Nemotron 3 Ultra в других запросах вызывал инструменты, но не отменяет отказ именно на `submit_foundation_cast_index` с обязательным tool call. Общие 55 записей нельзя считать одним тестом или одной ролью.
+- Конфигурация inkos.json, сохранённые Studio overrides и существующий Work не изменялись; новая книга не создавалась. В запросе были только синтетические имена.
+
+**Статус кандидата:** Nemotron 3 Ultra — **NOT QUALIFIED** для Architect по точному трёхперсонажному `submit_foundation_cast_index` (routing PASS; две генерации завершились `stop` без tool call). При этом Activity подтверждает общее использование tools в других запросах (30/55); говорить о полной неспособности модели к function calling нельзя. Не повторять автоматически и не назначать постоянный override.
+
+## Новое испытание: Gemma 4 26B A4B fixed ID (31.10.2026)
+
+Пользователь запустил тот же ограниченный synthetic Architect harness с in-memory modelOverrides.architect и точным ID google/gemma-4-26b-a4b-it:free:
+
+- Requested/resolved/PI model: google/gemma-4-26b-a4b-it:free.
+- Preflight: **PASS** — service openrouter, apiFormat responses, piApi openai-responses, API key присутствует.
+- Structured submit_foundation_cast_index: **FAIL** — WORKER_MODEL_ERROR; causeChain: Error / code WORKER_MODEL_ERROR / message 429 Provider returned error; attempts=1; stopReason=error; usage=null.
+- Это отказ провайдера до получения пригодного structured результата. Tool calling **NOT VERIFIED**; результат трёхперсонажного fixture не получен.
+- В packages/core/src/llm/provider.ts на code HEAD ee4c57e реализован guardAssistantMessageStream с TRANSIENT_LLM_RETRIES=2. HTTP 429 без видимых stream events распознаётся как transient и повторяется с backoff 800 мс и 1600 мс; следовательно, при одинаковом 429 на каждом ответе один worker turn может содержать до трёх upstream HTTP requests. attempts=1 — один Agent model turn, не число HTTP-запросов. Точное число и serving provider подтвердить OpenRouter Activity.
+- usage=null не означает нулевой расход: worker не вызывает onUsage для неуспешного structured результата. Токены и стоимость **UNKNOWN**.
+- CSV Activity (213 строк, 2026-10-31 14:02:35–20:50:46, API key `InkOS-G1`) не содержит ни одной записи с Gemma в `model_permaslug`. Поэтому он не подтверждает фактическое число HTTP-попыток, serving provider/model, usage или cost для этого 429. Код допускает до трёх upstream requests в одном worker turn (initial + два transient retry), но фактическое число из этой выгрузки **UNKNOWN**. Отсутствие generation row не доказывает $0 и не позволяет браковать tool calling. Не повторять немедленно и не делать циклических smoke.
+- Использовались только синтетические данные; persistent Studio overrides и старый Work не менялись.
+
+**Исторический статус до следующих smoke:** Gemma 4 — **BLOCKED / NOT QUALIFIED** по причине provider 429; способность выполнять tools не проверена. Activity для Gemma не содержит generation rows. На тот момент следующий кандидат был Nemotron 3.5 Super VL; его direct smoke теперь выполнен успешно (см. разделы ниже). Сводка Activity по Super VL (47 rows, 35 `tool_calls`, 12 `length`) не содержит requested model ID, имён tools или task labels и не позволяет сопоставить отдельные вызовы с этим smoke.
+
+## Где находятся логи InkOS и что сохранил текущий smoke
+
+- Studio text log: `<projectRoot>\inkos.log`; экран Studio **Logs** вызывает `GET /api/v1/logs`, который читает только последние 100 строк этого файла. Для проекта из текущего эксперимента путь ожидается `C:\Projects\inkos-workspace\inkos.log`. В проверенном `server.ts` endpoint только читает файл; он не создаёт и не заполняет его. Logger helper имеет stderr/JSONL sinks, но в direct harness их подключение к `inkos.log` не выполняется.
+- Work execution history: `<projectRoot>\.inkos\harness.sqlite`; Studio Work Inspector показывает список Episodes и их events. API: `GET /api/v1/episodes?limit=100`, затем `GET /api/v1/episodes/:id`; UI: открыть Work → Execution history → выбрать Episode.
+- Direct model smoke из текущего эксперимента вызвал `PipelineRunner.createAgentContext()` и `runWorkerAgentTool()` напрямую. Он не запускал `CreativeHarnessRuntime.startEpisode/executeAction`, не открывал Studio Work и не оборачивал вызов в `withExecutionEvidence`. Поэтому его подробные execution events не записаны в `harness.sqlite`; `recordExecutionEvidence()` без AsyncLocalStorage sink ничего не сохраняет. Доступны PowerShell output и OpenRouter Activity.
+- Для следующих direct smoke оборачивать вызов в `withExecutionEvidence((type,payload) => evidence.push({type,payload}), () => runWorkerAgentTool(...))` и печатать `evidence` в конце. Это собирает `model-call-completed`, `model-call-retry` и assistant response/usage, не меняя исходники. Синтетические данные; перед передачей лога удалить ключи, headers и приватный prompt.
+
+## Новое испытание: Nemotron 3.5 Super VL fixed ID (31.10.2026)
+
+Пользователь запустил тот же ограниченный synthetic harness с in-memory `modelOverrides.architect` и точным ID `nvidia/nemotron-3.5-super-vl:free`:
+
+- Preflight **PASS**: requested/resolved/PI model совпадают; `service=openrouter`, `apiFormat=responses`, `piApi=openai-responses`, API key присутствует.
+- Structured `submit_foundation_cast_index`: **PASS**.
+- Результат точно совпал с fixture: Anna (major), Pavel (minor), Irina (minor); лишних/пропущенных ролей нет.
+- Usage: 470 prompt / 125 completion / 595 total tokens. Стоимость в данном выводе отсутствует; не приписывать этому запуску $0 без сопоставления с Activity.
+- Это первый успешный прямой structured-tool smoke в текущей серии. Он подтверждает маршрутизацию фиксированного ID, вызов обязательного инструмента и корректную структуру результата на коротком fixture.
+- **Ограничение репрезентативности:** harness вызывает `runWorkerAgentTool()` напрямую с минимальным англоязычным system prompt и синтетическим user message. Он использует `FoundationCastIndexToolSchema`, но не запускает `ArchitectAgent.generateFoundation()` и его реальные предыдущие этапы (outline/details), не проверяет полный foundation pipeline, качество планирования или прозу. Поэтому статус — `STRUCTURED TOOL SMOKE PASS`, а не полная квалификация Architect.
+- Запуск не создаёт Studio Work/Episode: он не проходит через `CreativeHarnessRuntime.startEpisode/executeAction` и не устанавливает `withExecutionEvidence` sink. Его доступные записи — PowerShell stdout и OpenRouter Activity; отсутствие Episode/`inkos.log` не является признаком отсутствия запроса.
+- Точный Activity row пока не сопоставлен: в выводе harness нет generation ID/временной метки, а CSV не содержит tool name/requested alias. Не связывать автоматически этот PASS с одной из 47 агрегированных Super VL записей.
+
+**Статус кандидата:** Nemotron 3.5 Super VL — **STRUCTURED TOOL SMOKE PASS**; можно перевести в первый приоритет следующего этапа. До постоянного назначения роли Architect нужно проверить реальный `ArchitectAgent.generateFoundation()` на синтетическом `BookConfig` без вызова `writeFoundationFiles()`, с инструментированным `withExecutionEvidence` и проверкой всех четырёх structured stages. Повторяемость и литературное качество пока **NOT TESTED**.
+
+## Повторное испытание: Xing4.0 29B A4B fixed ID (31.10.2026)
+
+Пользователь повторил тот же трёхперсонажный synthetic `submit_foundation_cast_index` smoke с точным ID `xingchen-agi/xing4.0-29b-a4b:free`:
+
+- Preflight **PASS**: requested/resolved/PI model совпадают; `service=openrouter`, `apiFormat=responses`, `piApi=openai-responses`, API key присутствует.
+- Structured tool result **PASS**: Anna (major), Pavel (minor), Irina (minor) — точное совпадение с fixture.
+- Usage: 404 prompt / 122 completion / 526 total tokens. Стоимость в предоставленном выводе отсутствует; не выводить её из более ранней Activity.
+- Ранее тот же трёхперсонажный smoke завершился `429 Provider returned error`; новый PASS показывает, что прежний отказ не доказывал несовместимость tool calling. Пока подтверждён один успешный запуск на этом fixture; стабильность при повторных успешных вызовах не измерена.
+- Более ранний двухперсонажный Xing smoke также был PASS (Anna/Pavel). Новый результат supersedes старое краткое резюме «Xing — только 2-role PASS, 3-role FAIL»: актуально — 2-role PASS и 3-role PASS после отдельного прежнего 429.
+
+**Статус кандидата:** Xing4.0 — **STRUCTURED TOOL SMOKE PASS** на полном трёхперсонажном fixture; полный Architect pipeline, повторяемость и литературное качество не проверены.
+
+## Новое испытание: Cohere North Mini Code fixed ID (31.10.2026)
+
+Пользователь проверил точный ID `cohere/north-mini-code:free` тем же synthetic `submit_foundation_cast_index` harness:
+
+- Preflight **PASS**: requested/resolved/PI model совпадают; `service=openrouter`, `apiFormat=responses`, `piApi=openai-responses`, API key присутствует.
+- Structured tool result **PASS**: Anna (major), Pavel (minor), Irina (minor) — точное совпадение с fixture.
+- Usage: 190 prompt / 305 completion / 495 total tokens. Стоимость в предоставленном выводе отсутствует; не выводить её из более ранней Activity.
+- Это независимый от NVIDIA и Xing model family/provider candidate, успешно прошедший тот же базовый контракт. Это не доказывает его пригодность как Writer/Reviser и не сравнивает литературное качество.
+
+**Статус кандидата:** Cohere North Mini Code — **STRUCTURED TOOL SMOKE PASS**; полный Architect pipeline, повторяемость и литературное качество не проверены.
+
+**Сводка успешных smoke:** Super VL — 470/125 (595); Xing4.0 — 404/122 (526); Cohere North Mini Code — 190/305 (495). Всего 1616 tokens. Это сумма usage трёх отдельных smoke, не цена; в предоставленных выводах cost отсутствует.
+
+## Сверка OpenRouter Activity CSV (31.10.2026)
+
+Пользователь предоставил `openrouter_activity_2026-10-31 (1).csv`. Выгрузка содержит 213 строк за 14:02:35.153–20:50:46.484; все строки относятся к API key `InkOS-G1`, variant `free`, `cost_total=0`. Поля requested model ID, tool name и task label отсутствуют; `model_permaslug` показывает фактический serving model.
+
+| Фактический serving model | Записей | `tool_calls` | Другие finish reasons | Cost |
+| --- | ---: | ---: | --- | ---: |
+| `nvidia/nemotron-3-ultra-550b-a55b-20260604` | 55 | 30 | 19 `stop`, 1 cancelled, 6 без finish reason | $0 |
+| `nvidia/nemotron-3.5-super-vl-20261015` | 47 | 35 | 12 `length` | $0 |
+| `nvidia/nemotron-3.5-lightning-20260807` | 48 | 40 | 6 `length`, 1 cancelled, 2 без finish reason | $0 |
+| `cohere/north-mini-code-20260617` | 45 | 35 | 6 `stop`, 2 `length`, 1 `error`, 1 без finish reason, 1 cancelled | $0 |
+| `liquid/lfm-2.5-2.6b-20260811` | 17 | 17 | — | $0 |
+| `xingchen-agi/xing4.0-29b-a4b-20261015` | 1 | 1 | — | $0 |
+
+**Интерпретация:** это агрегат разнородных вызовов, а не единый benchmark; проценты tool calls нельзя трактовать как pass rate Architect. Особенно важно сопоставить `tool_calls` Super VL с task logs, прежде чем запускать ещё один smoke. `finish_reason=length` — ограничение генерации по длине, а не доказательство tool failure.
 
 **Факт исполнения на 31.10.2026 (актуальнее исторических абзацев ниже):** интеграция OpenRouter Free [PR #13](https://github.com/NeuralDao/inkos/pull/13) **MERGED** в `custom/main` (`036f3b59`); fallback исправлен на `openrouter/free`, opt-in `INKOS_OPENROUTER_FREE_ONLY=1` реализован. Core Vitest 126 PASS на HEAD до последнего тестового typefix, Core typecheck PASS, Studio typecheck PASS по сообщению пользователя; Core и Studio локально собраны. **Один реальный synthetic preflight** в `New session`: `G1_PREFLIGHT_OK`, OpenRouter → NVIDIA Nemotron 3 Ultra (free), native **8 495 input / 31 output**, **$0.00**, HTTP 200, `tool_calls`, fallback не зафиксирован. Исторические утверждения ниже «API не выполнялся»/«fallback ещё не исправлен» устарели. `openrouter/free` динамический; реальный endpoint имеет **Training allowed**, NVIDIA предупреждает о логировании для улучшения продуктов. Перед передачей оригинального авторского материала требуется отдельное решение пользователя. Детали: [CURRENT_STATE.md](./CURRENT_STATE.md).
 
-## Актуальное решение от 31.10.2026
+## Актуальное решение от 31.10.2026 — фиксированные бесплатные IDs
 
-**Уточнение G1 от 31.10.2026 (приоритетнее нижеследующих исторических рекомендаций):** первый реальный G1 проводить **на `openrouter/free`**, а не на выбранных платных моделях и не только на фиксированных `:free` IDs. Это тест совместимости всего longform-пайплайна и разведочная оценка русской прозы на исходном R3 v1.0 (3 последовательные главы из 5). **Не** называть случайный мультимодельный маршрут «воспроизводимым модельным baseline». Конкретные `:free` IDs пригодятся **после G1** для локализации сбоев и контролируемого сравнения. Платные модели допустимы только как будущий самостоятельный эксперимент после разрешения.
+**G1 не должен зависеть от случайного исполнителя `openrouter/free`.** Пользователь выбрал стратегию назначать конкретные модели через существующий `modelOverrides`, а не адаптировать архитектуру InkOS к случайным ответам роутера. Динамический `openrouter/free` остаётся для разведочных проверок доступности, но не является рабочей baseline G1.
 
-**Условия старта:** явно задать `openrouter/free` базовой и каждой реально переопределённой модели, исключить платные overrides; текущий встроенный OpenRouter `checkModel: openrouter/auto` **пока не исправлен в коде**, поэтому полагаться на его fallback нельзя. Сначала короткая проверка required tool/stream и ответа настоящего OpenRouter; при FAIL — остановка и точечная коррекция, а не автоматическая платная замена. Далее по отдельному разрешению — трёхглавный G1; лимит API-вызовов и проверка отсутствия списаний; записывать фактические serving model/provider там, где доступны. Интеграция `openai-responses` и non-stream не объявляется проверенной. [Протокол G1](./BENCHMARK_LONGFORM.md).
+**Технический статус:** reasoning fix в [Draft PR #15](https://github.com/NeuralDao/inkos/pull/15), статический review ChatGPT ACCEPT; пользователь сообщил целевой Vitest 10/10 PASS, Core typecheck PASS и Core build PASS. После фикса проведены пять synthetic live structured-tool smoke: три PASS, один `MODEL_REQUIRED_TOOL_MISSING`, один upstream 429. PR открыт, не объединён.
 
+**Наблюдение пользователя:** три разных fixed ID прошли одинаковый базовый structured smoke. Это полезнее агрегированных `tool_calls` в Activity, но ещё не позволяет ранжировать модели по литературному качеству или полной Architect-работе. Динамический `openrouter/free` может выбирать разных исполнителей. Первые литературные образцы выявили смешение языков и сценарное дробление на сцены; они не являются baseline и не доказывают качество конкретной модели.
 
-**Выбран OpenRouter, Selectel отменён как активный провайдер G1.** Старый Selectel v0 и цены в рублях сохранены ниже только как датированная история; `RESEARCH_R6_MODELS.md` также содержит историческое исследование OpenRouter, но его цены и кандидатные ID требуют повторной проверки. **Ни один API-вызов через OpenRouter не выполнен; пополнение $10 только запланировано.**
+### Кандидаты
 
-- **Единый endpoint:** штатный OpenRouter в InkOS 2.0 (`service: openrouter`, существующие `PiModel` и `modelOverrides`); новые адаптеры и роутеры не разрабатывать без конкретной несовместимости. Точный URL, ключ и модели проверять локально, секреты в GitHub не хранить.
-- **Бесплатная техническая стадия и G1:** сначала пробовать непосредственно `openrouter/free` с синтетическими данными и `tool_choice=required`, валидным structured результатом, stream/reasoning, ограниченными retries и контролем нулевых списаний. При успешном preflight провести G1 с тем же маршрутом. Конкретные `:free` model ID использовать для локализации несовместимостей и будущего фиксированного сравнения, **не как обязательный подбор до G1**. Уже есть локальные SSE и fake-API tests; не дублировать их без конкретного риска.
-- **Условие бесплатного лимита:** согласно [OpenRouter Free Models](https://openrouter.ai/collections/free-models) после покупки на $10 — до **1000 `:free` запросов в сутки**, до **20 в минуту**; неудачные попытки считаются. Без покупки — до 50 в сутки. Доступность моделей и условия динамические. Исторические ~100 вызовов на 4 главы InkOS 1.8 — ориентир, **не** прогноз InkOS 2.0.
-- **Литературная G1 (уточнено 31.10):** прежние [brief и трёхглавный протокол](./BENCHMARK_LONGFORM.md) остаются, но все реальные агенты используют `openrouter/free`. Цель — функциональный E2E и первые наблюдения о русской прозе; платные модели и фиксированный стек — только будущий независимый эксперимент.
-- **Воспроизводимость:** `openrouter/free` допустим в **исследовательской G1**, но не в контролируемом модельном A/B. Логировать доступные фактические model ID/провайдера и параметры, отмечать пропуски идентификации, не приписывать качество единой модели. Для будущего A/B закреплять модели отдельно. `thinkingBudget=0` не гарантирует нулевой provider reasoning.
-- **Очередность:** сначала согласованный минимальный live preflight с `openrouter/free`, затем при PASS — согласованная трёхглавная G1 с тем же маршрутом; offline regression только по выявленному дефекту. Ни API, ни тесты сейчас не запускались.
+| Статус smoke | Точный ID | Результат на fixture | Что ещё не проверено |
+| --- | --- | --- | --- |
+| **PASS** | `nvidia/nemotron-3.5-super-vl:free` | 3 роли; 470/125 tokens | Полный Architect, repeatability, литературное качество |
+| **PASS** | `xingchen-agi/xing4.0-29b-a4b:free` | 3 роли; 404/122 tokens; прежний 429 сменился успешным запуском | Полный Architect, repeatability, литературное качество |
+| **PASS** | `cohere/north-mini-code:free` | 3 роли; 190/305 tokens | Полный Architect, repeatability, литературное качество |
+| **FAIL** | `nvidia/nemotron-3-ultra-550b-a55b:free` | Preflight PASS; обязательный cast-index завершился `MODEL_REQUIRED_TOOL_MISSING` | Не исключает tool use на других задачах |
+| **BLOCKED** | `google/gemma-4-26b-a4b-it:free` | Preflight PASS; structured request получил upstream 429 | Tool calling не проверен; Activity rows отсутствуют |
+| **HOLD** | `dots-studio/dots-3-note-preview:free` | Положительного structured результата нет | Не тратить приоритетные попытки |
+
+Источники: [OpenRouter Free Models](https://openrouter.ai/collections/free-models), [Nemotron 3 Ultra](https://openrouter.ai/nvidia/nemotron-3-ultra-550b-a55b:free), [Nemotron 3.5 Super VL](https://openrouter.ai/nvidia/nemotron-3.5-super-vl:free), [Gemma 4 26B A4B](https://openrouter.ai/google/gemma-4-26b-a4b-it:free), [Xing4.0](https://openrouter.ai/xingchen-agi/xing4.0-29b-a4b:free), [Dots3-Note Preview](https://openrouter.ai/dots-studio/dots-3-note-preview:free). Публичные цены, доступность и карточки меняются; проверять перед запуском.
+
+**Важное ограничение данных:** бесплатные NVIDIA endpoints предупреждают не отправлять confidential information: запросы логируются для безопасности и улучшения продуктов NVIDIA. До отдельного согласия пользователя проверять их только синтетическими данными; не отправлять авторский brief, рукопись, карточки персонажей и приватные артефакты. Цена $0 не отменяет этот риск.
+
+### Протокол квалификации
+
+1. Использовать один и тот же synthetic fixture `submit_foundation_cast_index`: Anna (major), Pavel (minor), Irina (minor).
+2. Перед live smoke локально синхронизировать branch PR #15 и пересобрать Core `dist` именно из него: build на этой ветке ещё NOT RUN, а тестовый harness импортирует `packages/core/dist`. Проверять точные IDs через существующий `PipelineRunner.createAgentContext("architect")` + in-memory `modelOverrides.architect` + `runWorkerAgentTool()`; `service=openrouter`, официальный endpoint, `openai-responses`, `tool_choice=required`, `maxTokens=2048`, `temperature=0.8`.
+3. Запускать только с `INKOS_OPENROUTER_FREE_ONLY=1`. Не отключать guard, не задавать paid fallback, не записывать overrides в `inkos.json`, не создавать Work.
+4. Текущий synthetic smoke: Super VL, Xing4.0 и Cohere North Mini Code — PASS на одинаковом fixture; Nemotron 3 Ultra — MODEL_REQUIRED_TOOL_MISSING; Gemma 4 — upstream 429. Следующий шаг — не новый model ID, а проверить репрезентативность: запустить полный `ArchitectAgent.generateFoundation()` на синтетическом `BookConfig` без записи Foundation-файлов, собрать execution evidence и проверить все четыре structured stages.
+5. Ограничение — один логический тест на модель; остановка при первом 400/429/timeout, без циклических повторов. Записывать requested model, фактический `response.model`/provider или `UNKNOWN`, tool call, stop reason, usage, число prepared requests и безопасную причину ошибки. Фактическую стоимость сверять по OpenRouter Activity.
+6. Технический tool PASS не означает литературное качество. После него — отдельный одинаковый короткий творческий тест на русском, затем роль Reviser/Auditor. Для Writer, Reviser и независимых критиков учитывать разные семейства/разработчиков; не назначать роли только по названию или публичным бенчмаркам.
+7. После отбора — проверить persistent Studio `modelOverrides` и readback. Новый Foundation и новый Work — только после отдельного решения пользователя.
+
+**PR #14 не использовать для этого эксперимента:** его `qualify-openrouter-models.ps1` ориентирован на платные model IDs, отключает `INKOS_OPENROUTER_FREE_ONLY` и задаёт ненулевой `max_price`. Это отдельный Draft PR и другая задача.
 
 ## Исторический стек Selectel v0 (30.10.2026; не активировать)
 
