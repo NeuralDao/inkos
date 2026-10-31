@@ -77,7 +77,13 @@ describe("OpenRouter free: offline Responses structured boundary", () => {
         stream.push({ type: "start", partial: reply });
         stream.push({ type: "done", reason: "toolUse", message: reply });
         stream.end();
-      })();
+      })().catch((error: unknown) => {
+        const failure = assistant(model, false);
+        failure.stopReason = "error";
+        failure.errorMessage = String(error);
+        stream.push({ type: "error", reason: "error", error: failure });
+        stream.end();
+      });
       return stream;
     });
 
