@@ -1653,6 +1653,61 @@ function resolvePiModel(client: LLMClient, model: string): PiModel<PiApi> {
   return { ...base, id: model, name: model };
 }
 
+/**
+ * Pi AI can synthesize reasoning.effort="none" for a reasoning-capable model
+ * when no thinking level was selected. OpenRouter may route that request to an
+ * endpoint where reasoning is mandatory. Absence of a level is not an explicit
+ * opt-out, so omit only this implicit value for the official OpenRouter API.
+ *
+ * An explicit Pi reasoning selection or provider-specific extra.reasoning wins.
+ */
+export function normalizeOpenRouterReasoningPayload(
+  payload: unknown,
+  model: Pick<PiModel<PiApi>, "api" | "baseUrl">,
+  options: {
+    readonly reasoningRequested?: boolean;
+    readonly explicitReasoning?: unknown;
+  } = {},
+): unknown {
+  if (
+    (model.api !== "openai-responses" && model.api !== "openai-completions")
+    || !isOfficialOpenRouterBaseUrl(model.baseUrl)
+    || !payload
+    || typeof payload !== "object"
+    || Array.isArray(payload)
+  ) {
+    return payload;
+  }
+
+  const body = payload as Record<string, unknown>;
+  if (options.explicitReasoning !== undefined) {
+    return { ...body, reasoning: options.explicitReasoning };
+  }
+  if (options.reasoningRequested) return payload;
+
+  const reasoning = body.reasoning;
+  if (
+    !reasoning
+    || typeof reasoning !== "object"
+    || Array.isArray(reasoning)
+    || (reasoning as Record<string, unknown>).effort !== "none"
+    || Object.keys(reasoning).length !== 1
+  ) {
+    return payload;
+  }
+
+  const { reasoning: _implicitDisable, ...withoutImplicitDisable } = body;
+  return withoutImplicitDisable;
+}
+
+function isOfficialOpenRouterBaseUrl(baseUrl: string): boolean {
+  try {
+    return new URL(baseUrl).origin === "https://openrouter.ai";
+  } catch {
+    return false;
+  }
+}
+
 /** Convert inkos LLMMessage[] to pi-ai Context. */
 function toPiContext(messages: ReadonlyArray<LLMMessage>): PiContext {
   const systemParts = messages.filter((m) => m.role === "system").map((m) => m.content);
@@ -1697,6 +1752,10 @@ async function chatCompletionViaPiAi(
     apiKey: client._apiKey,
     headers: mergeUserAgent({ ...(piModel.headers ?? {}), ...traceHeaders }),
     signal,
+    onPayload: (payload: unknown, activeModel: PiModel<PiApi>) =>
+      normalizeOpenRouterReasoningPayload(payload, activeModel, {
+        explicitReasoning: resolved.extra.reasoning,
+      }),
   };
 
   if (!client.stream) {
