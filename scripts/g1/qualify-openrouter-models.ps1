@@ -128,13 +128,13 @@ $env:INKOS_G1_SCRIPT_SHA256 = $scriptHash
 Push-Location $ResolvedRepo
 try {
     # The guard is disabled only in this diagnostic PowerShell process and its Node child.
-    Remove-Item Env:INKOS_OPENROUTER_FREE_ONLY -ErrorAction SilentlyContinue
+    $env:INKOS_OPENROUTER_FREE_ONLY = "0"
 
     $nodeSource = @'
 import { resolve, join } from "node:path";
 import { pathToFileURL } from "node:url";
 
-delete process.env.INKOS_OPENROUTER_FREE_ONLY;
+process.env.INKOS_OPENROUTER_FREE_ONLY = "0";
 
 const repoRoot = resolve(process.env.INKOS_G1_REPO_ROOT ?? process.cwd());
 const workspaceRoot = resolve(process.env.INKOS_G1_WORKSPACE_ROOT ?? "");
