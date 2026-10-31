@@ -165,8 +165,17 @@ function Get-DistInventory {
     }
 
     $manifestFullPath = [System.IO.Path]::GetFullPath($manifestPath)
-    $files = Get-ChildItem -LiteralPath $distRoot -File -Recurse -Force |
-        Where-Object { [System.IO.Path]::GetFullPath($_.FullName) -ne $manifestFullPath }
+    $distEntries = @(Get-ChildItem -LiteralPath $distRoot -Recurse -Force)
+    $distLinks = @($distEntries | Where-Object {
+        ($_.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0
+    })
+    if ($distLinks.Count -gt 0) {
+        $linkPaths = ($distLinks | ForEach-Object { $_.FullName }) -join [Environment]::NewLine
+        throw "Reparse points/symlinks under Core dist are not allowed in a provenance inventory: $linkPaths"
+    }
+    $files = $distEntries | Where-Object {
+        -not $_.PSIsContainer -and [System.IO.Path]::GetFullPath($_.FullName) -ne $manifestFullPath
+    }
 
     $inventory = foreach ($file in $files) {
         $relativePath = [System.IO.Path]::GetRelativePath($script:ResolvedRepo, $file.FullName).Replace('\', '/')
