@@ -35,6 +35,36 @@ import {ComposerAgent} from '../agents/composer.js';
 const fetchWithProxyMock = vi.hoisted(() => vi.fn());
 
 describe("structured alias routing", () => {
+  it("rejects paid PipelineRunner overrides in free-only G1 mode before HTTP", () => {
+    const base = createLLMClient(LLMConfigSchema.parse({
+      provider: "openai",
+      service: "openrouter",
+      baseUrl: "https://openrouter.ai/api/v1",
+      model: "openrouter/free",
+      apiKey: "fixture",
+      stream: true,
+    }));
+    vi.stubEnv("INKOS_OPENROUTER_FREE_ONLY", "1");
+    try {
+      const runner = new PipelineRunner({
+        projectRoot: "",
+        client: base,
+        model: "openrouter/free",
+        modelOverrides: {
+          writer: "openrouter/auto",
+          auditor: { model: "openai/gpt-4o" },
+          composer: { model: "openrouter/free", baseUrl: "https://example.test/v1" },
+        },
+      });
+      expect(runner.createAgentContext("planner").client._piModel?.id).toBe("openrouter/free");
+      expect(() => runner.createAgentContext("writer")).toThrow(/INKOS_OPENROUTER_FREE_ONLY/);
+      expect(() => runner.createAgentContext("auditor")).toThrow(/INKOS_OPENROUTER_FREE_ONLY/);
+      expect(() => runner.createAgentContext("composer")).toThrow(/INKOS_OPENROUTER_FREE_ONLY/);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it.each([false, true])("isolates outgoing credentials after endpoint change (public-surface fallback=%s)", async fallback => {
     vi.stubEnv("INKOS_M1_FIXTURE_KEY", "fixture-new-key");
     vi.stubEnv("INKOS_LLM_HEADERS", JSON.stringify({ Authorization: "Bearer fixture-env-old", "x-api-key": "fixture-env-old" }));
