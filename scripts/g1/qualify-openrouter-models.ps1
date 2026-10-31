@@ -101,6 +101,30 @@ foreach ($relativePath in $distPaths) {
     }
 }
 
+# Prove that the local dist contains the G1 free-only guard merged by PR #13.
+# Timestamps alone are not sufficient build provenance.
+$requiredDistMarkers = @(
+    [pscustomobject]@{
+        path = "packages/core/dist/llm/provider.js"
+        marker = "INKOS_OPENROUTER_FREE_ONLY=1: only free OpenRouter models are allowed"
+    },
+    [pscustomobject]@{
+        path = "packages/core/dist/agent/worker-agent.js"
+        marker = "assertOpenRouterFreeOnly"
+    },
+    [pscustomobject]@{
+        path = "packages/core/dist/pipeline/runner.js"
+        marker = "INKOS_OPENROUTER_FREE_ONLY"
+    }
+)
+foreach ($check in $requiredDistMarkers) {
+    $fullPath = Join-Path $ResolvedRepo $check.path
+    $distContent = Get-Content -LiteralPath $fullPath -Raw
+    if (-not $distContent.Contains($check.marker)) {
+        throw "Built Core dist does not contain the expected PR #13 marker '$($check.marker)' in $($check.path). Rebuild is required; this script does not run build."
+    }
+}
+
 $nodeVersion = & node --version
 if ($LASTEXITCODE -ne 0) {
     throw "Node.js is not available."
