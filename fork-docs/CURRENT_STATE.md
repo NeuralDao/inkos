@@ -1,21 +1,37 @@
 # Текущее состояние форка
 
-**АКТУАЛЬНОЕ ОБНОВЛЕНИЕ — 31.10.2026: reasoning fix проверен; Core build PASS; первая пара fixed-free Architect smoke не квалифицирована.**
+**АКТУАЛЬНОЕ ОБНОВЛЕНИЕ — 31.10.2026: reasoning fix проверен; Core build PASS; fixed-free qualification продолжается с Activity reconciliation.**
+
+
 
 - База custom/main: 05a0f0dbbcd0a85f49c731ac1357083ab6b9d10a.
-- Task branch: fix/g1-openrouter-reasoning-defaults. Последний проверенный локальный code HEAD: ee4c57e496db561b3d0ad9675d604a886e950941; после него удалённая ветка получила только документационные коммиты. Локальная копия пользователя пока на code HEAD ee4c57e (по последнему сообщению); актуальный remote HEAD проверить/синхронизировать перед следующим этапом.
+
+- Task branch: fix/g1-openrouter-reasoning-defaults. Последний проверенный локальный code HEAD: ee4c57e496db561b3d0ad9675d604a886e950941; последующие удалённые коммиты меняли только `fork-docs/`. Перед следующим этапом синхронизировать документацию; Core dist остаётся собранным из того же code HEAD.
+
 - Draft PR #15: https://github.com/NeuralDao/inkos/pull/15; открыт, **не объединён**. Merge — только с отдельного разрешения.
+
 - Статический review reasoning fix: **ACCEPT по коду**. Пользователь сообщил целевой Vitest openrouter-reasoning.test.ts **10/10 PASS**, Core pnpm exec tsc --noEmit **PASS** и pnpm --filter @actalk/inkos-core build **PASS** на code HEAD ee4c57e. ChatGPT команды самостоятельно не запускал. Lint/E2E/полный Studio smoke — **NOT RUN**.
-- Nemotron 3 Ultra fixed ID nvidia/nemotron-3-ultra-550b-a55b:free: preflight/routing **PASS**; structured submit_foundation_cast_index **FAIL** MODEL_REQUIRED_TOOL_MISSING, stopReason=error, attempts=1; tool call отсутствовал после одного retry в observeModelStream. Tool compatibility не доказана.
-- Gemma 4 fixed ID google/gemma-4-26b-a4b-it:free: preflight/routing **PASS**; structured submit_foundation_cast_index **FAIL** WORKER_MODEL_ERROR, cause 429 Provider returned error, attempts=1, stopReason=error, usage=null. Это upstream provider/rate-limit failure, не тест tool calling.
-- По packages/core/src/llm/provider.ts guardAssistantMessageStream распознаёт HTTP 429 без видимых stream events как transient; TRANSIENT_LLM_RETRIES=2, backoff 800/1600 ms. Один worker turn может сделать до трёх upstream requests; attempts=1 не означает один HTTP request. OpenRouter Activity должна подтвердить фактическое число, provider/serving ID, tokens и cost.
-- usage=null у обоих FAIL не означает нулевой расход: worker не отдаёт onUsage при неуспешном structured result. Токены и стоимость **UNKNOWN** до Activity.
-- Итог первого круга: обе модели разрешаются правильно, но Architect structured PASS пока нет. Nemotron 3 Ultra — tool missing; Gemma — provider 429, tool compatibility NOT VERIFIED. Не браковать Gemma по качеству и не повторять её немедленно.
+
+- Nemotron 3 Ultra fixed ID: preflight/routing **PASS**; structured `submit_foundation_cast_index` **FAIL** `MODEL_REQUIRED_TOOL_MISSING`. Activity содержит две соседние записи (20:50:43.703 и 20:50:46.484), вероятно initial + один retry: обе фактические генерации обслужены Nvidia `nvidia/nemotron-3-ultra-550b-a55b-20260604`, обе `finish_reason=stop`, без `tool_calls`; каждая 470 prompt, 194/176 completion, 148/126 reasoning; пара суммарно 940 input / 370 completion / 274 reasoning; cost $0.
+
+- В общей выгрузке Nemotron Ultra — 55 генераций: 30 `tool_calls`, 19 `stop`, 1 cancelled, 6 без finish reason. Следовательно, модель вызывала tools в других запросах; провал относится к конкретному обязательному `submit_foundation_cast_index` вызову, а не доказывает полное отсутствие function calling.
+
+- Gemma 4 fixed ID: preflight/routing **PASS**; structured call **FAIL** `WORKER_MODEL_ERROR`, cause `429 Provider returned error`. В Activity CSV нет ни одной записи Gemma. Поэтому фактические upstream retry count, serving provider/model, usage и cost **UNKNOWN**; отсутствие строки не доказывает $0. По коду возможно до трёх upstream requests на один worker turn (initial + два transient retries), но это не подтверждено Activity.
+
+- Activity CSV содержит 213 строк (14:02:35–20:50:46), все под API key `InkOS-G1`, variant `free`, `cost_total=0`. `model_permaslug` — фактический serving model; requested model ID, tool name и task label в CSV отсутствуют.
+
+- Важная новая улика по следующему кандидату: `nvidia/nemotron-3.5-super-vl-20261015` имеет 47 generation rows, provider Nvidia, 35 `tool_calls`, 12 `length`, cost $0; 801 814 prompt / 116 247 completion / 103 716 reasoning tokens. Это предварительное свидетельство tool use, но неизвестно, относятся ли эти rows к fixed alias и точному Architect fixture. Сначала сопоставить generation IDs/time с локальными harness/Studio logs; не дублировать тест, если он уже есть.
+
+- Другие агрегаты Activity: Nemotron 3.5 Lightning — 48 rows / 40 `tool_calls` / 6 `length`; Cohere North Mini — 45 / 35 `tool_calls` / 6 `stop` / 2 `length` / 1 `error`; Liquid LFM — 17 / 17 `tool_calls`; Xing4.0 — 1 / 1 `tool_calls`. Это разнородные запросы, не единый benchmark и не pass rates.
+
 - Предыдущие результаты остаются: Xing4.0 — один PASS на облегчённом тесте с двумя персонажами и отдельный FAIL на трёх персонажах; стабильность не доказана. Dots — положительной проверки нет.
-- Следующий кандидат по согласованному порядку: nvidia/nemotron-3.5-super-vl:free. Перед ним сверить OpenRouter Activity для Nemotron 3 Ultra и Gemma. Для smoke использовать прежний synthetic fixture; только in-memory modelOverrides, INKOS_OPENROUTER_FREE_ONLY=1, один логический тест.
+
 - Сохранённые Studio modelOverrides **не менялись**; старый Work последняя-ведомость сохранён; новый Work/Foundation не запускался. Использовались только синтетические данные. PR #14 с платным qualification script не использовать.
 
-Следующий шаг: получить Activity для двух попыток (serving provider/model, HTTP requests, input/output tokens, cost), затем провести один synthetic smoke Nemotron 3.5 Super VL. Подробности — [G1_HANDOFF_2026-10-31.md](./G1_HANDOFF_2026-10-31.md) и [G1_MODEL_STACK.md](./G1_MODEL_STACK.md).
+
+
+Следующий шаг: сопоставить 47 Super VL generation rows с локальными task logs и установить, есть ли среди них нужный `submit_foundation_cast_index` тест. Если нет — один ограниченный synthetic smoke exact fixed ID; Gemma не повторять только ради Activity.
+
 **ИСТОРИЧЕСКИЙ ЖУРНАЛ ДО ИССЛЕДОВАНИЯ REASONING (31.10.2026; текущий статус см. выше):** Нижеследующие G1-записи сохраняют хронологию прежних проб и решений. Старые формулировки `NOT RUN`, `следующий шаг`, динамический маршрут и статусы Work относятся к моменту записи и не являются текущими инструкциями. Актуальный следующий шаг — synthetic qualification fixed `:free` IDs по [G1_HANDOFF_2026-10-31.md](./G1_HANDOFF_2026-10-31.md).
 
 **Историческая запись до reasoning fix:** пользователь сообщил **новый реальный PASS для Xing4.0** после предыдущего FAILED smoke: in-memory `modelOverrides.architect` → `xingchen-agi/xing4.0-29b-a4b:free`, `ctx.model` корректен, `api=openai-responses`, API-key есть; один настоящий `runWorkerAgentTool(submit_foundation_cast_index)` с **двумя персонажами** (Anna major, Pavel minor) при `maxTokens=2048`, temperature 0.8 **PASS**, вернул точный typed `roles`. Ранний smoke на **трёх персонажах** для Xing и Dots — по **одному WORKER_MODEL_ERROR** без полной причины, не «3/3 FAIL». Следовательно, routing PASS, совместимость Xing **частично подтверждена (1 PASS + 1 FAIL в разных условиях)**; стабильность не проверена; Dots NOT VERIFIED. `modelOverrides` в Studio **не записаны**, стоимость последнего запроса **UNKNOWN**, новая Foundation **NOT RUN**, старый failed draft `works/последняя-ведомость` сохранён. Пользователь предпочёл **новую книгу с фиксированным отобранным стеком**, а не recovery/рефакторинг. Следующий шаг — повторить **исходный одинаковый 3-ролевой** synthetic test Xing с полной безопасной ошибкой при FAIL и сверкой Activity, затем проверить persistent override/readback и выбрать модель, **до** удаления draft или повторной генерации. Новый чат сначала читает handoff и указанный код; прежние статусы внизу — история.
