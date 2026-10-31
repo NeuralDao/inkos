@@ -55,11 +55,12 @@ describe("structured alias routing", () => {
       expect(safe.createAgentContext("planner").client._piModel?.id).toBe("openrouter/free");
       expect(safe.createAgentContext("writer").client._piModel?.id).toBe("openrouter/free");
       expect(safe.createAgentContext("auditor").client._piModel?.id).toBe("nvidia/nemotron-3-ultra:free");
-      for (const blocked of [
+      const blockedCases: Array<Record<string, string | { model: string; baseUrl?: string }>> = [
         { writer: "openrouter/auto" },
         { auditor: { model: "openai/gpt-4o" } },
         { composer: { model: "openrouter/free", baseUrl: "https://example.test/v1" } },
-      ]) {
+      ];
+      for (const blocked of blockedCases) {
         expect(() => new PipelineRunner({
           projectRoot: "", client: base, model: "openrouter/free", modelOverrides: blocked,
         })).toThrow(/INKOS_OPENROUTER_FREE_ONLY/);
