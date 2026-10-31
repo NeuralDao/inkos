@@ -11,7 +11,7 @@ function createOpenRouterClient(
   stream: boolean,
   extra: Record<string, unknown> = {},
 ) {
-  return createLLMClient(LLMConfigSchema.parse({
+  const client = createLLMClient(LLMConfigSchema.parse({
     provider: "openai",
     service: "openrouter",
     baseUrl: "https://openrouter.ai/api/v1",
@@ -23,6 +23,11 @@ function createOpenRouterClient(
     thinkingBudget: 1,
     extra,
   }));
+  // OpenRouter's preset selects Responses regardless of apiFormat. Construct
+  // the Pi model explicitly to exercise its Chat Completions adapter as well.
+  return apiFormat === "chat"
+    ? { ...client, _piModel: { ...client._piModel!, api: "openai-completions" as const } }
+    : client;
 }
 
 function captureRejectedOpenRouterRequests() {
@@ -62,6 +67,7 @@ describe("OpenRouter implicit reasoning disable", () => {
   ])("omits SDK-generated effort=none from direct text requests ($apiFormat, stream=$stream)", async ({ apiFormat, stream }) => {
     const requests = captureRejectedOpenRouterRequests();
     const client = createOpenRouterClient(apiFormat, stream);
+    expect(client._piModel?.api).toBe(apiFormat === "chat" ? "openai-completions" : "openai-responses");
 
     await expect(chatCompletion(
       client,
@@ -79,6 +85,7 @@ describe("OpenRouter implicit reasoning disable", () => {
     async apiFormat => {
       const requests = captureRejectedOpenRouterRequests();
       const client = createOpenRouterClient(apiFormat, true);
+      expect(client._piModel?.api).toBe(apiFormat === "chat" ? "openai-completions" : "openai-responses");
       const tool = {
         name: "submit_fixture",
         label: "Fixture",
@@ -149,6 +156,8 @@ describe("OpenRouter implicit reasoning disable", () => {
       model: "fixture",
     });
     expect(payload.reasoning).toEqual({ effort: "none" });
+    const extended = { reasoning: { effort: "none", exclude: true }, model: "fixture" };
+    expect(normalizeOpenRouterReasoningPayload(extended, openRouterModel)).toBe(extended);
   });
 
   it("does not rewrite explicit reasoning disable or non-OpenRouter payloads", () => {

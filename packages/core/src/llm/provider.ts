@@ -1691,6 +1691,7 @@ export function normalizeOpenRouterReasoningPayload(
     || typeof reasoning !== "object"
     || Array.isArray(reasoning)
     || (reasoning as Record<string, unknown>).effort !== "none"
+    || Object.keys(reasoning).length !== 1
   ) {
     return payload;
   }
