@@ -138,6 +138,19 @@ describe("OpenRouter implicit reasoning disable", () => {
     expect(requests[0]!.body.reasoning).toEqual({ effort: "high" });
   });
 
+  it("removes only the implicit none value without mutating the SDK payload", () => {
+    const payload = { reasoning: { effort: "none" }, model: "fixture" };
+    const openRouterModel = {
+      api: "openai-completions",
+      baseUrl: "https://openrouter.ai/api/v1",
+    } as const;
+
+    expect(normalizeOpenRouterReasoningPayload(payload, openRouterModel)).toEqual({
+      model: "fixture",
+    });
+    expect(payload.reasoning).toEqual({ effort: "none" });
+  });
+
   it("does not rewrite explicit reasoning disable or non-OpenRouter payloads", () => {
     const payload = { reasoning: { effort: "none" }, model: "fixture" };
     const openRouterModel = {
