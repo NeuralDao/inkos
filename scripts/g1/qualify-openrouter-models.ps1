@@ -62,9 +62,14 @@ if ($dirtyCore) {
     throw ("Core source has local changes. Review them before running: " + $dirtyCore)
 }
 
-& git -C $ResolvedRepo diff --quiet $head $ExpectedSourceRef -- @corePaths
-if ($LASTEXITCODE -ne 0) {
+$diffArguments = @("diff", "--quiet", $head, $ExpectedSourceRef, "--") + $corePaths
+& git -C $ResolvedRepo @diffArguments
+$diffExitCode = $LASTEXITCODE
+if ($diffExitCode -eq 1) {
     throw "Core source at local HEAD differs from $ExpectedSourceRef. Update/reconcile the local source before running."
+}
+if ($diffExitCode -ne 0) {
+    throw "Git could not compare Core source against $ExpectedSourceRef (exit $diffExitCode)."
 }
 
 $distPaths = @(
