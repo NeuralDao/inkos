@@ -2410,22 +2410,23 @@ async function probeServiceCapabilities(args: {
 
   for (const model of modelCandidates) {
     for (const plan of buildProbePlans(args.preferredApiFormat, args.preferredStream)) {
-      const client = createLLMClient({
-        provider: resolveServiceProviderFamily(baseService) ?? "openai",
-        service: baseService,
-        configSource: "studio",
-        baseUrl: args.baseUrl,
-        apiKey: args.apiKey.trim(),
-        model,
-        temperature: 0.7,
-        maxTokens: 16,
-        thinkingBudget: 0,
-        proxyUrl: args.proxyUrl,
-        apiFormat: plan.apiFormat,
-        stream: plan.stream,
-      } as ProjectConfig["llm"]);
-
       try {
+        // A free-only G1 guard may reject a paid probe candidate here.
+        // Report it through the normal per-candidate probe error path.
+        const client = createLLMClient({
+          provider: resolveServiceProviderFamily(baseService) ?? "openai",
+          service: baseService,
+          configSource: "studio",
+          baseUrl: args.baseUrl,
+          apiKey: args.apiKey.trim(),
+          model,
+          temperature: 0.7,
+          maxTokens: 16,
+          thinkingBudget: 0,
+          proxyUrl: args.proxyUrl,
+          apiFormat: plan.apiFormat,
+          stream: plan.stream,
+        } as ProjectConfig["llm"]);
         await withTimeout(
           // A connectivity probe wants a fast pass/fail — never the transient
           // retry+backoff, which would multiply the time when the upstream is
