@@ -1321,7 +1321,7 @@ export class PipelineRunner {
     let totalUsage: TokenUsageSummary = output.tokenUsage ?? { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
     this.logStage(stageLanguage, { zh: "生成章节审查观察", en: "collecting chapter review observations" });
     const reviewResult = await reviewChapterDraft({
-      book: { genre: book.genre, language: book.language },
+      book: { genre: book.genre, language: book.language, narrativeLanguage: resolveNarrativeLanguage(book) },
       bookDir,
       chapterNumber,
       output,
@@ -2058,6 +2058,7 @@ export class PipelineRunner {
       params.book.genre,
       {
         language: params.language,
+        narrativeLanguage: resolveNarrativeLanguage(params.book),
         contextPackage,
         ...(params.auditOptions.temperature === undefined ? {} : { temperature: params.auditOptions.temperature }),
       },

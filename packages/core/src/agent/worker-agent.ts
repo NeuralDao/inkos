@@ -400,7 +400,7 @@ export async function runWorkerAgentTool<TParameters extends TSchema>(
         };
       return client.stream === false
         ? guardedPiNonStreaming(streamModel, context, resultOptions, client.proxyUrl)
-        : guardedPiStream(streamModel, context, resultOptions, 1, {firstEventTimeoutMs:300_000,idleTimeoutMs:300_000});
+        : guardedPiStream(streamModel, context, resultOptions, 1, {firstEventTimeoutMs:300_000,idleTimeoutMs:300_000}, false);
     },
     getApiKey: () => client._apiKey,
   });

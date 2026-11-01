@@ -525,22 +525,28 @@ describe("guardedPiNonStreaming", () => {
       const body=JSON.parse(String(init.body)),name=body.tools[0].function.name;names.push(name);
       let args;
       if(name==='submit_chapter_review'){
+        expect(body.max_tokens).toBe(128_000);
         const input=JSON.parse(body.messages.findLast((message:{role:string})=>message.role==='user').content);
         expect(input.chapterNumber).toBe(3);
         const context=input.sources.find((source:{sourceId:string})=>source.sourceId==='governed-context');
         const numberedLine=context.numberedLines.split('\n').find((line:string)=>line.endsWith(canon));
         const line=Number(numberedLine.split('\t')[0]);
         suppliedContextLine=numberedLine.slice(numberedLine.indexOf('\t')+1);
-        args={summary:'Ownership needs reconciliation.',observations:[{code:'OWNERSHIP_CONFLICT',assessment:'issue',summary:'The chapter removes the key without showing a transfer.',sourceRefs:[{sourceId:'chapter-3',startLine:1,endLine:1},{sourceId:'governed-context',startLine:line,endLine:line}]}]};
+        expect(body.messages.find((message:{role:string})=>message.role==='system').content).toContain('Пиши по-русски общий итог');
+        expect(body.messages.find((message:{role:string})=>message.role==='system').content).toContain('Сохраняй коды наблюдений');
+        expect(body.tools[0].function.name).toBe('submit_chapter_review');
+        expect(body.tools[0].function.description).toBe('Submit evidence-backed observations only.');
+        args={summary:'Владение ключом не согласовано.',observations:[{code:'OWNERSHIP_CONFLICT',assessment:'issue',summary:'Глава показывает, что у Мары больше нет ключа, но не объясняет, кому и когда она его передала.',sourceRefs:[{sourceId:'chapter-3',startLine:1,endLine:1},{sourceId:'governed-context',startLine:line,endLine:line}]}]};
       }else{
         throw new Error('Unexpected additional review call');
       }
       return new Response(JSON.stringify({usage:{prompt_tokens:10,completion_tokens:5,total_tokens:15},choices:[{finish_reason:'tool_calls',message:{tool_calls:[{id:name,type:'function',function:{name,arguments:JSON.stringify(args)}}]}}]}));
     });
-    const client=createLLMClient({provider:'openai',service:'custom',configSource:'studio',baseUrl:model.baseUrl,model:model.id,apiKey:'fixture',apiFormat:'chat',stream:false,temperature:0,thinkingBudget:0});
-    const review=await new ContinuityAuditor({client,model:model.id,projectRoot:'/tmp'}).auditChapter('/tmp',chapter,3,undefined,{language:'en',contextPackage:{chapter:3,selectedContext:[{source:'story/current_state.md',reason:'Current ownership',excerpt:canon,protection:'protected'}]}});
+    const client=createLLMClient({provider:'openai',service:'custom',configSource:'studio',baseUrl:model.baseUrl,model:model.id,apiKey:'fixture',apiFormat:'chat',stream:false,temperature:0,thinkingBudget:0,contextWindow:1_048_576,maxTokens:128_000});
+    const review=await new ContinuityAuditor({client,model:model.id,projectRoot:'/tmp'}).auditChapter('/tmp',chapter,3,undefined,{language:'en',narrativeLanguage:'ru',contextPackage:{chapter:3,selectedContext:[{source:'story/current_state.md',reason:'Current ownership',excerpt:canon,protection:'protected'}]}});
     expect(names).toEqual(['submit_chapter_review']);
-    expect(review.observations).toEqual([{code:'OWNERSHIP_CONFLICT',assessment:'issue',summary:'The chapter removes the key without showing a transfer.',evidence:[],sourceRefs:[{sourceId:'chapter-3',quote:chapter},{sourceId:'governed-context',quote:suppliedContextLine}]}]);
+    expect(review.summary).toBe('Владение ключом не согласовано.');
+    expect(review.observations).toEqual([{code:'OWNERSHIP_CONFLICT',assessment:'issue',summary:'Глава показывает, что у Мары больше нет ключа, но не объясняет, кому и когда она его передала.',evidence:[],sourceRefs:[{sourceId:'chapter-3',quote:chapter},{sourceId:'governed-context',quote:suppliedContextLine}]}]);
     expect(review.tokenUsage).toEqual({promptTokens:10,completionTokens:5,totalTokens:15});
   });
   it('rebinds a newly created Work before the next model call and exposes its review/export tools',async()=>{
@@ -710,6 +716,26 @@ describe("guardedPiNonStreaming", () => {
     const result = await guardedPiNonStreaming(model, {messages:[{role:"user",content:"Wait",timestamp:1}]}).result();
     expect(result.stopReason).toBe("stop");
     expect(fetchWithProxyMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not repeat a structured worker call after first-event inactivity", async () => {
+    process.env.INKOS_LLM_FIRST_EVENT_TIMEOUT_MS = "10";
+    const network = vi.spyOn(globalThis, "fetch").mockImplementation(async (_url, init) => {
+      const signal = init?.signal as AbortSignal;
+      await new Promise((_resolve, reject) => {
+        signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+      });
+      throw new Error("unreachable");
+    });
+    const client = createLLMClient(LLMConfigSchema.parse({
+      provider: "openai", service: "custom", baseUrl: model.baseUrl, model: model.id, apiKey: "fixture", stream: true,
+    }));
+    try {
+      await expect(runWorkerAgentTool(client, model.id, [{ role: "user", content: "Return the structured fixture." }], {
+        name: "submit_fixture", label: "Fixture", description: "Fixture", parameters: Type.Object({ ok: Type.Boolean() }),
+      })).rejects.toThrow("LLM stream produced no event within 10ms");
+      expect(network).toHaveBeenCalledTimes(1);
+    } finally { network.mockRestore(); }
   });
 
   it("binds revised prose to the selected chapter without regenerating the outline or other chapters", async () => {

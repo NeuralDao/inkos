@@ -35,6 +35,7 @@ export function guardedPiStream<TApi extends Api>(
   options?: SimpleStreamOptions,
   emptyRetries = 1,
   deadlineOptions?: StreamDeadlineOptions,
+  retryOnInactivity = true,
 ): AssistantMessageEventStream {
   const reservedOutputTokens = Number.isFinite(options?.maxTokens)
     ? options!.maxTokens!
@@ -85,8 +86,8 @@ export function guardedPiStream<TApi extends Api>(
     }),
     options?.signal,
     deadlineOptions,
-  ), emptyRetries > 0 && !options?.signal?.aborted ? () => guardedPiStream(model, context, options, emptyRetries - 1, deadlineOptions) : undefined,
-  (options as SimpleStreamOptions & { toolChoice?: unknown } | undefined)?.toolChoice);
+  ), emptyRetries > 0 && !options?.signal?.aborted ? () => guardedPiStream(model, context, options, emptyRetries - 1, deadlineOptions, retryOnInactivity) : undefined,
+  (options as SimpleStreamOptions & { toolChoice?: unknown } | undefined)?.toolChoice, retryOnInactivity);
 }
 
 /**
@@ -190,7 +191,7 @@ function missingRequiredTool(message: AssistantMessage, choice: unknown): boolea
   return !message.content.some(part => part.type === "toolCall" && (!name || part.name === name));
 }
 
-function observeModelStream(model: Model<Api>, modelCallId: string | undefined, source: AssistantMessageEventStream, retry?: () => AssistantMessageEventStream, toolChoice?: unknown): AssistantMessageEventStream {
+function observeModelStream(model: Model<Api>, modelCallId: string | undefined, source: AssistantMessageEventStream, retry?: () => AssistantMessageEventStream, toolChoice?: unknown, retryOnInactivity = true): AssistantMessageEventStream {
   const output = createAssistantMessageEventStream();
   let started = false;
   const forward = (event: Parameters<typeof output.push>[0]) => {
@@ -206,7 +207,7 @@ function observeModelStream(model: Model<Api>, modelCallId: string | undefined, 
       for await (const event of source) {
         if ("partial" in event) lastPartial = event.partial;
         if (event.type === "start") { pendingStart = event; continue; }
-        if (event.type === "error" && retry && event.error.stopReason !== "aborted"
+        if (retryOnInactivity && event.type === "error" && retry && event.error.stopReason !== "aborted"
           && (event.error as AssistantMessage & {errorCode?: string}).errorCode === "MODEL_STREAM_INACTIVITY") {
           recordExecutionEvidence("model-call-completed", {modelCallId,status:"error",response:event.error,
             ...(lastPartial?.content.length?{partialOutput:lastPartial}:{})});

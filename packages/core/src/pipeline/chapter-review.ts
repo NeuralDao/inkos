@@ -3,6 +3,7 @@ import type { WriteChapterOutput } from "../agents/writer.js";
 import type { ContextPackage } from "../models/input-governance.js";
 import type { LengthSpec } from "../models/length-governance.js";
 import { countChapterLength } from "../utils/length-metrics.js";
+import { resolveNarrativeLanguage, type NarrativeLanguage } from "../utils/book-language.js";
 
 export interface ChapterReviewUsage {
   readonly promptTokens: number;
@@ -22,7 +23,7 @@ export interface ChapterReviewResult {
 }
 
 export async function reviewChapterDraft(params: {
-  readonly book: { readonly genre: string; readonly language: "en" | "zh" };
+  readonly book: { readonly genre: string; readonly language: "en" | "zh"; readonly narrativeLanguage?: NarrativeLanguage };
   readonly bookDir: string;
   readonly chapterNumber: number;
   readonly output: Pick<WriteChapterOutput, "content">;
@@ -37,6 +38,7 @@ export async function reviewChapterDraft(params: {
       genre: string | undefined,
       options: {
         readonly language: "zh" | "en";
+        readonly narrativeLanguage?: NarrativeLanguage;
         readonly contextPackage: ContextPackage;
         readonly temperature?: number;
       },
@@ -48,6 +50,7 @@ export async function reviewChapterDraft(params: {
   const content = params.output.content;
   params.assertNotEmpty(content);
   const wordCount = countChapterLength(content, params.lengthSpec.countingMode);
+  const narrativeLanguage = resolveNarrativeLanguage(params.book);
   let modelReview: AuditResult;
   try {
     modelReview = await params.auditor.auditChapter(
@@ -57,22 +60,26 @@ export async function reviewChapterDraft(params: {
       params.book.genre,
       {
         language: params.book.language,
+        narrativeLanguage,
         contextPackage: params.controlInput.contextPackage,
         temperature: 0.3,
       },
     );
   } catch (error) {
-    const isEnglish = params.book.language === "en";
+    const isEnglish = narrativeLanguage === "en";
+    const isRussian = narrativeLanguage === "ru";
     modelReview = {
       unavailable: true,
       observations: [{
         code: "review-unavailable",
         summary: isEnglish
           ? `Review observation was unavailable: ${String(error)}`
-          : `审稿观察暂不可用：${String(error)}`,
+          : isRussian
+            ? `Наблюдение аудитора недоступно: ${String(error)}`
+            : `审稿观察暂不可用：${String(error)}`,
         evidence: [],
       }],
-      summary: isEnglish ? "Review unavailable" : "审稿暂不可用",
+      summary: isEnglish ? "Review unavailable" : isRussian ? "Аудит недоступен" : "审稿暂不可用",
     };
   }
   return {
