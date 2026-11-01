@@ -1,6 +1,7 @@
 import { BaseAgent } from "./base.js";
 import { StateValidationToolSchema } from "./state-validation-tool.js";
 import type { Observation } from "../models/observation.js";
+import type { NarrativeLanguage } from "../utils/book-language.js";
 
 export interface ValidationResult {
   readonly observations: ReadonlyArray<Observation>;
@@ -34,12 +35,15 @@ export class StateValidatorAgent extends BaseAgent {
     newHooks: string,
     language: "zh" | "en" = "zh",
     authorityContext?: StateValidationAuthorityContext,
+    narrativeLanguage: NarrativeLanguage = language,
   ): Promise<ValidationResult> {
     if (oldState === newState && oldHooks === newHooks) {
       return { observations: [], consistent: true, reconciliationRequired: false };
     }
 
-    const langInstruction = language === "en"
+    const langInstruction = narrativeLanguage === "ru"
+      ? "Respond in Russian. Keep the validation decision and all tool fields unchanged; write only the human-readable report in Russian."
+      : narrativeLanguage === "en"
       ? "Respond in English."
       : "用中文回答。";
 

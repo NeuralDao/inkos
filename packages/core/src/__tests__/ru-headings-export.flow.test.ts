@@ -76,7 +76,7 @@ async function fixture(language: "en" | "zh" = "en", narrativeLanguage?: "ru", i
   await writeFile(join(bookDir, "story", "outline", "volume_map.md"), "Two chapters.");
   await writeFile(join(bookDir, "story", "book_rules.md"), "Preserve canon.");
   await writeFile(join(bookDir, "story", "book_rules.json"), JSON.stringify({ version: "2", prohibitions: [], enableFullCastTracking: false, allowedDeviations: [] }));
-  await createInitialRuntimeState({ bookDir, language });
+  await createInitialRuntimeState({ bookDir, language, projectionLanguage: narrativeLanguage ?? language });
   await state.saveChapterIndex(id, []);
   await state.snapshotState(id, 0);
   return { root, state, book, bookDir, runner: new PipelineRunner({ projectRoot: root, client, model: "unused" }) };
@@ -114,6 +114,8 @@ async function epubContents(payload: string | Buffer) {
 describe("Russian chapter headings and reader exports", () => {
   it("round-trips two chapters through save/read/revision/MD/TXT while EPUB retains Russian metadata, headings and prose", async () => {
     const { root, state, book, bookDir, runner } = await fixture("en", "ru");
+    vi.mocked(runWorkerAgentTool).mockClear();
+    expect(await readFile(join(bookDir, "story", "current_state.md"), "utf8")).toContain("# Текущее состояние");
     // Import supplied documents with old English and repeated Russian wrappers.
     await runner.importChapters({ bookId: book.id, resumeFrom: 1, chapters: source.map((chapter, index) => ({
       title: chapter.title, content: `# Chapter ${index + 1}: ${chapter.title}\n\n# Глава ${index + 1}: ${chapter.title}\n\n${chapter.content}`,
@@ -129,8 +131,12 @@ describe("Russian chapter headings and reader exports", () => {
       expect(await loadChaptersFromPath(join(bookDir, "chapters", file))).toEqual([chapter]);
       const settled = await writer.settleChapterState({ book, bookDir, chapterNumber: number, baselineChapter: number - 1,
         title: chapter.title, content: raw, chapterIntent: "Preserve the prose.", contextPackage: { chapter: number, selectedContext: [] } });
+      const settlementCall = vi.mocked(runWorkerAgentTool).mock.calls.find(call => call[3].name === "submit_runtime_state_delta");
+      expect(settlementCall?.[2].find(message => message.role === "system")?.content)
+        .toContain("Write every human-readable text value in the runtime-state delta in Russian");
       await writer.saveChapter(bookDir, settled, book.language, await state.loadChapterIndex(book.id), book.narrativeLanguage);
       expect(await readFile(join(bookDir, "chapters", file), "utf8")).toBe(raw);
+      expect(await readFile(join(bookDir, "story", "chapter_summaries.md"), "utf8")).toContain("# Сводки глав");
       // Exercise both the older-chapter branch and the latest-chapter branch.
       nextRevision = `# Chapter ${number}: ${chapter.title}\n\n# Глава ${number}: ${chapter.title}\n\n${chapter.content}`;
       const revision = await runner.reviseDraft(book.id, number, "polish", "Preserve the supplied prose and title exactly.");
@@ -178,7 +184,10 @@ describe("Russian chapter headings and reader exports", () => {
     expect(navTitles).toEqual(source.map((chapter, index) => `Глава ${index + 1}: ${chapter.title}`));
     expect((await loadRuntimeStateSnapshot(bookDir)).manifest.language).toBe("en");
     for (const call of vi.mocked(ContinuityAuditor.prototype.auditChapter).mock.calls) expect(call[4]?.language).toBe("en");
-    for (const call of vi.mocked(StateValidatorAgent.prototype.validate).mock.calls) expect(call[6]).toBe("en");
+    for (const call of vi.mocked(StateValidatorAgent.prototype.validate).mock.calls) {
+      expect(call[6]).toBe("en");
+      expect(call[8]).toBe("ru");
+    }
   }, 30000);
 
   it.each(["en", "zh"] as const)("preserves %s headings, text roundtrip and EPUB language", async language => {

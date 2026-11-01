@@ -10,6 +10,7 @@ import type { Logger } from "../utils/logger.js";
 import type { BookConfig } from "../models/book.js";
 import type { ContextPackage } from "../models/input-governance.js";
 import type { LengthLanguage } from "../utils/length-metrics.js";
+import { resolveNarrativeLanguage } from "../utils/book-language.js";
 
 export interface SettlementRetryParams {
   readonly writer: Pick<WriterAgent, "settleChapterState">;
@@ -83,6 +84,7 @@ export async function reconcileChapterStateAfterReview(
       retryOutput.updatedHooks,
       params.language,
       params.authorityContext,
+      resolveNarrativeLanguage(params.book),
     );
   } catch (error) {
     const validation: ValidationResult = {
@@ -90,7 +92,9 @@ export async function reconcileChapterStateAfterReview(
       reconciliationRequired: true,
       observations: [{
         code: "state-validation-unavailable",
-        summary: `State reconciliation could not be verified: ${String(error)}`,
+        summary: resolveNarrativeLanguage(params.book) === "ru"
+          ? `Не удалось проверить согласованность состояния: ${String(error)}`
+          : `State reconciliation could not be verified: ${String(error)}`,
         evidence: [],
       }],
     };
@@ -126,7 +130,7 @@ export async function reconcileChapterStateAfterReview(
     validation: retryValidation,
     observations: retryValidation.observations.length > 0
       ? retryValidation.observations
-      : [unresolvedStateObservation(params.language)],
+      : [unresolvedStateObservation(resolveNarrativeLanguage(params.book))],
   };
 }
 
@@ -154,13 +158,15 @@ export function buildStateReconciliationFeedback(
 }
 
 export function unresolvedStateObservation(
-  language: LengthLanguage,
+  language: LengthLanguage | "ru",
 ): Observation {
   return {
     code: "state-validation",
-    summary: language === "en"
-      ? "State reconciliation remains unresolved after recalculation."
-      : "状态结算重算后仍有未解决差异。",
+    summary: language === "ru"
+      ? "После повторного расчёта состояния остались неразрешённые расхождения."
+      : language === "en"
+        ? "State reconciliation remains unresolved after recalculation."
+        : "状态结算重算后仍有未解决差异。",
     evidence: [],
   };
 }

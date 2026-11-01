@@ -1,6 +1,6 @@
 import { BaseAgent } from "./base.js";
 import {renderChapterDocument} from '../utils/chapter-document.js';
-import type { NarrativeLanguage } from "../utils/book-language.js";
+import { resolveNarrativeLanguage, type NarrativeLanguage } from "../utils/book-language.js";
 import type { BookConfig } from "../models/book.js";
 import type { BookRules } from "../models/book-rules.js";
 import { buildWriterSystemPrompt } from "./writer-prompts.js";
@@ -171,6 +171,7 @@ export class WriterAgent extends BaseAgent {
       bookDir,
       bookRules,
       language: resolvedLanguage,
+      narrativeLanguage: resolveNarrativeLanguage(book),
       chapterNumber,
       title: creative.title,
       content: creative.content,
@@ -185,6 +186,7 @@ export class WriterAgent extends BaseAgent {
       bookDir,
       settlement.runtimeStateDelta,
       resolvedLanguage,
+      resolveNarrativeLanguage(book),
       chapterNumber,
     );
     const resolvedRuntimeStateDelta = runtimeStateArtifacts?.resolvedDelta ?? settlement.runtimeStateDelta;
@@ -230,6 +232,7 @@ export class WriterAgent extends BaseAgent {
       bookDir: input.bookDir,
       bookRules,
       language: resolvedLanguage,
+      narrativeLanguage: resolveNarrativeLanguage(input.book),
       chapterNumber: input.chapterNumber,
       title: input.title,
       content: input.content,
@@ -244,6 +247,7 @@ export class WriterAgent extends BaseAgent {
       input.bookDir,
       settlement.runtimeStateDelta,
       resolvedLanguage,
+      resolveNarrativeLanguage(input.book),
       input.chapterNumber,
       input.allowReapply,
       input.baselineChapter,
@@ -274,6 +278,7 @@ export class WriterAgent extends BaseAgent {
     readonly bookDir: string;
     readonly bookRules: BookRules | null;
     readonly language: "zh" | "en";
+    readonly narrativeLanguage: NarrativeLanguage;
     readonly chapterNumber: number;
     readonly title: string;
     readonly content: string;
@@ -296,7 +301,7 @@ export class WriterAgent extends BaseAgent {
       zh: `阶段 2：把第${params.chapterNumber}章事实投影到运行时状态`,
       en: `Phase 2: projecting chapter ${params.chapterNumber} facts into runtime state`,
     });
-    const systemPrompt = buildSettlerSystemPrompt(params.book, params.bookRules, resolvedLang);
+    const systemPrompt = buildSettlerSystemPrompt(params.book, params.bookRules, resolvedLang, params.narrativeLanguage);
     const governedControlBlock = this.buildSettlerGovernedControlBlock(
       params.chapterIntent,
       params.contextPackage,
@@ -309,6 +314,7 @@ export class WriterAgent extends BaseAgent {
       governedControlBlock,
       validationFeedback: params.validationFeedback,
       language: resolvedLang,
+      narrativeLanguage: params.narrativeLanguage,
     }) + `\n\n## Settlement baseline\nApply the delta to this exact baseline. Existing hook operations may name only its hook IDs. Later projections in retrieved context are references, not the baseline to be mutated.\n${JSON.stringify({ chapter: params.baselineSnapshot.manifest.lastAppliedChapter, currentState: params.baselineSnapshot.currentState, hooks: params.baselineSnapshot.hooks, allowNewHooks: params.allowNewHooks ?? true })}`;
     const knownHookIds = new Set(params.baselineSnapshot.hooks.hooks.map((hook) => hook.hookId));
     const { result, usage } = await this.submitStructured(
@@ -367,7 +373,7 @@ export class WriterAgent extends BaseAgent {
     output: WriteChapterOutput,
     language: "zh" | "en" = "zh",
     chapterIndex?: ReadonlyArray<ChapterMeta>,
-    // Reader wrapper only; runtime-state artifacts still use operational language.
+    // Reader wrapper and readable runtime-state projections use the narrative language.
     narrativeLanguage?: NarrativeLanguage,
   ): Promise<void> {
     const chaptersDir = join(bookDir, "chapters");
@@ -389,6 +395,7 @@ export class WriterAgent extends BaseAgent {
       bookDir,
       output,
       language,
+      narrativeLanguage ?? language,
     );
     const chapterSummariesMarkdown = runtimeStateArtifacts.chapterSummariesMarkdown;
 
@@ -632,6 +639,7 @@ ${selectedContext || "- none"}\n`;
     bookDir: string,
     delta: RuntimeStateDelta,
     language: "zh" | "en",
+    projectionLanguage: NarrativeLanguage,
     authoritativeChapterNumber?: number,
     allowReapply?: boolean,
     baselineChapter?: number,
@@ -645,6 +653,7 @@ ${selectedContext || "- none"}\n`;
         bookDir,
         delta: safeDelta,
         language,
+        projectionLanguage,
         allowReapply,
         allowNewHooks,
       });
@@ -658,6 +667,7 @@ ${selectedContext || "- none"}\n`;
       snapshot,
       delta: safeDelta,
       language,
+      projectionLanguage,
       allowReapply,
       allowNewHooks,
     });
@@ -667,6 +677,7 @@ ${selectedContext || "- none"}\n`;
     bookDir: string,
     output: WriteChapterOutput,
     language: "zh" | "en",
+    projectionLanguage: NarrativeLanguage,
   ): Promise<RuntimeStateArtifacts> {
     const safeDelta = this.normalizeRuntimeStateDeltaChapter(
       output.runtimeStateDelta,
@@ -692,6 +703,7 @@ ${selectedContext || "- none"}\n`;
       bookDir,
       delta: safeDelta,
       language,
+      projectionLanguage,
     });
   }
 

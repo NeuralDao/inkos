@@ -7,7 +7,7 @@ import type { LLMClient, OnStreamProgress } from "../llm/provider.js";
 import { clientWithModel } from "../llm/provider.js";
 import type { Logger } from "../utils/logger.js";
 import { BookConfigSchema, type BookConfig, type FanficMode } from "../models/book.js";
-import { resolveNarrativeLanguage } from "../utils/book-language.js";
+import { resolveNarrativeLanguage, type NarrativeLanguage } from "../utils/book-language.js";
 import type { ChapterMeta } from "../models/chapter.js";
 import type { NotifyChannel, LLMConfig, AgentLLMOverride } from "../models/project.js";
 import { ArchitectAgent, type ArchitectOutput } from "../agents/architect.js";
@@ -467,6 +467,8 @@ export class PipelineRunner {
         stagingBookDir,
         foundation,
         book.language,
+        "init",
+        resolveNarrativeLanguage(book),
       );
 
       if (effectiveExternalContext && effectiveExternalContext.trim().length > 0) {
@@ -587,6 +589,7 @@ export class PipelineRunner {
       foundation,
       book.language,
       "revise",
+      resolveNarrativeLanguage(book),
     );
     await syncWorkSourceArtifacts({ projectRoot: this.config.projectRoot, workId: bookId, accept: true , acceptPaths: await changedWorkSourcePaths(this.config.projectRoot, bookId, sourceBefore) });
   }
@@ -609,9 +612,9 @@ export class PipelineRunner {
     const architect = new ArchitectAgent(this.agentCtxFor("architect", bookId));
     try {
       const foundation = await architect.generateFoundation(book, context.join("\n\n"));
-      await architect.writeFoundationFiles(bookDir, foundation, book.language, "revise");
+      await architect.writeFoundationFiles(bookDir, foundation, book.language, "revise", resolveNarrativeLanguage(book));
       if (!(await this.pathExists(join(bookDir, "story", "state", "manifest.json")))) {
-        await createInitialRuntimeState({ bookDir, language: book.language, hooks: foundation.initialHooks });
+        await createInitialRuntimeState({ bookDir, language: book.language, projectionLanguage: resolveNarrativeLanguage(book), hooks: foundation.initialHooks });
       }
       await this.state.ensureControlDocuments(bookId, feedback);
       await this.state.saveChapterIndex(bookId, []);
@@ -702,6 +705,8 @@ export class PipelineRunner {
         bookDir,
         foundation,
         book.language,
+        "init",
+        resolveNarrativeLanguage(book),
       );
       this.logStage(stageLanguage, { zh: "初始化控制文档", en: "initializing control documents" });
       await this.state.ensureControlDocuments(book.id, this.config.externalContext);
@@ -743,7 +748,7 @@ export class PipelineRunner {
       });
 
       this.logStage(stageLanguage, { zh: "写入基础设定文件", en: "writing foundation files" });
-      await architect.writeFoundationFiles(bookDir, foundation, book.language);
+      await architect.writeFoundationFiles(bookDir, foundation, book.language, "init", resolveNarrativeLanguage(book));
 
       this.logStage(stageLanguage, { zh: "初始化控制文档", en: "initializing control documents" });
       await this.state.ensureControlDocuments(book.id, direction?.trim() || this.config.externalContext);
@@ -940,13 +945,14 @@ export class PipelineRunner {
           `Cannot revise chapter ${targetChapter} safely: baseline snapshot ${baselineChapter} is unavailable (${String(error)})`,
         );
       });
-      const baselineState = renderCurrentStateProjection(baselineSnapshot.currentState, language);
-      const baselineHooks = renderHooksProjection(baselineSnapshot.hooks, language);
+      const stateLanguage = resolveNarrativeLanguage(book);
+      const baselineState = renderCurrentStateProjection(baselineSnapshot.currentState, stateLanguage);
+      const baselineHooks = renderHooksProjection(baselineSnapshot.hooks, stateLanguage);
       const [authorityStoryFrame, authorityBookRules] = await Promise.all([
         readStoryFrame(bookDir), readFile(join(bookDir, "story", "book_rules.md"), "utf-8"),
       ]);
       const authorityContext = {storyFrame:authorityStoryFrame,bookRules:authorityBookRules,
-        chapterSummaries:renderChapterSummariesProjection(baselineSnapshot.chapterSummaries,language)};
+        chapterSummaries:renderChapterSummariesProjection(baselineSnapshot.chapterSummaries,stateLanguage)};
 
       const reviser = new ReviserAgent(this.agentCtxFor("reviser", bookId));
       this.logStage(stageLanguage, {
@@ -997,6 +1003,7 @@ export class PipelineRunner {
         settledRevision.updatedHooks,
         language,
         authorityContext,
+        stateLanguage,
       );
       if (!stateValidation.consistent || stateValidation.reconciliationRequired) {
         const recovery = await reconcileChapterStateAfterReview({
@@ -1039,7 +1046,7 @@ export class PipelineRunner {
         ...(stateValidation.observations.length > 0
           ? stateValidation.observations
           : !stateValidation.consistent || stateValidation.reconciliationRequired
-            ? [unresolvedStateObservation(language)]
+            ? [unresolvedStateObservation(resolveNarrativeLanguage(book))]
             : []),
       ];
       const revisionBaseCount = countChapterLength(content, lengthSpec.countingMode);
@@ -1102,7 +1109,7 @@ export class PipelineRunner {
       // Only the latest chapter owns current truth. Reworking an older chapter
       // invalidates its descendants, but must not rewind the live story state.
       if (isLatestChapter) {
-        await writer.saveChapter(bookDir, settledRevision, reviseLang, updatedIndex, book.narrativeLanguage);
+        await writer.saveChapter(bookDir, settledRevision, reviseLang, updatedIndex, resolveNarrativeLanguage(book));
       } else {
         await commitAtomicFileSet({
           rootDir: bookDir,
@@ -1369,9 +1376,10 @@ export class PipelineRunner {
       readStoryFrame(bookDir),
       readFile(join(storyDir, "book_rules.md"), "utf-8"),
     ]);
-    const oldState = renderCurrentStateProjection(runtimeSnapshot.currentState, pipelineLang);
-    const oldHooks = renderHooksProjection(runtimeSnapshot.hooks, pipelineLang);
-    const authorityChapterSummaries = renderChapterSummariesProjection(runtimeSnapshot.chapterSummaries, pipelineLang);
+    const stateLanguage = resolveNarrativeLanguage(book);
+    const oldState = renderCurrentStateProjection(runtimeSnapshot.currentState, stateLanguage);
+    const oldHooks = renderHooksProjection(runtimeSnapshot.hooks, stateLanguage);
+    const authorityChapterSummaries = renderChapterSummariesProjection(runtimeSnapshot.chapterSummaries, stateLanguage);
     const validator = new StateValidatorAgent(this.agentCtxFor("state-validator", bookId));
     const truthValidation = await validateChapterTruthPersistence({
       writer,
@@ -1404,7 +1412,7 @@ export class PipelineRunner {
           ...auditResult.observations,
           ...(truthValidation.validation.observations.length > 0
             ? truthValidation.validation.observations
-            : [unresolvedStateObservation(pipelineLang)]),
+            : [unresolvedStateObservation(stateLanguage)]),
         ],
       };
     }
@@ -1417,7 +1425,7 @@ export class PipelineRunner {
       lengthTelemetry,
       tokenUsage: totalUsage,
       loadChapterIndex: () => this.state.loadChapterIndex(bookId),
-      saveChapter: (index) => writer.saveChapter(bookDir, persistenceOutput, pipelineLang, index, book.narrativeLanguage),
+      saveChapter: (index) => writer.saveChapter(bookDir, persistenceOutput, pipelineLang, index, resolveNarrativeLanguage(book)),
       markBookActiveIfNeeded: () => this.markBookActiveIfNeeded(bookId),
     });
 
@@ -1492,13 +1500,14 @@ export class PipelineRunner {
         `Cannot sync chapter ${targetChapter} safely: baseline snapshot ${baselineChapter} is unavailable (${String(error)})`,
       );
     });
-    const oldState = renderCurrentStateProjection(baselineSnapshot.currentState, pipelineLang);
-    const oldHooks = renderHooksProjection(baselineSnapshot.hooks, pipelineLang);
+    const stateLanguage = resolveNarrativeLanguage(book);
+    const oldState = renderCurrentStateProjection(baselineSnapshot.currentState, stateLanguage);
+    const oldHooks = renderHooksProjection(baselineSnapshot.hooks, stateLanguage);
     const [authorityStoryFrame, authorityBookRules] = await Promise.all([
       readStoryFrame(bookDir), readFile(join(bookDir, "story", "book_rules.md"), "utf-8"),
     ]);
     const authorityContext = {storyFrame:authorityStoryFrame,bookRules:authorityBookRules,
-      chapterSummaries:renderChapterSummariesProjection(baselineSnapshot.chapterSummaries,pipelineLang)};
+      chapterSummaries:renderChapterSummariesProjection(baselineSnapshot.chapterSummaries,stateLanguage)};
 
     const reducedControlInput = await this.prepareExistingChapterContext(book,targetChapter,
       this.config.externalContext ?? (pipelineLang==='en'?`Reconstruct facts from existing chapter ${targetChapter}, preserving its prose.`:`根据现有第${targetChapter}章重建事实，保持正文。`));
@@ -1526,6 +1535,7 @@ export class PipelineRunner {
       syncedOutput.updatedHooks,
       pipelineLang,
       authorityContext,
+      stateLanguage,
     );
 
     if (!validation.consistent) {
@@ -1576,7 +1586,7 @@ export class PipelineRunner {
       updatedAt: new Date().toISOString(),
       observations: targetMeta.observations.filter((observation) => observation.code !== "state-sync-required"),
     };
-    await writer.saveChapter(bookDir, syncedOutput, pipelineLang, index, book.narrativeLanguage);
+    await writer.saveChapter(bookDir, syncedOutput, pipelineLang, index, resolveNarrativeLanguage(book));
     return {
       chapterNumber: targetChapter,
       title: targetMeta.title,
@@ -1717,8 +1727,10 @@ export class PipelineRunner {
           bookDir,
           foundation,
           resolvedLanguage,
+          "init",
+          resolveNarrativeLanguage(book),
         );
-        await this.resetImportReplayTruthFiles(bookDir, resolvedLanguage);
+        await this.resetImportReplayTruthFiles(bookDir, resolvedLanguage, resolveNarrativeLanguage(book));
         await this.state.saveChapterIndex(input.bookId, [], { allowEmptyWithChapterFiles: true });
         await this.state.snapshotState(input.bookId, 0);
 
@@ -1793,7 +1805,7 @@ export class PipelineRunner {
         const updatedIndex = existingIdx >= 0
           ? existingIndex.map((e, idx) => idx === existingIdx ? newEntry : e)
           : [...existingIndex, newEntry];
-        await writer.saveChapter(bookDir, persistedOutput, resolvedLanguage, updatedIndex, book.narrativeLanguage);
+        await writer.saveChapter(bookDir, persistedOutput, resolvedLanguage, updatedIndex, resolveNarrativeLanguage(book));
 
         importedCount++;
         totalWords += chapterWordCount;
@@ -1933,6 +1945,7 @@ export class PipelineRunner {
   private async resetImportReplayTruthFiles(
     bookDir: string,
     language: LengthLanguage,
+    projectionLanguage: NarrativeLanguage,
   ): Promise<void> {
     const storyDir = join(bookDir, "story");
 
@@ -1955,7 +1968,7 @@ export class PipelineRunner {
       rm(join(storyDir, "state"), { recursive: true, force: true }),
       rm(join(storyDir, "snapshots"), { recursive: true, force: true }),
     ]);
-    await createInitialRuntimeState({ bookDir, language, hooks: [] });
+    await createInitialRuntimeState({ bookDir, language, projectionLanguage, hooks: [] });
   }
 
   private buildImportReplayStateSeed(language: LengthLanguage): string {

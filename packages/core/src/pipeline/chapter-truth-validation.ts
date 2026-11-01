@@ -11,6 +11,7 @@ import {
   renderCurrentStateProjection,
   renderHooksProjection,
 } from "../state/state-projections.js";
+import { resolveNarrativeLanguage } from "../utils/book-language.js";
 
 export async function validateChapterTruthPersistence(params: {
   readonly writer: Pick<WriterAgent, "settleChapterState">;
@@ -50,6 +51,7 @@ export async function validateChapterTruthPersistence(params: {
       persistenceOutput.updatedHooks,
       params.language,
       params.authorityContext,
+      resolveNarrativeLanguage(params.book),
     );
   } catch (error) {
     params.logger?.warn(`State validation error for chapter ${params.chapterNumber}: ${String(error)}`);
@@ -59,7 +61,9 @@ export async function validateChapterTruthPersistence(params: {
         reconciliationRequired: true,
         observations: [{
           code: "state-validation-unavailable",
-          summary: `State validation was unavailable: ${String(error)}`,
+          summary: resolveNarrativeLanguage(params.book) === "ru"
+            ? `Проверка состояния недоступна: ${String(error)}`
+            : `State validation was unavailable: ${String(error)}`,
           evidence: [],
         }],
       },
@@ -110,6 +114,7 @@ export async function validateChapterTruthPersistence(params: {
 
 async function preserveCanonicalRuntimeState(
   params: {
+    readonly book: BookConfig;
     readonly bookDir: string;
     readonly language: LengthLanguage;
   },
@@ -119,9 +124,9 @@ async function preserveCanonicalRuntimeState(
   return {
     ...output,
     runtimeStateSnapshot: snapshot,
-    updatedState: renderCurrentStateProjection(snapshot.currentState, params.language),
-    updatedHooks: renderHooksProjection(snapshot.hooks, params.language),
-    updatedChapterSummaries: renderChapterSummariesProjection(snapshot.chapterSummaries, params.language),
+    updatedState: renderCurrentStateProjection(snapshot.currentState, resolveNarrativeLanguage(params.book)),
+    updatedHooks: renderHooksProjection(snapshot.hooks, resolveNarrativeLanguage(params.book)),
+    updatedChapterSummaries: renderChapterSummariesProjection(snapshot.chapterSummaries, resolveNarrativeLanguage(params.book)),
     runtimeStateApplied: false,
   };
 }

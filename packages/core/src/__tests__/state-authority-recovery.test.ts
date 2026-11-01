@@ -10,15 +10,17 @@ import {createHash} from 'node:crypto';
 
 it('retains the same authority context through initial validation and settlement reconciliation',async()=>{
   const authority={storyFrame:'Current author-approved setting',bookRules:'Current professional boundary',chapterSummaries:'Earlier chapters only'};
+  const book={id:'test',title:'Test',platform:'other',genre:'drama',status:'active',targetChapters:3,chapterWordCount:1000,language:'en',narrativeLanguage:'ru',createdAt:'2026-11-01T00:00:00.000Z',updatedAt:'2026-11-01T00:00:00.000Z'} as const;
   const initial={updatedState:'Initial projection',updatedHooks:'Prior hooks'} as WriteChapterOutput;
   const corrected={...initial,updatedState:'Reconciled projection'};
   const validate=vi.fn<(...args:unknown[])=>Promise<ValidationResult>>()
     .mockResolvedValueOnce({consistent:false,reconciliationRequired:true,observations:[]})
     .mockResolvedValueOnce({consistent:true,reconciliationRequired:false,observations:[]});
   const settleChapterState=vi.fn().mockResolvedValue(corrected);
-  const result=await validateChapterTruthPersistence({writer:{settleChapterState},validator:{validate},book:{} as never,bookDir:'/unused',chapterNumber:1,title:'Chapter',content:'Current chapter',persistenceOutput:initial,previousTruth:{oldState:'Baseline',oldHooks:'Prior hooks'},authorityContext:authority,reducedControlInput:{chapterIntent:'Current intent',contextPackage:{} as never},language:'en',logWarn:()=>{}});
+  const result=await validateChapterTruthPersistence({writer:{settleChapterState},validator:{validate},book,bookDir:'/unused',chapterNumber:1,title:'Chapter',content:'Current chapter',persistenceOutput:initial,previousTruth:{oldState:'Baseline',oldHooks:'Prior hooks'},authorityContext:authority,reducedControlInput:{chapterIntent:'Current intent',contextPackage:{} as never},language:'en',logWarn:()=>{}});
   expect(validate).toHaveBeenCalledTimes(2);
   expect(validate.mock.calls.map(args=>args[7])).toEqual([authority,authority]);
+  expect(validate.mock.calls.map(args=>args[8])).toEqual(['ru','ru']);
   expect(settleChapterState).toHaveBeenCalledTimes(1);
   expect(result.persistenceOutput).toBe(corrected);
   expect(result.validation).toMatchObject({consistent:true,reconciliationRequired:false});
@@ -26,7 +28,7 @@ it('retains the same authority context through initial validation and settlement
 
 it('requires a concrete report for reconciliation and preserves it through a flat HTTP tool result',async()=>{
   const requests:Array<{messages:Array<{role:string,content:string}>}>=[];
-  const report='## Projection mismatch\nThe declared workshop location must remain attached to the character.';
+  const report='## Расхождение в проекции\nМесто работы должно оставаться связано с персонажем.';
   const server=createServer(async(req,res)=>{
     const chunks=[];for await(const chunk of req)chunks.push(chunk);
     requests.push(JSON.parse(Buffer.concat(chunks).toString('utf8')));
@@ -38,11 +40,12 @@ it('requires a concrete report for reconciliation and preserves it through a fla
   server.listen(0,'127.0.0.1');await once(server,'listening');
   try{
     const client=createLLMClient({service:'custom',provider:'openai',configSource:'studio',model:'fixture',apiKey:'fixture',baseUrl:`http://127.0.0.1:${(server.address() as {port:number}).port}/v1`,apiFormat:'chat',stream:true,temperature:0,thinkingBudget:0});
-    const result=await new StateValidatorAgent({client,model:'fixture',projectRoot:'/tmp'}).validate('Current chapter',1,'Prior state','Proposed state','Prior hooks','Proposed hooks','en',{storyFrame:'Current authority'});
+    const result=await new StateValidatorAgent({client,model:'fixture',projectRoot:'/tmp'}).validate('Current chapter',1,'Prior state','Proposed state','Prior hooks','Proposed hooks','en',{storyFrame:'Current authority'},'ru');
     expect(result).toMatchObject({consistent:false,reconciliationRequired:true,observations:[{code:'state-reconciliation'}]});
     const sha=(value:string)=>createHash('sha256').update(value).digest('hex');
     expect(sha(result.observations[0].summary)).toBe(sha(report));
     expect(requests).toHaveLength(2);
+    expect(requests[0].messages.find(m=>m.role==='system')?.content).toContain('Respond in Russian');
     expect(JSON.parse(requests[1].messages.find(m=>m.role==='tool')!.content)).toMatchObject({code:'STATE_RECONCILIATION_REASON_REQUIRED'});
   }finally{server.closeAllConnections();await new Promise<void>((resolve,reject)=>server.close(error=>error?reject(error):resolve()));}
 },15000);

@@ -8,7 +8,7 @@ import { FoundationDetailsToolSchema, FoundationOutlineToolSchema, FoundationCas
 import type { HookRecord } from "../models/runtime-state.js";
 import { createInitialRuntimeState } from "../state/runtime-state-store.js";
 import { commitAtomicFileSet, type AtomicFileWrite } from "../utils/atomic-file-set.js";
-import { resolveNarrativeLanguage } from "../utils/book-language.js";
+import { resolveNarrativeLanguage, type NarrativeLanguage } from "../utils/book-language.js";
 
 // Architect owns the five-section persistence protocol. Foundation craft is
 // supplied by the active long-writing and derivative-work Skills.
@@ -34,7 +34,7 @@ function foundationNarrativeLanguageContract(language: "zh" | "en" | "ru"): stri
   return [
     "## Language of readable foundation material",
     "Write the free-text author-facing foundation in Russian: storyFrame, volumeMap, readable bookRules, descriptive text values in bookRulesData, and character-card content.",
-    "Keep pendingHooks text in English because it feeds the operational runtime state. Preserve all tool names, JSON keys, schema shapes, enum values, hook IDs, and other technical identifiers exactly; do not translate or invent them.",
+    "Write descriptive pendingHooks text in Russian as readable story state. Preserve all tool names, JSON keys, schema shapes, status enum values, hook IDs, and other technical identifiers exactly; do not translate or invent them.",
   ].join("\n");
 }
 
@@ -156,6 +156,7 @@ ${reviseFrom.userFeedback || "（无）"}
     output: ArchitectOutput,
     language: "zh" | "en",
     mode: "init" | "revise" = "init",
+    projectionLanguage: NarrativeLanguage = language,
   ): Promise<void> {
     const writes: AtomicFileWrite[] = [
       { relativePath: join("story", "outline", "story_frame.md"), content: `${output.storyFrame.trim()}\n` },
@@ -191,7 +192,7 @@ ${reviseFrom.userFeedback || "（无）"}
       deletes,
     });
     if (mode === "init") {
-      await createInitialRuntimeState({ bookDir, language, hooks: output.initialHooks });
+      await createInitialRuntimeState({ bookDir, language, projectionLanguage, hooks: output.initialHooks });
     }
   }
   /**
@@ -331,7 +332,7 @@ ${reviseFrom.userFeedback || "（无）"}
       expectedPayoff: hook.expectedPayoff.trim(),
       notes: hook.notes.trim(),
     }));
-    const pendingHooks = renderHooksProjection({ hooks: initialHooks }, input.language);
+    const pendingHooks = renderHooksProjection({ hooks: initialHooks }, input.narrativeLanguage);
 
     const castContext=`${input.userMessage}\n\n${outline.storyFrame}\n\n${outline.volumeMap}\n\n${details.bookRules}`;
     const {result:cast} = await this.submitStructured([

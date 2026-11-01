@@ -22,13 +22,13 @@
 ## Roles and authorization
 
 - The user controls goals, scope, budget, integration, publishing, and risky actions.
-- ChatGPT performs architecture analysis, task planning, documentation maintenance, and independent code review.
-- Codex implements approved code changes and provides diffs for review.
+- ChatGPT and Codex have equal roles: either may investigate, plan within the approved scope, edit source/tests/docs, or independently review work. Choose the executor and reviewer based on the task; do not impose a role split based only on which client is being used.
+- Synchronize shared work through the repository: use the same task branch where possible, and record commits plus current status/next steps in `fork-docs/CURRENT_STATE.md`. Check Git state before editing and preserve changes from the other workspace.
 - Default to read-only investigation unless the user has authorized implementation.
 - An approved task authorizes only changes needed within its stated scope, including narrow corrections.
 - Do not start adjacent features, cleanup projects, migrations, or major refactoring without approval.
-- Do not modify `fork-docs/`; ChatGPT maintains it.
-- Do not modify this `AGENTS.md` without explicit approval.
+- Keep `fork-docs/` aligned with accepted project decisions and implementation state; either participant may update it within an authorized task.
+- Modify this `AGENTS.md` only when the user explicitly requests an instruction/workflow change.
 - Never push, merge, rebase, force-push, publish, or modify protected tracking branches without explicit authorization.
 - Create commits or pull requests only when requested.
 
@@ -91,4 +91,4 @@ Report in Russian:
 
 Do not claim that unexecuted checks passed.
 
-ChatGPT independently reviews the result as ACCEPT, REVISE, or REJECT. Technical acceptance does not authorize merging or publishing.
+An independent review may report ACCEPT, REVISE, or REJECT. Technical acceptance does not authorize merging or publishing.
