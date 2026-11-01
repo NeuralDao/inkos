@@ -8,13 +8,13 @@
 
 **Новый shortlist (OpenRouter usage through 31.10.2026):**
 
-- `deepseek/deepseek-v4.1-flash-1017` — #1 daily, 7.09T tokens; provider-dependent price snapshots примерно $0.05–0.10 input / $0.50–0.60 output; context 1M; tools/tool_choice/structured output заявлены.
-- `z-ai/glm-5.3-flash` — #2 daily, 1.83T; cheapest endpoint from $0.02/$0.30; context 1M; 27 providers; tools/tool_choice/JSON Schema; OpenRouter availability snapshot 99.83%/3d and 99.71%/24h; cheapest Open Inference endpoint itself showed 95.35% uptime and 7 tok/s. Самый дешёвый endpoint Open Inference показывал 95.35% uptime и 7 tok/s, поэтому его нельзя pin-ить без причины.
-- `minimax/minimax-m3.1-flash` —  #6 daily, 892B; Tenstorrent $0.05/$0.20, но большинство других providers около $0.15/$0.60; context 1M; 13 providers; tools/tool_choice/JSON Schema; availability snapshot 99.89%/3d and 99.86%/24h; отдельные providers показывают tool-call error rate 0.94–1.36%.
+- `deepseek/deepseek-v4.1-flash-1017` — #1 daily, 7.09T tokens; provider snapshots примерно $0.05–0.15 input / $0.50–0.60 output; context 1M; 9 providers; OpenRouter snapshot 100% uptime / 99.93% availability; tools и tool_choice заявлены.
+- `z-ai/glm-5.3-flash` — #2 daily, 1.83T; cheapest endpoint $0.02/$0.30; context 1M; 27 providers; tools/tool_choice/JSON Schema; availability snapshot 99.83%/3d and 99.71%/24h. Самый дешёвый Open Inference endpoint отдельно показывал 95.35% uptime и 7 tok/s; не pin-ить его вручную, оставить routing/failover OpenRouter.
+- `minimax/minimax-m3.1-flash` — #6 daily, 892B; model card from $0.05/$0.20, provider prices vary; context 1M; 13 providers; tools/tool_choice/JSON Schema; availability snapshot 99.89%/3d and 99.86%/24h; отдельные providers показывают tool-call error rate 0.94–1.36%.
 
 Все три — популярные модели верхней части OpenRouter ranking. Не расширять shortlist до первых результатов. Популярность не доказывает надёжность; uptime не доказывает правильность structured calls. Сравнивать реальные вызовы InkOS.
 
-**Тест:** тот же synthetic `submit_foundation_cast_index` (Anna/Pavel/Irina) для каждого fixed ID, in-memory `modelOverrides.architect`, OpenRouter Responses. До 3 prepared requests на модель за запуск; один полный прогон оценивается примерно в $0.076, два — $0.152 по консервативной формуле при cap $0.15/$0.75 и 8500 input/2048 output на физическую попытку. Общий согласованный бюджет — $0.20; оценка не является hard billing cap, обязательна сверка Activity. При стабильном structured PASS — полный Architect dry-run без записи файлов Foundation.
+**Тест:** тот же synthetic `submit_foundation_cast_index` (Anna/Pavel/Irina) для каждого fixed ID, in-memory `modelOverrides.architect`, OpenRouter Responses. До 3 prepared requests на модель за запуск; один полный прогон оценивается примерно в $0.076, два — $0.152 по консервативной формуле при cap $0.15/$0.75 и 8500 input/2048 output на физическую попытку. Плановый потолок оценки — $0.20; это не hard billing cap и не разрешение на платные вызовы, обязательна сверка Activity. При стабильном structured PASS — полный Architect dry-run без записи файлов Foundation.
 
 **Решение 01.11:** начинать техническую квалификацию этих трёх моделей; не назначать роли, не запускать Writer/главы, не менять persistent overrides и не создавать новый Work. Подробный shortlist, метрики и скрипт — [G1_MODEL_STACK.md](./G1_MODEL_STACK.md).
 
