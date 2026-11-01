@@ -43,7 +43,7 @@ const FoundationRevisionParams = Type.Object({
 const WriteChaptersParams = Type.Object({
   instruction: Type.String(),
   bookId: Type.Optional(Type.String()),
-  startChapterNumber: Type.Integer({ minimum: 1, description: "First chapter in the requested writing range. Use the author's target, or inspect current progress for a request to continue. Existing chapters require revision, not another append." }),
+  startChapterNumber: Type.Optional(Type.Integer({ minimum: 1, description: "Optional first chapter in the requested writing range. If omitted, write from the next unwritten chapter. Existing chapters require revision, not another append." })),
   chapterCount: Type.Optional(Type.Integer({ minimum: 1 })),
   chapterWordCount: Type.Optional(Type.Integer({ minimum: 1 })),
 });
@@ -211,7 +211,7 @@ export function createWriteChaptersTool(
   return {
     name: "write_chapters",
     label: "Write chapters",
-    description: "Write a specific consecutive range of new chapters. startChapterNumber must match the next unwritten chapter; an existing or skipped range is rejected before generation. Inspect existing chapters for review, revision or export instead of resending an already completed writing range. This persists chapter artifacts and story state.",
+    description: "Write a specific consecutive range of new chapters. If startChapterNumber is supplied, it must match the next unwritten chapter; an existing or skipped range is rejected before generation. If omitted, writing starts at the next unwritten chapter. Inspect existing chapters for review, revision or export instead of resending an already completed writing range. This persists chapter artifacts and story state.",
     parameters: WriteChaptersParams,
     async execute(_toolCallId, params: Static<typeof WriteChaptersParams>, signal, onUpdate) {
         const bookId = resolveBookId("write_chapters", params.bookId, activeBookId);
@@ -236,8 +236,8 @@ export function createWriteChaptersTool(
           kind: results.length === 1 ? "chapter_written" : "chapters_written",
           bookId,
           requestedCount: count,
-          startChapterNumber: params.startChapterNumber,
-          endChapterNumber: params.startChapterNumber + count - 1,
+          startChapterNumber: first?.chapterNumber,
+          endChapterNumber: results.at(-1)?.chapterNumber,
           completedCount: results.length,
           ...(delivery?{delivery}:{}),
           observations,
