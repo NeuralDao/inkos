@@ -1,5 +1,27 @@
 # R6(a) — исторический выбор Selectel и OpenRouter; актуальное решение в G1_MODEL_STACK
 
+**АКТУАЛЬНОЕ ДОПОЛНЕНИЕ 01.11.2026 — платный диагностический стек OpenRouter.**
+
+Задача изменилась: сейчас нужен не Writer для русской прозы, а дешёвый, популярный и надёжный временный стек для отладки InkOS 2.0. Литературные fine-tunes и оценка прозы отложены до рабочего pipeline. Free stack и paid debug stack — параллельные независимые треки.
+
+**Критерии:** (1) технический gate: exact model ID, OpenAI Responses, `tools` + `tool_choice=required`, typed structured result; (2) надёжность 40%: public uptime/provider redundancy как предварительный сигнал, затем повторяемость 2 одинаковых live smoke, retries/429/timeout/actual provider; (3) цена 35%: фактический provider price и billed cost, не минимальный рекламный endpoint; (4) популярность 25%: OpenRouter usage ranking. Литературное качество исключено.
+
+**Новый shortlist (OpenRouter usage through 30.10.2026):**
+
+- `deepseek/deepseek-v4.1-flash-1017` — #1 daily, 8.16T tokens; provider-dependent price snapshots примерно $0.05–0.10 input / $0.50–0.60 output; context 1M; tools/tool_choice/structured output заявлены.
+- `z-ai/glm-5.3-flash` — #2 daily, 2.66T; cheapest published endpoint $0.02/$0.30; context 1M; 31 providers; tools/tool_choice/JSON Schema; OpenRouter availability snapshot 99.83%/3d and 99.71%/24h. Самый дешёвый endpoint Open Inference показывал 95.35% uptime и 7 tok/s, поэтому его нельзя pin-ить без причины.
+- `minimax/minimax-m3.1-flash` — #7 daily, 1.05T; Tenstorrent $0.05/$0.20, но большинство других providers около $0.15/$0.60; context 1M; 13 providers; tools/tool_choice/JSON Schema; availability snapshot 99.89%/3d and 99.86%/24h; отдельные providers показывают tool-call error rate 0.94–1.36%.
+
+Все три — популярные модели верхней части OpenRouter ranking. Не расширять shortlist до первых результатов. Популярность не доказывает надёжность; uptime не доказывает правильность structured calls. Сравнивать реальные вызовы InkOS.
+
+**Тест:** тот же synthetic `submit_foundation_cast_index` (Anna/Pavel/Irina) для каждого fixed ID, in-memory `modelOverrides.architect`, OpenRouter Responses. До 3 prepared requests на модель за запуск; один полный прогон оценивается примерно в $0.076, два — $0.152 по консервативной формуле при cap $0.15/$0.75 и 8500 input/2048 output на физическую попытку. Общий согласованный бюджет — $0.20; оценка не является hard billing cap, обязательна сверка Activity. При стабильном structured PASS — полный Architect dry-run без записи файлов Foundation.
+
+**Решение 01.11:** начинать техническую квалификацию этих трёх моделей; не назначать роли, не запускать Writer/главы, не менять persistent overrides и не создавать новый Work. Подробный shortlist, метрики и скрипт — [G1_MODEL_STACK.md](./G1_MODEL_STACK.md).
+
+**Источники:** [OpenRouter Rankings](https://openrouter.ai/rankings?models=open), [DeepSeek V4.1 Flash 1017](https://openrouter.ai/deepseek/deepseek-v4.1-flash-1017), [GLM 5.3 Flash](https://openrouter.ai/z-ai/glm-5.3-flash), [MiniMax M3.1 Flash](https://openrouter.ai/minimax/minimax-m3.1-flash). Дата проверки — 01.11.2026; цены и uptime динамические.
+
+---
+
 **Дополнение 31.10.2026:** пользователь заменил решение 30.10 выбрать Selectel на **OpenRouter**, с планом начальной покупки кредитов **$10** и применением бесплатных моделей для технических live-проверок. Ни Selectel, ни OpenRouter в G1 не проверены реальным API. Старые тексты, таблицы тарифов, требования `Selectel first` и пометка `OpenRouter — архив` ниже — **исторические сведения на дату их записи и не действуют как текущие инструкции**. Для выбора моделей и ближайшего шага пользоваться [G1_MODEL_STACK.md](./G1_MODEL_STACK.md), для подтверждения решений — [DECISIONS.md](./DECISIONS.md). Исторические цены в RUB/USD не переносить автоматически в новую конфигурацию.
 
 
