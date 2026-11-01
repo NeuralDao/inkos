@@ -34,7 +34,7 @@ OpenRouter Rankings, последний доступный полный днев
 
 1. Синтетический `submit_foundation_cast_index` через реальный Core `PipelineRunner.createAgentContext('architect')` и in-memory `modelOverrides.architect`; ровно Anna (major), Pavel (minor), Irina (minor).
 2. Один вызов на каждую модель за один запуск; максимум 3 `model-request-prepared` на модель и до 3 SDK HTTP attempts на prepared payload. Записать requested/resolved/actual model, actual provider, `tool_choice`, retries, usage, latency, cost и безопасную cause chain.
-3. При необходимости повторить весь smoke второй раз. Расчётный worst-case потолок одного запуска — **около $0.076**; двух запусков — **около $0.152** при принятых границах. Это **не hard billing cap** и не замена OpenRouter Activity; не запускать более двух полных прогонов в рамках согласованного лимита $0.20.
+3. Сначала один полный smoke batch: по одному вызову на каждую модель. Расчётный worst-case потолок batch — **около $0.076**; второй batch поднял бы суммарную оценку до **около $0.152** при плановом потолке $0.20. Это **не hard billing cap и не разрешение на платные API-вызовы**. После первого batch остановиться, изучить результаты и Activity; повторный batch — только после отдельного подтверждения пользователя.
 4. Только после стабильного structured PASS переходить к synthetic dry-run полного `ArchitectAgent.generateFoundation()` (outline → details → cast index → cast documents), без `writeFoundationFiles()`. Writer/литературные главы, persistent overrides и новый Work — отдельные решения.
 
 ### Диагностический harness
@@ -42,7 +42,7 @@ OpenRouter Rankings, последний доступный полный днев
 - Ветка: [`feat/g1-paid-debug-stack`](https://github.com/NeuralDao/inkos/tree/feat/g1-paid-debug-stack), stacked draft PR относительно PR #15: [Draft PR #17](https://github.com/NeuralDao/inkos/pull/17), stacked к PR #15.
 - Основа кода: `fix/g1-openrouter-reasoning-defaults` (PR #15); provenance gate сравнивает полный Core source/build inputs именно с `origin/fix/g1-openrouter-reasoning-defaults`, чтобы не тестировать устаревший `custom/main` без reasoning fix.
 - Скрипты: `scripts/g1/core-build-provenance.ps1` и `scripts/g1/qualify-openrouter-models.ps1`. `modelOverrides` только in-memory; free-only guard отключается только внутри отдельного диагностического процесса и восстанавливается; `allow_fallbacks=true` только между providers того же model ID; `max_price.prompt=0.15`, `completion=0.75`.
-- Один запуск оценивается максимум в $0.08; два запуска — около $0.152 по worst-case формуле. Actual cost неизвестна до OpenRouter Activity.
+- Один batch оценивается максимум в $0.076 (внутренний estimate guard $0.08); два batch — около $0.152. Это расчёт, не hard billing cap и не разрешение на live paid API. Actual cost неизвестна до OpenRouter Activity.
 - Текущий статус: скрипты подготовлены, но Codex review, PowerShell syntax parse, provenance Build/Verify и live API **NOT RUN**. Build mode запускает только Core build; не запускает test/typecheck/lint/Studio/E2E.
 
 Источники (проверены 01.11.2026): [OpenRouter Rankings](https://openrouter.ai/rankings?models=open), [DeepSeek V4.1 Flash 1017](https://openrouter.ai/deepseek/deepseek-v4.1-flash-1017), [GLM 5.3 Flash](https://openrouter.ai/z-ai/glm-5.3-flash), [MiniMax M3.1 Flash](https://openrouter.ai/minimax/minimax-m3.1-flash). Публичные uptime/availability и тарифы динамические; перед каждым платным прогоном сверять актуальный provider и price.
