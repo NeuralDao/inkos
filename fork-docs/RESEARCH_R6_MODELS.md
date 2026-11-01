@@ -6,11 +6,11 @@
 
 **Критерии:** (1) технический gate: exact model ID, OpenAI Responses, `tools` + `tool_choice=required`, typed structured result; (2) надёжность 40%: public uptime/provider redundancy как предварительный сигнал, затем повторяемость 2 одинаковых live smoke, retries/429/timeout/actual provider; (3) цена 35%: фактический provider price и billed cost, не минимальный рекламный endpoint; (4) популярность 25%: OpenRouter usage ranking. Литературное качество исключено.
 
-**Новый shortlist (OpenRouter usage through 30.10.2026):**
+**Новый shortlist (OpenRouter usage through 31.10.2026):**
 
-- `deepseek/deepseek-v4.1-flash-1017` — #1 daily, 8.16T tokens; provider-dependent price snapshots примерно $0.05–0.10 input / $0.50–0.60 output; context 1M; tools/tool_choice/structured output заявлены.
-- `z-ai/glm-5.3-flash` — #2 daily, 2.66T; cheapest published endpoint $0.02/$0.30; context 1M; 31 providers; tools/tool_choice/JSON Schema; OpenRouter availability snapshot 99.83%/3d and 99.71%/24h. Самый дешёвый endpoint Open Inference показывал 95.35% uptime и 7 tok/s, поэтому его нельзя pin-ить без причины.
-- `minimax/minimax-m3.1-flash` — #7 daily, 1.05T; Tenstorrent $0.05/$0.20, но большинство других providers около $0.15/$0.60; context 1M; 13 providers; tools/tool_choice/JSON Schema; availability snapshot 99.89%/3d and 99.86%/24h; отдельные providers показывают tool-call error rate 0.94–1.36%.
+- `deepseek/deepseek-v4.1-flash-1017` — #1 daily, 7.09T tokens; provider-dependent price snapshots примерно $0.05–0.10 input / $0.50–0.60 output; context 1M; tools/tool_choice/structured output заявлены.
+- `z-ai/glm-5.3-flash` — #2 daily, 1.83T; cheapest endpoint from $0.02/$0.30; context 1M; 27 providers; tools/tool_choice/JSON Schema; OpenRouter availability snapshot 99.83%/3d and 99.71%/24h; cheapest Open Inference endpoint itself showed 95.35% uptime and 7 tok/s. Самый дешёвый endpoint Open Inference показывал 95.35% uptime и 7 tok/s, поэтому его нельзя pin-ить без причины.
+- `minimax/minimax-m3.1-flash` —  #6 daily, 892B; Tenstorrent $0.05/$0.20, но большинство других providers около $0.15/$0.60; context 1M; 13 providers; tools/tool_choice/JSON Schema; availability snapshot 99.89%/3d and 99.86%/24h; отдельные providers показывают tool-call error rate 0.94–1.36%.
 
 Все три — популярные модели верхней части OpenRouter ranking. Не расширять shortlist до первых результатов. Популярность не доказывает надёжность; uptime не доказывает правильность structured calls. Сравнивать реальные вызовы InkOS.
 
