@@ -4,7 +4,7 @@
 
 **Литературный G1:** brief R3 v1.0, объём и рубрика R2/R4 сохранены; отдельный запуск книги/глав не разрешён этим исследованием. Free dynamic route не считать строгим модельным A/B.
 
-**Paid diagnostic stack:** критерии — technical compatibility gate, reliability 40%, cost 35%, popularity 25%. Кандидаты подтверждены в верхней части OpenRouter daily ranking на срезе 31.10.2026. Тестовый harness в `feat/g1-paid-debug-stack`; два полных smoke-прогона оценочно ≤$0.152 в пределах прежнего согласованного лимита $0.20, но это не hard billing cap. Script/Codex review/local parse/build/live API пока NOT RUN.
+**Paid diagnostic stack:** критерии — technical compatibility gate, reliability 40%, cost 35%, popularity 25%. Кандидаты подтверждены в верхней части OpenRouter daily ranking на срезе 31.10.2026. Тестовый harness в `feat/g1-paid-debug-stack`; один полный batch оценивается ≤$0.076; два — ≤$0.152 при плановом потолке $0.20. Это не hard billing cap и не разрешение на платные API-вызовы. Script/Codex review/local parse/build/live API пока NOT RUN.
 
 
 **Исторический контекст 31.10.2026:** OpenRouter заменил Selectel для будущего G1. После этого выполнены synthetic free smoke; отдельная платная квалификация сейчас ведётся по правилам выше. **Предыдущий документационный кодовый срез:** `custom/main@59446a5f36f231f35933fbaf85713f25b328f596` (последний интегрированный код `24bdd47c`). **Работа с Codex на паузе до решения пользователя.** Это текущий статус **исследований**, не очередь реализации: [CURRENT_STATE.md](./CURRENT_STATE.md) отвечает за разработку. Для входа в новый чат достаточно [INDEX.md](./INDEX.md) + **этого файла**; подробности читать **выборочно**, [RESEARCH.md](./RESEARCH.md) — журнал/история, а не обязательная загрузка.
