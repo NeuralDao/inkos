@@ -33,7 +33,7 @@ OpenRouter Rankings, последний доступный полный днев
 ### Первый этап тестирования
 
 1. Синтетический `submit_foundation_cast_index` через реальный Core `PipelineRunner.createAgentContext('architect')` и in-memory `modelOverrides.architect`; ровно Anna (major), Pavel (minor), Irina (minor).
-2. Один вызов на каждую модель за один запуск; максимум 3 `model-request-prepared` на модель и до 3 SDK HTTP attempts на prepared payload. Записать requested/resolved/actual model, actual provider, `tool_choice`, retries, usage, latency, cost и безопасную cause chain.
+2. Один вызов на каждую модель за один запуск; максимум 3 `model-request-prepared` на модель и до 3 SDK HTTP attempts на prepared payload. Скрипт проверяет на wire-level каждый запрос: `api=openai-responses` и `tool_choice=required`; иначе останавливает вызов. Записывает requested/resolved/response model, model-call IDs, provider metadata, retries, usage, latency, cost и безопасную cause chain; фактический provider и billed cost сверяются по Activity.
 3. Сначала один полный smoke batch: по одному вызову на каждую модель. Расчётный worst-case потолок batch — **около $0.076**; второй batch поднял бы суммарную оценку до **около $0.152** при плановом потолке $0.20. Это **не hard billing cap и не разрешение на платные API-вызовы**. После первого batch остановиться, изучить результаты и Activity; повторный batch — только после отдельного подтверждения пользователя.
 4. Только после стабильного structured PASS переходить к synthetic dry-run полного `ArchitectAgent.generateFoundation()` (outline → details → cast index → cast documents), без `writeFoundationFiles()`. Writer/литературные главы, persistent overrides и новый Work — отдельные решения.
 
