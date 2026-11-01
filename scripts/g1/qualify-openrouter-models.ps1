@@ -134,9 +134,9 @@ const sdkAttemptsPerPreparedRequest = 3;
 const maxPreparedRequestsPerModel = 3;
 const priceCap = { prompt: 0.15, completion: 0.75 };
 const assumedInputTokensPerRequest = 8500;
-// One invocation is estimated at <= $0.076. Two full invocations fit
-// inside the separately approved $0.20 aggregate estimate (~$0.152).
-const authorizedBudgetUsd = 0.08;
+// One three-model invocation must remain below this calculated estimate ceiling.
+// This is not an account-level spending cap or permission to make paid API calls.
+const perRunEstimateCapUsd = 0.08;
 const totalRequestCeiling = models.length * maxPreparedRequestsPerModel * sdkAttemptsPerPreparedRequest;
 const estimatedWorstCaseUsd =
   (totalRequestCeiling * assumedInputTokensPerRequest * priceCap.prompt
@@ -200,9 +200,13 @@ function summarizeEvidence(type, payload) {
   if (type === "model-call-started") {
     return {
       type,
+      modelCallId: payload.trace?.modelCallId ?? null,
       model: payload.model ?? null,
       maxTokens: payload.maxTokens ?? null,
       agentRole: payload.trace?.agentRole ?? null,
+      toolNames: Array.isArray(payload.context?.tools)
+        ? payload.context.tools.map(tool => tool?.name).filter(name => typeof name === "string")
+        : [],
     };
   }
 
@@ -210,6 +214,7 @@ function summarizeEvidence(type, payload) {
     const parameters = payload.parameters ?? {};
     return {
       type,
+      modelCallId: payload.modelCallId ?? null,
       model: payload.model ?? null,
       api: payload.api ?? null,
       parameters: {
@@ -230,6 +235,7 @@ function summarizeEvidence(type, payload) {
 
     return {
       type,
+      modelCallId: payload.modelCallId ?? null,
       status: payload.status ?? null,
       model: response.model ?? null,
       api: response.api ?? null,
@@ -251,7 +257,7 @@ function summarizeEvidence(type, payload) {
   }
 
   if (type === "model-call-retry") {
-    return { type, reason: payload.reason ?? null };
+    return { type, modelCallId: payload.modelCallId ?? null, reason: payload.reason ?? null };
   }
 
   if (type === "worker-result-invalid") {
@@ -279,8 +285,8 @@ async function main() {
   if (!workspaceRoot || !repoRoot) throw new Error("Repository/workspace root is missing");
   if (!Number.isInteger(maxTokens) || maxTokens < 256 || maxTokens > 2048) throw new Error("maxTokens must be between 256 and 2048 for the approved budget");
   if (!Number.isFinite(timeoutMs) || timeoutMs < 30_000) throw new Error("Invalid timeout");
-  if (estimatedWorstCaseUsd > authorizedBudgetUsd) {
-    throw new Error("Estimated qualification ceiling exceeds the approved $0.20 budget");
+  if (estimatedWorstCaseUsd > perRunEstimateCapUsd) {
+    throw new Error("Estimated qualification ceiling exceeds the per-run estimate cap of $0.08");
   }
 
   const core = await importCore("packages/core/dist/index.js");
@@ -502,6 +508,11 @@ async function main() {
           throw new Error("Input exceeds the budget estimate assumption");
         }
         if (type === "model-request-prepared") {
+          const parameters = payload.parameters ?? {};
+          if (payload.api !== "openai-responses" || parameters.tool_choice !== "required") {
+            controller.abort(new Error("Expected OpenAI Responses with wire tool_choice=required."));
+            throw new Error("Prepared request did not preserve api=openai-responses and tool_choice=required.");
+          }
           preparedRequests += 1;
           if (preparedRequests > maxPreparedRequestsPerModel) {
             controller.abort(new Error("Prepared-request safety ceiling exceeded"));
@@ -510,7 +521,7 @@ async function main() {
         }
 
         const event = summarizeEvidence(type, payload);
-        if (event) events.push(event);
+        if (event) events.push({ ...event, observedAt: new Date().toISOString() });
       };
 
       const result = await withExecutionEvidence(
@@ -577,7 +588,7 @@ async function main() {
     piApi: "openai-responses",
     freeOnlyGuard: process.env.INKOS_OPENROUTER_FREE_ONLY ?? null,
     budget: {
-      authorizedUsd: authorizedBudgetUsd,
+      perRunEstimateCapUsd,
       maxPreparedRequestsPerModel,
       sdkAttemptsPerPreparedRequest,
       maxTokensPerRequest: maxTokens,
