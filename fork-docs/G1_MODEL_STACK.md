@@ -39,7 +39,7 @@ OpenRouter Rankings, последний доступный полный днев
 
 ### Диагностический harness
 
-- Ветка: [`feat/g1-paid-debug-stack`](https://github.com/NeuralDao/inkos/tree/feat/g1-paid-debug-stack), stacked draft PR относительно PR #15: [будет открыт после ревью diff].
+- Ветка: [`feat/g1-paid-debug-stack`](https://github.com/NeuralDao/inkos/tree/feat/g1-paid-debug-stack), stacked draft PR относительно PR #15: [Draft PR #17](https://github.com/NeuralDao/inkos/pull/17), stacked к PR #15.
 - Основа кода: `fix/g1-openrouter-reasoning-defaults` (PR #15); provenance gate сравнивает полный Core source/build inputs именно с `origin/fix/g1-openrouter-reasoning-defaults`, чтобы не тестировать устаревший `custom/main` без reasoning fix.
 - Скрипты: `scripts/g1/core-build-provenance.ps1` и `scripts/g1/qualify-openrouter-models.ps1`. `modelOverrides` только in-memory; free-only guard отключается только внутри отдельного диагностического процесса и восстанавливается; `allow_fallbacks=true` только между providers того же model ID; `max_price.prompt=0.15`, `completion=0.75`.
 - Один запуск оценивается максимум в $0.08; два запуска — около $0.152 по worst-case формуле. Actual cost неизвестна до OpenRouter Activity.
