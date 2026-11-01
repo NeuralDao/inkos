@@ -4,16 +4,23 @@ import type {
   HooksState,
 } from "../models/runtime-state.js";
 
+export type StateProjectionLanguage = "zh" | "en" | "ru";
+
 export function renderHooksProjection(
   state: HooksState,
-  language: "zh" | "en" = "zh",
+  language: StateProjectionLanguage = "zh",
   options?: { readonly currentChapter?: number },
 ): string {
   void options;
-  const title = language === "en" ? "# Pending Hooks" : "# 伏笔池";
+  const title = language === "en" ? "# Pending Hooks" : language === "ru" ? "# Сюжетные крючки" : "# 伏笔池";
   const headers = language === "en"
     ? [
       "| hook_id | start_chapter | type | status | last_advanced_chapter | expected_payoff | notes |",
+      "| --- | --- | --- | --- | --- | --- | --- |",
+    ]
+    : language === "ru"
+    ? [
+      "| ID крючка | Начальная глава | Тип | Статус | Последнее развитие | Ожидаемая развязка | Примечания |",
       "| --- | --- | --- | --- | --- | --- | --- |",
     ]
     : [
@@ -44,12 +51,17 @@ export function renderHooksProjection(
 
 export function renderChapterSummariesProjection(
   state: ChapterSummariesState,
-  language: "zh" | "en" = "zh",
+  language: StateProjectionLanguage = "zh",
 ): string {
-  const title = language === "en" ? "# Chapter Summaries" : "# 章节摘要";
+  const title = language === "en" ? "# Chapter Summaries" : language === "ru" ? "# Сводки глав" : "# 章节摘要";
   const headers = language === "en"
     ? [
       "| Chapter | Title | Characters | Key Events | State Changes | Hook Activity | Mood | Chapter Type |",
+      "| --- | --- | --- | --- | --- | --- | --- | --- |",
+    ]
+    : language === "ru"
+    ? [
+      "| Глава | Название | Персонажи | Ключевые события | Изменения состояния | Сюжетные крючки | Настроение | Тип главы |",
       "| --- | --- | --- | --- | --- | --- | --- | --- |",
     ]
     : [
@@ -77,13 +89,18 @@ export function renderChapterSummariesProjection(
 
 export function renderCurrentStateProjection(
   state: CurrentStateState,
-  language: "zh" | "en" = "zh",
+  language: StateProjectionLanguage = "zh",
 ): string {
-  const title = language === "en" ? "# Current State" : "# 当前状态";
-  const chapterLabel = language === "en" ? "Current chapter" : "当前章节";
+  const title = language === "en" ? "# Current State" : language === "ru" ? "# Текущее состояние" : "# 当前状态";
+  const chapterLabel = language === "en" ? "Current chapter" : language === "ru" ? "Текущая глава" : "当前章节";
   const headers = language === "en"
     ? [
         "| Subject | Predicate | Object | Valid from | Source chapter |",
+        "| --- | --- | --- | --- | --- |",
+      ]
+    : language === "ru"
+    ? [
+        "| Объект | Связь / свойство | Текущий факт | Действует с главы | Источник — глава |",
         "| --- | --- | --- | --- | --- |",
       ]
     : [

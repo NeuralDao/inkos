@@ -13,6 +13,7 @@ import { applyRuntimeStateDelta, type RuntimeStateSnapshot } from "./state-reduc
 import { validateRuntimeState } from "./state-validator.js";
 import { arbitrateRuntimeStateDeltaHooks } from "../utils/hook-arbiter.js";
 import { commitAtomicFileSet } from "../utils/atomic-file-set.js";
+import type { NarrativeLanguage } from "../utils/book-language.js";
 
 export interface RuntimeStateArtifacts {
   readonly snapshot: RuntimeStateSnapshot;
@@ -25,6 +26,7 @@ export interface RuntimeStateArtifacts {
 export async function createInitialRuntimeState(input: {
   readonly bookDir: string;
   readonly language: "zh" | "en";
+  readonly projectionLanguage?: NarrativeLanguage;
   readonly hooks?: ReadonlyArray<HookRecord>;
 }): Promise<RuntimeStateSnapshot> {
   const snapshot: RuntimeStateSnapshot = {
@@ -38,7 +40,7 @@ export async function createInitialRuntimeState(input: {
     hooks: HooksStateSchema.parse({ hooks: input.hooks ?? [] }),
     chapterSummaries: ChapterSummariesStateSchema.parse({ rows: [] }),
   };
-  await saveRuntimeStateSnapshot(input.bookDir, snapshot);
+  await saveRuntimeStateSnapshot(input.bookDir, snapshot, input.projectionLanguage);
   return snapshot;
 }
 
@@ -95,6 +97,7 @@ export async function buildRuntimeStateArtifacts(params: {
   readonly bookDir: string;
   readonly delta: RuntimeStateDelta;
   readonly language: "zh" | "en";
+  readonly projectionLanguage?: NarrativeLanguage;
   readonly allowReapply?: boolean;
   readonly allowNewHooks?: boolean;
 }): Promise<RuntimeStateArtifacts> {
@@ -103,6 +106,7 @@ export async function buildRuntimeStateArtifacts(params: {
     snapshot,
     delta: params.delta,
     language: params.language,
+    projectionLanguage: params.projectionLanguage,
     allowReapply: params.allowReapply,
     allowNewHooks: params.allowNewHooks,
   });
@@ -112,6 +116,7 @@ export function buildRuntimeStateArtifactsFromSnapshot(params: {
   readonly snapshot: RuntimeStateSnapshot;
   readonly delta: RuntimeStateDelta;
   readonly language: "zh" | "en";
+  readonly projectionLanguage?: NarrativeLanguage;
   readonly allowReapply?: boolean;
   readonly allowNewHooks?: boolean;
 }): RuntimeStateArtifacts {
@@ -125,13 +130,14 @@ export function buildRuntimeStateArtifactsFromSnapshot(params: {
     delta: resolvedDelta,
     allowReapply: params.allowReapply,
   });
+  const projectionLanguage = params.projectionLanguage ?? params.language;
 
   return {
     snapshot: next,
     resolvedDelta,
-    currentStateMarkdown: renderCurrentStateProjection(next.currentState, params.language),
-    hooksMarkdown: renderHooksProjection(next.hooks, params.language),
-    chapterSummariesMarkdown: renderChapterSummariesProjection(next.chapterSummaries, params.language),
+    currentStateMarkdown: renderCurrentStateProjection(next.currentState, projectionLanguage),
+    hooksMarkdown: renderHooksProjection(next.hooks, projectionLanguage),
+    chapterSummariesMarkdown: renderChapterSummariesProjection(next.chapterSummaries, projectionLanguage),
   };
 }
 
@@ -152,9 +158,10 @@ function validateLoadedSnapshot(
 export async function saveRuntimeStateSnapshot(
   bookDir: string,
   snapshot: RuntimeStateSnapshot,
+  projectionLanguage?: NarrativeLanguage,
 ): Promise<void> {
   const parsed = validateLoadedSnapshot(snapshot, "runtime state save");
-  const language = parsed.manifest.language;
+  const language = projectionLanguage ?? parsed.manifest.language;
   await commitAtomicFileSet({
     rootDir: bookDir,
     writes: [

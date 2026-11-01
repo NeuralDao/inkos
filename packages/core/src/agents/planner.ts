@@ -18,6 +18,7 @@ import {
   getPlannerMemoSystemPrompt,
 } from "./planner-prompts.js";
 import { ComposerAgent } from "./composer.js";
+import { resolveNarrativeLanguage } from "../utils/book-language.js";
 
 export interface PlanChapterInput {
   readonly book: BookConfig;
@@ -93,6 +94,7 @@ export class PlannerAgent extends BaseAgent {
       contextPackage,
       currentInstruction: input.externalContext,
       language: input.book.language,
+      narrativeLanguage: resolveNarrativeLanguage(input.book),
       lengthSpec,
     });
 
@@ -105,6 +107,7 @@ export class PlannerAgent extends BaseAgent {
     const intentMarkdown = this.renderIntentMarkdown(
       intent,
       memo,
+      resolveNarrativeLanguage(input.book),
     );
     await writeFile(runtimePath, intentMarkdown, "utf-8");
 
@@ -123,6 +126,7 @@ export class PlannerAgent extends BaseAgent {
     readonly contextPackage: ContextPackage;
     readonly currentInstruction?: string;
     readonly language?: "zh" | "en";
+    readonly narrativeLanguage?: "zh" | "en" | "ru";
     readonly lengthSpec: LengthSpec;
   }): Promise<ChapterMemo> {
     const language = input.language ?? "zh";
@@ -133,12 +137,13 @@ export class PlannerAgent extends BaseAgent {
       currentInstruction: input.currentInstruction,
       lengthBudget: {
         target: input.lengthSpec.target,
-        unit: input.lengthSpec.countingMode === "zh_chars" ? "字" : "words",
+        unit: input.lengthSpec.countingMode === "zh_chars" ? "字" : input.narrativeLanguage === "ru" ? "слов" : "words",
       },
       language,
+      narrativeLanguage: input.narrativeLanguage,
     });
 
-    const systemPrompt = getPlannerMemoSystemPrompt(language);
+    const systemPrompt = getPlannerMemoSystemPrompt(language, input.narrativeLanguage ?? language);
 
     const { result } = await this.submitStructured(
       [
@@ -164,11 +169,28 @@ export class PlannerAgent extends BaseAgent {
   private renderIntentMarkdown(
     intent: ChapterIntent,
     memo: ChapterMemo,
+    narrativeLanguage: "zh" | "en" | "ru",
   ): string {
     const memoBody = memo.body.trim();
     const threadRefsLine = memo.threadRefs.length > 0
       ? memo.threadRefs.map((id) => `- ${id}`).join("\n")
-      : "- (none)";
+      : narrativeLanguage === "ru" ? "- (нет)" : "- (none)";
+
+    if (narrativeLanguage === "ru") {
+      return [
+        `# План главы ${intent.chapter}`,
+        "",
+        "## Цель",
+        intent.goal,
+        "",
+        "## План главы",
+        "### Связанные линии",
+        threadRefsLine,
+        "",
+        "### Развернутый план",
+        memoBody,
+      ].join("\n");
+    }
 
     return [
       "# Chapter Intent",

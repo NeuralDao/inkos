@@ -7,6 +7,7 @@ import {readArtifactRevision} from '../harness/artifact-reader.js';
 import {currentExecutionBaselineWork} from '../harness/execution-evidence.js';
 import {chapterDocumentBody} from '../utils/chapter-document.js';
 import {changedSourceRegion} from '../utils/source-text.js';
+import type { NarrativeLanguage } from "../utils/book-language.js";
 
 export interface AuditResult {
   readonly observations: ReadonlyArray<Observation>;
@@ -32,14 +33,20 @@ export class ContinuityAuditor extends BaseAgent {
     _genre: string | undefined,
     options: {
       readonly language: "zh" | "en";
+      readonly narrativeLanguage?: NarrativeLanguage;
       readonly contextPackage: ContextPackage;
       readonly temperature?: number;
     },
   ): Promise<AuditResult> {
-    const isEnglish = options.language === "en";
+    const narrativeLanguage = options.narrativeLanguage ?? options.language;
+    const isEnglish = narrativeLanguage === "en";
+    const isRussian = narrativeLanguage === "ru";
+    const isOperationalEnglish = options.language === "en";
     const systemPrompt = isEnglish
       ? "Audit this chapter against the activated review Skill and supplied governed context. Identify each observation with a code, assessment and exact numbered source lines. Do not estimate length; the host computes it. Return a concise overall summary. An empty observations array is valid."
-      : "按已激活的审稿 Skill 和权威上下文审查本章。为每条观察提交代码、判断以及所给编号原文中的确切证据行。不估算字数，字数由宿主计算。提交简短总结，observations 为空是合法结果。";
+      : isRussian
+        ? "Проверь главу по активированному Skill рецензирования и предоставленному управляемому контексту. Пиши по-русски общий итог и все свободные текстовые пояснения наблюдений. Сохраняй коды наблюдений, имена полей, значения category и assessment, идентификаторы источников и другие технические поля без перевода; приводи точные строки из нумерованных источников. Не оценивай объём: его считает движок. Пустой массив observations допустим."
+        : "按已激活的审稿 Skill 和权威上下文审查本章。为每条观察提交代码、判断以及所给编号原文中的确切证据行。不估算字数，字数由宿主计算。提交简短总结，observations 为空是合法结果。";
     const governedContext = renderNarrativeSelectedContext(
       options.contextPackage.selectedContext,
       options.language,
@@ -55,7 +62,7 @@ export class ContinuityAuditor extends BaseAgent {
       const artifact=work?.artifacts.find(a=>a.revisions.some(r=>r.id===a.currentRevisionId&&r.path.startsWith(prefix)&&r.path.endsWith('.md')));
       if(work&&artifact?.currentRevisionId){
         const current=await readArtifactRevision({projectRoot:this.ctx.projectRoot,workId:work.id,artifactId:artifact.id,revisionId:artifact.currentRevisionId});
-        const body=(text:string)=>chapterDocumentBody(text,chapterNumber,'',options.language);
+        const body=(text:string)=>chapterDocumentBody(text,chapterNumber,'',narrativeLanguage);
         // A draft audit must not claim the identity of a different persisted revision.
         if(body(current.bytes.toString('utf8'))===chapterContent){
           reviewedArtifact={workId:work.id,artifactId:artifact.id,revisionId:current.revision.id};
@@ -81,12 +88,13 @@ export class ContinuityAuditor extends BaseAgent {
       ],
       sources, {
         name: "submit_chapter_review",
-        label: isEnglish ? "Submit chapter review" : "提交章节审稿",
-        description: isEnglish
+        label: isOperationalEnglish ? "Submit chapter review" : "提交章节审稿",
+        description: isOperationalEnglish
           ? "Submit evidence-backed observations only."
           : "只提交有证据的审稿观察。",
       },
-      { temperature: options.temperature ?? 0.3, maxTokens: Math.min(4096, this.ctx.client.defaults.maxTokens),categoryRequired:!!comparison,
+      // Reasoning and the structured review share the configured per-agent output budget.
+      { temperature: options.temperature ?? 0.3, maxTokens: this.ctx.client.defaults.maxTokens,categoryRequired:!!comparison,
         validateObservations:observations=>{
           for(const observation of observations.filter(item=>item.category==='scope'&&item.assessment==='issue')){
             const ids=new Set(observation.sourceRefs.map(ref=>ref.sourceId));

@@ -11,6 +11,7 @@ import {
   type SearchDocument,
   type SearchHit,
 } from "../retrieval/local-search.js";
+import { uniqueMarkdownAnchors } from "./markdown-anchors.js";
 export interface MemorySelection {
   readonly summaries: ReadonlyArray<ChapterSummaryRow>;
   readonly lookupSummaries: ReadonlyArray<ChapterSummaryRow>;
@@ -240,7 +241,7 @@ function parseVolumeSummariesMarkdown(markdown: string): VolumeSummarySelection[
     .map((section) => section.trim())
     .filter(Boolean);
 
-  return sections.map((section) => {
+  const parsed = sections.map((section) => {
     const [headingLine, ...bodyLines] = section.split("\n");
     const heading = headingLine?.trim() ?? "";
     const content = bodyLines.join("\n").trim();
@@ -248,9 +249,10 @@ function parseVolumeSummariesMarkdown(markdown: string): VolumeSummarySelection[
     return {
       heading,
       content,
-      anchor: slugifyAnchor(heading),
     };
   }).filter((section) => section.heading.length > 0 && section.content.length > 0);
+  const anchors = uniqueMarkdownAnchors(parsed.map((section) => section.heading), "volume-summary");
+  return parsed.map((section, index) => ({ ...section, anchor: anchors[index]! }));
 }
 
 function selectSummariesById(
@@ -263,13 +265,4 @@ function selectSummariesById(
     .filter((summary) => summary.chapter === chapterNumber - 1
       || selectedIds.has(summaryDocumentId(summary.chapter)))
     .sort((left, right) => left.chapter - right.chapter);
-}
-
-function slugifyAnchor(value: string): string {
-  return value
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9\u4e00-\u9fff]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    || "volume-summary";
 }

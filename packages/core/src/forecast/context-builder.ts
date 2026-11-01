@@ -6,6 +6,7 @@ import { loadRuntimeStateSnapshot } from "../state/runtime-state-store.js";
 import { renderChapterSummariesProjection, renderCurrentStateProjection, renderHooksProjection } from "../state/state-projections.js";
 import { BookConfigSchema } from "../models/book.js";
 import { resolveDurableStoryProgress } from "../state/state-bootstrap.js";
+import { resolveNarrativeLanguage } from "../utils/book-language.js";
 
 // Read-only view of the canonical book used as forecast input. Everything in
 // here MUST stay side-effect free: building a forecast context never creates
@@ -61,9 +62,10 @@ export async function buildForecastContext(params: {
     readVolumeMap(bookDir),
     readCharacterContext(bookDir),
   ]);
-  const currentState = renderCurrentStateProjection(runtimeSnapshot.currentState, bookConfig.language);
-  const pendingHooks = renderHooksProjection(runtimeSnapshot.hooks, bookConfig.language);
-  const chapterSummariesRaw = renderChapterSummariesProjection(runtimeSnapshot.chapterSummaries, bookConfig.language);
+  const stateLanguage = resolveNarrativeLanguage(bookConfig);
+  const currentState = renderCurrentStateProjection(runtimeSnapshot.currentState, stateLanguage);
+  const pendingHooks = renderHooksProjection(runtimeSnapshot.hooks, stateLanguage);
+  const chapterSummariesRaw = renderChapterSummariesProjection(runtimeSnapshot.chapterSummaries, stateLanguage);
 
   const contextFingerprint = computeContextFingerprint({
     baseChapter,

@@ -98,7 +98,7 @@ async function fixture() {
 function expectEnglishAudits() {
   const audits = vi.mocked(ContinuityAuditor.prototype.auditChapter).mock.calls;
   expect(audits.length).toBeGreaterThan(0);
-  for (const call of audits) expect(call[4]?.language).toBe("en");
+  for (const call of audits) expect(call[4]).toMatchObject({ language: "en", narrativeLanguage: "ru" });
 }
 
 describe("Russian longform length routes", () => {
@@ -196,19 +196,19 @@ describe("Russian longform length routes", () => {
     expect(await readFile(join(bookDir, "chapters", "index.json"), "utf8")).toBe(once);
   });
 
-  it("uses the explicit operational language for Auditor and unavailable-review messages with ru_words", async () => {
+  it("keeps Auditor operations in English and localizes its report and fallback to Russian", async () => {
     const auditor = { auditChapter: vi.fn().mockRejectedValue(new Error("fixture unavailable")) };
     const result = await reviewChapterDraft({
-      book: { genre: "general", language: "en" }, bookDir: "unused", chapterNumber: 1, output: { content: prose },
+      book: { genre: "general", language: "en", narrativeLanguage: "ru" }, bookDir: "unused", chapterNumber: 1, output: { content: prose },
       controlInput: { contextPackage: { chapter: 1, selectedContext: [] } },
       lengthSpec: buildLengthSpec(9, "en", { narrativeLanguage: "ru", minChapterLength: 8, maxChapterLength: 10 }),
       initialUsage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 }, auditor,
       assertNotEmpty: () => {}, addUsage: left => left,
     });
     expect(result.wordCount).toBe(8);
-    expect(auditor.auditChapter.mock.calls[0]?.[4]).toMatchObject({ language: "en" });
-    expect(result.review.summary).toBe("Review unavailable");
-    expect(result.review.observations[0]?.summary).toContain("Review observation was unavailable:");
+    expect(auditor.auditChapter.mock.calls[0]?.[4]).toMatchObject({ language: "en", narrativeLanguage: "ru" });
+    expect(result.review.summary).toBe("Аудит недоступен");
+    expect(result.review.observations[0]?.summary).toContain("Наблюдение аудитора недоступно:");
   });
 
   it("repairs stale RU telemetry even when the numeric word count already matches", async () => {
