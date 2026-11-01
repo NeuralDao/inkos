@@ -20,15 +20,15 @@
 
 ### Кандидатный стек
 
-OpenRouter Rankings, последний доступный полный дневной срез на момент исследования (usage through 30.10.2026):
+OpenRouter Rankings, последний доступный полный дневной срез на момент исследования (usage through 31.10.2026):
 
 | Модель / точный ID | Популярность за день | Цена OpenRouter, $/1M input/output | Технические и надёжностные сигналы |
 | --- | ---: | ---: | --- |
-| **DeepSeek V4.1 Flash 1017** — `deepseek/deepseek-v4.1-flash-1017` | **#1**, 8.16T tokens | В карточках/endpoint snapshots примерно **$0.05–0.10 / $0.50–0.60**; цена зависит от provider | Контекст 1M; заявлены `tools`, `tool_choice`, JSON Schema; multi-provider routing/failover. Публичный uptime snapshot для точного 1017 не достаточно свеж/однороден для строгого сравнения — надёжность измеряем сами |
-| **GLM 5.3 Flash** — `z-ai/glm-5.3-flash` | **#2**, 2.66T tokens | Базовый дешёвый endpoint **$0.02 / $0.30**; другие providers дороже | Контекст 1M; `tools`, `tool_choice`, JSON Schema; 31 provider; публичная availability snapshot 99.83% за 3 дня / 99.71% за 24 часа. Самый дешёвый Open Inference endpoint показывал 95.35% uptime и 7 tok/s — не закреплять вручную этот provider; оставить маршрутизацию/failover OpenRouter |
-| **MiniMax M3.1 Flash** — `minimax/minimax-m3.1-flash` | **#7**, 1.05T tokens | Tenstorrent endpoint **$0.05 / $0.20**; у большинства других providers list price около **$0.15 / $0.60** | Контекст 1M; `tools`, `tool_choice`, JSON Schema; 13 providers; availability snapshot 99.89% за 3 дня / 99.86% за 24 часа; опубликованные tool-call error rates отдельных providers около 0.94–1.36%. Фактический endpoint и цена обязательны к записи |
+| **DeepSeek V4.1 Flash 1017** — `deepseek/deepseek-v4.1-flash-1017` | **#1**, 7.09T tokens | В карточках/endpoint snapshots снимки provider endpoints показывают примерно **$0.05–0.15 / $0.50–0.60**; цена зависит от маршрута | Контекст 1M; заявлены `tools` и `tool_choice`; 9 providers; snapshot OpenRouter: 100% uptime / 99.93% availability. Это сигнал маршрутизации, не гарантия успешного tool contract |
+| **GLM 5.3 Flash** — `z-ai/glm-5.3-flash` | **#2**, 1.83T tokens | дешёвый endpoint от **$0.02 / $0.30**; другие providers дороже | Контекст 1M; `tools`, `tool_choice`, JSON Schema; 27 providers; availability snapshot 99.83% за 3 дня / 99.71% за 24 часа. Самый дешёвый Open Inference endpoint показывал 95.35% uptime и 7 tok/s; не закреплять его вручную, оставить маршрутизацию/failover OpenRouter |
+| **MiniMax M3.1 Flash** — `minimax/minimax-m3.1-flash` | **#6**, 892B tokens | карточка модели показывает от **$0.05 / $0.20**; фактическая цена зависит от provider | Контекст 1M; `tools`, `tool_choice`, JSON Schema; 13 providers; availability snapshot 99.89% за 3 дня / 99.86% за 24 часа; опубликованные tool-call error rates отдельных providers около 0.94–1.36%. Фактический endpoint и цена обязательны к записи |
 
-**Решение:** не расширять shortlist. Эти три модели уже находятся в верхней части OpenRouter daily rankings и представляют три независимых семейства. Все три проверяем на одном fixture; пока не назначаем Architect/Writer/Reviser/Auditor по ролям. DeepSeek — контрольный baseline по популярности; GLM — ценовой кандидат; MiniMax — дополнительный популярный кандидат с более заметной provider-price вариативностью.
+**Решение:** не расширять shortlist. По последнему полному дневному срезу (31.10) это места **#1, #2 и #6**; модель #3 — ещё один DeepSeek, поэтому для разнообразия провайдеров/семейств выбран MiniMax #6. Получаем три независимых семейства. Все три проверяем на одном fixture; пока не назначаем Architect/Writer/Reviser/Auditor по ролям. DeepSeek — контрольный baseline по популярности; GLM — ценовой кандидат; MiniMax — шестой в дневном рейтинге и третий независимый model family.
 
 ### Первый этап тестирования
 
