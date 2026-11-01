@@ -2,6 +2,54 @@
 
 **АКТУАЛЬНОЕ УТОЧНЕНИЕ 31.10.2026 — reasoning fix и fixed-free qualification:** PR #15 прошёл статический review ACCEPT; пользователь сообщил целевой Vitest **10/10 PASS**, Core typecheck **PASS** и Core build **PASS** на code HEAD ee4c57e496db561b3d0ad9675d604a886e950941. На одном и том же трёхперсонажном `submit_foundation_cast_index` synthetic smoke теперь **3 PASS**: Nemotron 3.5 Super VL (470/125 tokens), Xing4.0 (404/122), Cohere North Mini Code (190/305). Все три вернули Anna major, Pavel minor, Irina minor; суммарно 1616 tokens. Nemotron 3 Ultra — MODEL_REQUIRED_TOOL_MISSING; Gemma 4 — upstream 429. Три PASS подтверждают базовую совместимость fixed IDs с обязательным structured tool call, но не полный `ArchitectAgent.generateFoundation()`, повторяемость или литературное качество. PR #15 открыт и не объединён.
 
+## Параллельный paid diagnostic stack — отладка пайплайна (01.11.2026)
+
+**Назначение:** дешёвый и надёжный временный стек для технической отладки InkOS 2.0: `modelOverrides`, OpenRouter Responses, reasoning, обязательные structured tool calls, retries, ошибки, фактический provider и стоимость. Это **не** литературный shortlist и не выбор production Writer. Free qualification выше остаётся отдельным треком; новый paid stack её не отменяет. На этом этапе не оцениваем художественное качество и не назначаем модели постоянным ролям.
+
+### Критерии отбора
+
+Техническая совместимость — **обязательный gate**, а не компенсируемый балл: точный ID должен разрешаться без подмены; `tools` + `tool_choice=required`; корректный typed result; OpenRouter `responses` / Pi `openai-responses`; корректное поведение reasoning и stream.
+
+После прохождения gate кандидатов сравниваем по трём критериям:
+
+- **Надёжность — 40%:** OpenRouter uptime/availability, число независимых providers и наличие failover — только предварительные сигналы. Главный показатель — повторяемость в InkOS: два одинаковых независимых smoke-вызова, успешный tool contract, число retries, 429/timeout/empty response, фактический provider. `2/2 PASS` — предварительно стабильно; `1/2` — нестабильно/нужна локализация; `0/2` — не квалифицировано. 429 сам по себе не доказывает несовместимость модели.
+- **Дешевизна — 35%:** не рекламная минимальная цена, а цена реально выбранного endpoint, фактические input/output/cache tokens и billed cost из OpenRouter Activity. Учитываем стоимость одной успешной операции и повторов. В первом тесте provider price cap: `$0.15/M input`, `$0.75/M output`; cross-model fallback запрещён, provider failover разрешён только внутри точного model ID.
+- **Популярность — 25%:** место и объём токенов в OpenRouter Rankings. Это сигнал массового использования и зрелости экосистемы, но не доказательство качества tool calling или uptime.
+
+Литературное качество, русский стиль и способность писать главы **исключены из текущей оценки**. Их исследуем после того, как технический конвейер станет воспроизводимым.
+
+### Кандидатный стек
+
+OpenRouter Rankings, последний доступный полный дневной срез на момент исследования (usage through 31.10.2026):
+
+| Модель / точный ID | Популярность за день | Цена OpenRouter, $/1M input/output | Технические и надёжностные сигналы |
+| --- | ---: | ---: | --- |
+| **DeepSeek V4.1 Flash 1017** — `deepseek/deepseek-v4.1-flash-1017` | **#1**, 7.09T tokens | В карточках/endpoint snapshots снимки provider endpoints показывают примерно **$0.05–0.15 / $0.50–0.60**; цена зависит от маршрута | Контекст 1M; заявлены `tools` и `tool_choice`; 9 providers; snapshot OpenRouter: 100% uptime / 99.93% availability. Это сигнал маршрутизации, не гарантия успешного tool contract |
+| **GLM 5.3 Flash** — `z-ai/glm-5.3-flash` | **#2**, 1.83T tokens | дешёвый endpoint от **$0.02 / $0.30**; другие providers дороже | Контекст 1M; `tools`, `tool_choice`, JSON Schema; 27 providers; availability snapshot 99.83% за 3 дня / 99.71% за 24 часа. Самый дешёвый Open Inference endpoint показывал 95.35% uptime и 7 tok/s; не закреплять его вручную, оставить маршрутизацию/failover OpenRouter |
+| **MiniMax M3.1 Flash** — `minimax/minimax-m3.1-flash` | **#6**, 892B tokens | карточка модели показывает от **$0.05 / $0.20**; фактическая цена зависит от provider | Контекст 1M; `tools`, `tool_choice`, JSON Schema; 13 providers; availability snapshot 99.89% за 3 дня / 99.86% за 24 часа; опубликованные tool-call error rates отдельных providers около 0.94–1.36%. Фактический endpoint и цена обязательны к записи |
+
+**Решение:** не расширять shortlist. По последнему полному дневному срезу (31.10) это места **#1, #2 и #6**; модель #3 — ещё один DeepSeek, поэтому для разнообразия провайдеров/семейств выбран MiniMax #6. Получаем три независимых семейства. Все три проверяем на одном fixture; пока не назначаем Architect/Writer/Reviser/Auditor по ролям. DeepSeek — контрольный baseline по популярности; GLM — ценовой кандидат; MiniMax — шестой в дневном рейтинге и третий независимый model family.
+
+### Первый этап тестирования
+
+1. Синтетический `submit_foundation_cast_index` через реальный Core `PipelineRunner.createAgentContext('architect')` и in-memory `modelOverrides.architect`; ровно Anna (major), Pavel (minor), Irina (minor).
+2. Один вызов на каждую модель за один запуск; максимум 3 `model-request-prepared` на модель и до 3 SDK HTTP attempts на prepared payload. Скрипт проверяет на wire-level каждый запрос: `api=openai-responses` и `tool_choice=required`; иначе останавливает вызов. Записывает requested/resolved/response model, model-call IDs, provider metadata, retries, usage, latency, cost и безопасную cause chain; фактический provider и billed cost сверяются по Activity.
+3. Сначала один полный smoke batch: по одному вызову на каждую модель. Расчётный worst-case потолок batch — **около $0.076**; второй batch поднял бы суммарную оценку до **около $0.152** при плановом потолке $0.20. Это **не hard billing cap и не разрешение на платные API-вызовы**. После первого batch остановиться, изучить результаты и Activity; повторный batch — только после отдельного подтверждения пользователя.
+4. Только после стабильного structured PASS переходить к synthetic dry-run полного `ArchitectAgent.generateFoundation()` (outline → details → cast index → cast documents), без `writeFoundationFiles()`. Writer/литературные главы, persistent overrides и новый Work — отдельные решения.
+
+### Диагностический harness
+
+- Ветка: [`feat/g1-paid-debug-stack`](https://github.com/NeuralDao/inkos/tree/feat/g1-paid-debug-stack), stacked draft PR относительно PR #15: [Draft PR #17](https://github.com/NeuralDao/inkos/pull/17), stacked к PR #15.
+- Основа кода: `fix/g1-openrouter-reasoning-defaults` (PR #15); provenance gate сравнивает полный Core source/build inputs именно с `origin/fix/g1-openrouter-reasoning-defaults`, чтобы не тестировать устаревший `custom/main` без reasoning fix.
+- Скрипты: `scripts/g1/core-build-provenance.ps1` и `scripts/g1/qualify-openrouter-models.ps1`. `modelOverrides` только in-memory; free-only guard отключается только внутри отдельного диагностического процесса и восстанавливается; `allow_fallbacks=true` только между providers того же model ID; `max_price.prompt=0.15`, `completion=0.75`.
+- Один batch оценивается максимум в $0.076 (внутренний estimate guard $0.08); два batch — около $0.152. Это расчёт, не hard billing cap и не разрешение на live paid API. Actual cost неизвестна до OpenRouter Activity.
+- Текущий статус: скрипты подготовлены, но Codex review, PowerShell syntax parse, provenance Build/Verify и live API **NOT RUN**. Build mode запускает только Core build; не запускает test/typecheck/lint/Studio/E2E.
+
+Источники (проверены 01.11.2026): [OpenRouter Rankings](https://openrouter.ai/rankings?models=open), [DeepSeek V4.1 Flash 1017](https://openrouter.ai/deepseek/deepseek-v4.1-flash-1017), [GLM 5.3 Flash](https://openrouter.ai/z-ai/glm-5.3-flash), [MiniMax M3.1 Flash](https://openrouter.ai/minimax/minimax-m3.1-flash). Публичные uptime/availability и тарифы динамические; перед каждым платным прогоном сверять актуальный provider и price.
+
+---
+
+
 Фикс подготовлен в ветке `fix/g1-openrouter-reasoning-defaults`, [draft PR #15](https://github.com/NeuralDao/inkos/pull/15). Codex исправил два замечания (реальный выбор Chat Completions в тесте; удаление только точной формы `{effort:"none"}`). Повторный статический review ChatGPT: **ACCEPT по коду**. Пользовательский целевой Vitest: **10/10 PASS**; Core typecheck после исправления fetch mock — **PASS по сообщению пользователя**. Implementation commit `7f9bb2a0ed7aef11ab6432db419c5f4fe8a21dfb`; Codex correction commit `35eb7c28ddeb209857fb59380f5aa3144b23947a`; type fix `4f5aa4999eb3816d7dd701c55b6447ab35dee6f5`.
 
 Ограничение: Pi Agent не различает неустановленный уровень и `thinkingLevel="off"` — оба представлены как `reasoning: undefined`. В текущей InkOS схеме нет отдельного поля `thinkingLevel`; явное отключение на уровне provider config остаётся доступным через `extra.reasoning: { effort: "none" }` и сохраняется. Не считать UI-level off гарантированно сохранённым, если такой интерфейс появится в будущем без отдельного контракта.
