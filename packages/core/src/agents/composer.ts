@@ -33,6 +33,7 @@ import type {
 import { Type } from "@sinclair/typebox";
 import { loadRuntimeStateSnapshot } from "../state/runtime-state-store.js";
 import { recordExecutionEvidence } from "../harness/execution-evidence.js";
+import { uniqueMarkdownAnchors } from "../utils/markdown-anchors.js";
 
 export interface ComposeChapterInput {
   readonly book: BookConfig;
@@ -744,7 +745,7 @@ async function selectCurrentStateEntries(params: {
 }): Promise<ContextPackage["selectedContext"]> {
   const snapshot = await loadRuntimeStateSnapshot(dirname(params.storyDir));
   const candidates = snapshot.currentState.facts.map((fact, index) => ({
-    source: `runtime/current_state#${index + 1}-${slugifyAnchor(`${fact.subject}-${fact.predicate}`)}`,
+    source: `runtime/current_state#${index + 1}-${slugifyStateFactAnchor(`${fact.subject}-${fact.predicate}`)}`,
     heading: `${fact.subject} / ${fact.predicate}`,
     excerpt: [
       `subject: ${fact.subject}`,
@@ -946,9 +947,10 @@ async function selectOutlineSectionEntries(params: {
   readonly outlineSectionSelector?: OutlineSectionSelector;
 }): Promise<ContextPackage["selectedContext"]> {
   const sections = splitMarkdownSections(params.content);
+  const anchors = uniqueMarkdownAnchors(sections.map((section) => section.heading), "section");
   const candidates = sections.length > 0
-    ? sections.map((section) => ({
-      source: `story/${params.fileName}#${slugifyAnchor(section.heading)}`,
+    ? sections.map((section, index) => ({
+      source: `story/${params.fileName}#${anchors[index]}`,
       heading: section.heading,
       excerpt: section.raw.trim(),
     }))
@@ -1015,15 +1017,6 @@ function splitMarkdownSections(content: string): MarkdownSection[] {
       .filter((section) => section.raw.length > 0);
 }
 
-function slugifyAnchor(value: string): string {
-    return value
-      .trim()
-      .toLowerCase()
-      .replace(/[^a-z0-9\u4e00-\u9fff]+/g, "-")
-      .replace(/^-+|-+$/g, "")
-      || "section";
-}
-
 function dedupeBySource(entries: ContextPackage["selectedContext"]): ContextPackage["selectedContext"] {
     const seen = new Set<string>();
     return entries.filter((entry) => {
@@ -1031,6 +1024,15 @@ function dedupeBySource(entries: ContextPackage["selectedContext"]): ContextPack
       seen.add(entry.source);
       return true;
     });
+}
+
+function slugifyStateFactAnchor(value: string): string {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9\u4e00-\u9fff]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    || "fact";
 }
 
 async function readFileOrDefault(path: string): Promise<string> {

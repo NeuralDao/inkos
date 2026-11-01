@@ -633,20 +633,23 @@ describe("guardedPiNonStreaming", () => {
     expect(typeof original.items).toBe('string');
   });
   it('assembles indexed character documents while preserving quoted character prose',async()=>{
-    const card='An adult clerk says "Wait."\nThe witness keeps the original receipt.';
-    const called:string[]=[];
+    const card='Взрослый кассир говорит: «Подождите».\nСвидетель хранит исходную квитанцию.';
+    const called:string[]=[];const requests:Array<{messages:Array<{role:string;content:string}>}> = [];
     fetchWithProxyMock.mockImplementation(async(_url:string,init:RequestInit)=>{
-      const body=JSON.parse(String(init.body)),name=body.tools[0].function.name;called.push(name);
-      const args=name==='submit_foundation_outline'?{storyFrame:'Evidence conflict',volumeMap:'One resolved chapter'}:
-        name==='submit_foundation_details'?{bookRules:'Keep the receipt',bookRulesData:{prohibitions:[],enableFullCastTracking:false,allowedDeviations:[]},pendingHooks:[]}:
+      const body=JSON.parse(String(init.body));requests.push(body);const name=body.tools[0].function.name;called.push(name);
+      const args=name==='submit_foundation_outline'?{storyFrame:'Конфликт доказательств',volumeMap:'Одна разрешённая глава'}:
+        name==='submit_foundation_details'?{bookRules:'Сохранить квитанцию',bookRulesData:{prohibitions:[],enableFullCastTracking:false,allowedDeviations:[]},pendingHooks:[]}:
         name==='submit_foundation_cast_index'?{roles:[{tier:'major',name:'Mara'},{tier:'minor',name:'Witness'}]}:
-        {role_1_content:card,role_2_content:'Knows who signed the receipt.'};
+        {role_1_content:card,role_2_content:'Знает, кто подписал квитанцию.'};
       return new Response(JSON.stringify({choices:[{finish_reason:'tool_calls',message:{tool_calls:[{id:name,type:'function',function:{name,arguments:JSON.stringify(args)}}]}}]}));
     });
     const client=createLLMClient({provider:'openai',service:'custom',configSource:'studio',baseUrl:model.baseUrl,model:model.id,apiKey:'fixture',apiFormat:'chat',stream:false,temperature:0,thinkingBudget:0});
-    const result=await new ArchitectAgent({client,model:model.id,projectRoot:'/tmp'}).generateFoundation({id:'fixture',title:'Receipt',genre:'other',platform:'other',language:'en',status:'outlining',targetChapters:1,chapterWordCount:300,createdAt:'2026-01-01',updatedAt:'2026-01-01'});
+    const result=await new ArchitectAgent({client,model:model.id,projectRoot:'/tmp'}).generateFoundation({id:'fixture',title:'Квитанция',genre:'other',platform:'other',language:'en',narrativeLanguage:'ru',status:'outlining',targetChapters:1,chapterWordCount:300,createdAt:'2026-01-01',updatedAt:'2026-01-01'});
     expect(called).toEqual(['submit_foundation_outline','submit_foundation_details','submit_foundation_cast_index','submit_foundation_cast_documents']);
-    expect(result.roles).toEqual([{tier:'major',name:'Mara',content:card},{tier:'minor',name:'Witness',content:'Knows who signed the receipt.'}]);
+    expect(requests[0]!.messages[0]!.content).toContain('Write the free-text author-facing foundation in Russian');
+    expect(requests[1]!.messages[0]!.content).toContain('Keep pendingHooks text in English');
+    expect(requests[3]!.messages[0]!.content).toContain("Write each character card's free-text content in Russian");
+    expect(result.roles).toEqual([{tier:'major',name:'Mara',content:card},{tier:'minor',name:'Witness',content:'Знает, кто подписал квитанцию.'}]);
   });
   it('preserves improving candidates without accepting them and completes only the invalid chapter',async()=>{
     const words=(n:number)=>Array(n).fill('word').join(' ');

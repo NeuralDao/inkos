@@ -78,6 +78,41 @@ it('keeps the complete source corpus without a model dependency when it fits, an
   }finally{vi.restoreAllMocks();server.closeAllConnections();await new Promise<void>(resolve=>server.close(()=>resolve()));await rm(root,{recursive:true,force:true});}
 },20000);
 
+it('preserves Cyrillic outline and volume-summary sections with repeated headings',async()=>{
+  const root=await mkdtemp(join(tmpdir(),'inkos-cyrillic-section-anchors-'));
+  const bookDir=join(root,'works/story/source');
+  try{
+    await createInitialRuntimeState({bookDir,language:'en'});
+    await mkdir(join(bookDir,'story/outline'),{recursive:true});
+    await writeFile(join(bookDir,'story/outline/story_frame.md'),'# Встреча\nПервая сцена у пристани.\n# Встреча\nВторая сцена в архиве.');
+    await writeFile(join(bookDir,'story/outline/volume_map.md'),'# Поворот\nГероиня находит запись.\n# Поворот\nГероиня предъявляет запись.');
+    await writeFile(join(bookDir,'story/volume_summaries.md'),'## Река\nСвидетель уезжает.\n## Река\nСвидетель возвращается.');
+    const client=createLLMClient({service:'custom',provider:'openai',configSource:'studio',model:'fixture',apiKey:'fixture',baseUrl:'http://127.0.0.1:1/v1',apiFormat:'chat',stream:false,thinkingBudget:0,temperature:0});
+    const composer=new ComposerAgent({client,model:'fixture',projectRoot:root});
+    const selected=await composer.selectTaskContext({bookDir,chapterNumber:3,goal:'Continue the story.',language:'en',contextBudget:{contextWindowTokens:100_000,reservedOutputTokens:1_000}});
+    const sections=selected.selectedContext.filter(entry=>
+      entry.source.startsWith('story/outline/story_frame.md#')
+      || entry.source.startsWith('story/outline/volume_map.md#')
+      || entry.source.startsWith('story/volume_summaries.md#'));
+    expect(sections.map(entry=>entry.source)).toEqual([
+      'story/outline/story_frame.md#встреча',
+      'story/outline/story_frame.md#встреча-2',
+      'story/outline/volume_map.md#поворот',
+      'story/outline/volume_map.md#поворот-2',
+      'story/volume_summaries.md#река',
+      'story/volume_summaries.md#река-2',
+    ]);
+    expect(sections.map(entry=>entry.excerpt)).toEqual(expect.arrayContaining([
+      expect.stringContaining('Первая сцена у пристани.'),
+      expect.stringContaining('Вторая сцена в архиве.'),
+      expect.stringContaining('Героиня находит запись.'),
+      expect.stringContaining('Героиня предъявляет запись.'),
+      expect.stringContaining('Свидетель уезжает.'),
+      expect.stringContaining('Свидетель возвращается.'),
+    ]));
+  }finally{await rm(root,{recursive:true,force:true});}
+},15000);
+
 it('selects a source by its bounded candidate number while preserving its exact external identifier',async()=>{
   const root=await mkdtemp(join(tmpdir(),'inkos-source-selection-'));
   let calls=0;

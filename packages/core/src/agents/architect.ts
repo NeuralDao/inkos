@@ -8,6 +8,7 @@ import { FoundationDetailsToolSchema, FoundationOutlineToolSchema, FoundationCas
 import type { HookRecord } from "../models/runtime-state.js";
 import { createInitialRuntimeState } from "../state/runtime-state-store.js";
 import { commitAtomicFileSet, type AtomicFileWrite } from "../utils/atomic-file-set.js";
+import { resolveNarrativeLanguage } from "../utils/book-language.js";
 
 // Architect owns the five-section persistence protocol. Foundation craft is
 // supplied by the active long-writing and derivative-work Skills.
@@ -26,6 +27,15 @@ export interface ArchitectOutput {
   readonly bookRulesData: BookRules;
   readonly pendingHooks: string;
   readonly initialHooks: ReadonlyArray<HookRecord>;
+}
+
+function foundationNarrativeLanguageContract(language: "zh" | "en" | "ru"): string {
+  if (language !== "ru") return "";
+  return [
+    "## Language of readable foundation material",
+    "Write the free-text author-facing foundation in Russian: storyFrame, volumeMap, readable bookRules, descriptive text values in bookRulesData, and character-card content.",
+    "Keep pendingHooks text in English because it feeds the operational runtime state. Preserve all tool names, JSON keys, schema shapes, enum values, hook IDs, and other technical identifiers exactly; do not translate or invent them.",
+  ].join("\n");
 }
 
 export class ArchitectAgent extends BaseAgent {
@@ -49,6 +59,7 @@ export class ArchitectAgent extends BaseAgent {
     },
   ): Promise<ArchitectOutput> {
     const resolvedLanguage = book.language;
+    const narrativeLanguage = resolveNarrativeLanguage(book);
 
     const contextBlock = externalContext
       ? `\n\n## 外部指令\n以下是来自外部系统的创作指令，请将其融入设定中：\n\n${externalContext}\n`
@@ -62,17 +73,18 @@ export class ArchitectAgent extends BaseAgent {
       ? this.buildEnglishFoundationPrompt(book, contextBlock, reviewFeedbackBlock)
       : this.buildChineseFoundationPrompt(book, contextBlock, reviewFeedbackBlock);
 
-    const langPrefix = resolvedLanguage === "en"
+    const langPrefix = resolvedLanguage === "en" && narrativeLanguage !== "ru"
       ? "【LANGUAGE OVERRIDE】All submitted foundation content, character names, place names, and prose must be in English.\n\n"
       : "";
     const userMessage = resolvedLanguage === "en"
-      ? `Generate the complete foundation for the ${book.genre} Work titled "${book.title}". Write everything in English.`
+      ? `Generate the complete foundation for the ${book.genre} Work titled "${book.title}".`
       : `请为标题为"${book.title}"的${book.genre}作品生成完整基础设定。`;
 
     return this.generateFoundationInStages({
       systemPrompt: langPrefix + systemPrompt + revisePrompt,
       userMessage,
       language: resolvedLanguage,
+      narrativeLanguage,
       temperature: 0.8,
       onOutline: options?.onOutline,
     });
@@ -193,6 +205,7 @@ ${reviseFrom.userFeedback || "（无）"}
     options?: { readonly importMode?: "continuation" | "series" },
   ): Promise<ArchitectOutput> {
     const resolvedLanguage = book.language;
+    const narrativeLanguage = resolveNarrativeLanguage(book);
     const reviewFeedbackBlock = this.buildReviewFeedbackBlock(reviewFeedback, resolvedLanguage);
 
     const contextBlock = externalContext
@@ -213,17 +226,18 @@ ${reviseFrom.userFeedback || "（无）"}
       reviewFeedbackBlock,
       language: resolvedLanguage,
     }) + (resolvedLanguage === "en"
-      ? `\n\n${continuationDirective}\nDerive established facts from the source package. Explicit continuation instructions control future plot and ending. Never infer a mandatory future event from tone or a mystery alone; keep unprescribed futures open. A compressed package is evidence, not permission to invent missing canon. ALL output MUST be written in English.`
+      ? `\n\n${continuationDirective}\nDerive established facts from the source package. Explicit continuation instructions control future plot and ending. Never infer a mandatory future event from tone or a mystery alone; keep unprescribed futures open. A compressed package is evidence, not permission to invent missing canon.${narrativeLanguage === "ru" ? "" : " ALL output MUST be written in English."}`
       : `\n\n${continuationDirective}\n既成事实从资料包推导；未来剧情和结局服从明确的续写指令。不能仅凭文风或悬念推导必须发生的未来事件，未指定的发展保留开放。压缩资料包是证据，不是臆造缺失正典的许可。`);
 
     const userMessage = resolvedLanguage === "en"
-      ? `Generate the complete foundation for the imported ${book.genre} Work titled "${book.title}". Write everything in English.\n\n${chaptersText}`
+      ? `Generate the complete foundation for the imported ${book.genre} Work titled "${book.title}".\n\n${chaptersText}`
       : `以下是《${book.title}》的已有正文资料包，请从中反向推导完整基础设定：\n\n${chaptersText}`;
 
     return this.generateFoundationInStages({
       systemPrompt,
       userMessage,
       language: resolvedLanguage,
+      narrativeLanguage,
       temperature: 0.5,
     });
   }
@@ -238,6 +252,7 @@ ${reviseFrom.userFeedback || "（无）"}
     },
   ): Promise<ArchitectOutput> {
     const resolvedLanguage = book.language;
+    const narrativeLanguage = resolveNarrativeLanguage(book);
     const reviewFeedbackBlock = this.buildReviewFeedbackBlock(reviewFeedback, resolvedLanguage);
 
     const canonBlock = resolvedLanguage === "en"
@@ -254,6 +269,7 @@ ${reviseFrom.userFeedback || "（无）"}
       systemPrompt,
       userMessage: `请为标题为"${book.title}"的${fanficMode}模式同人小说生成基础设定。目标${book.targetChapters}章，每章${book.chapterWordCount}字。`,
       language: resolvedLanguage,
+      narrativeLanguage,
       temperature: 0.7,
       onOutline: options?.onOutline,
     });
@@ -263,12 +279,14 @@ ${reviseFrom.userFeedback || "（无）"}
     readonly systemPrompt: string;
     readonly userMessage: string;
     readonly language: "zh" | "en";
+    readonly narrativeLanguage: "zh" | "en" | "ru";
     readonly temperature: number;
     readonly onOutline?: (outline: { readonly storyFrame: string; readonly volumeMap: string }) => void | Promise<void>;
   }): Promise<ArchitectOutput> {
+    const systemPrompt = [input.systemPrompt, foundationNarrativeLanguageContract(input.narrativeLanguage)].filter(Boolean).join("\n\n");
     const { result: outline } = await this.submitStructured(
       [
-        { role: "system", content: input.systemPrompt },
+        { role: "system", content: systemPrompt },
         { role: "user", content: input.userMessage },
       ],
       {
@@ -290,7 +308,7 @@ ${reviseFrom.userFeedback || "（无）"}
       : `${input.userMessage}\n\n<story_frame>\n${outline.storyFrame}\n</story_frame>\n\n<volume_map>\n${outline.volumeMap}\n</volume_map>\n\n继续完成可读本书规则、结构化规则数据和初始未解伏笔。`;
     const { result: details } = await this.submitStructured(
       [
-        { role: "system", content: input.systemPrompt },
+        { role: "system", content: systemPrompt },
         { role: "user", content: detailsPrompt },
       ],
       {
@@ -323,10 +341,13 @@ ${reviseFrom.userFeedback || "（无）"}
       {role:"user",content:castContext},
     ],{name:"submit_foundation_cast_index",label:"Identify opening cast",description:"Submit the names and tiers of the opening cast.",parameters:FoundationCastIndexToolSchema},
     {temperature:input.temperature,maxTokens:Math.min(2048,this.ctx.client.defaults.maxTokens)});
+    const castCardLanguageInstruction = input.narrativeLanguage === "ru"
+      ? " Write each character card's free-text content in Russian; preserve names and supplied identifiers."
+      : "";
     const {result:cards} = await this.submitStructured([
-      {role:"system",content:input.language==="en"
+      {role:"system",content:(input.language==="en"
         ? "Create concise character cards for the named people who shape the opening conflict. Ground each card in the supplied story. Give present motive, knowledge, relationship pressure and limits in about 80–120 words; avoid repeating the plot or expanding unnamed occupational groups into full biographies."
-        : "为影响开篇冲突的具名人物写简明角色卡。每人约150—250字，写清当下动机、已知信息、关系压力与能力边界，依据已给定故事，不重复整篇情节，不把无名岗位群体扩写成完整传记。"},
+        : "为影响开篇冲突的具名人物写简明角色卡。每人约150—250字，写清当下动机、已知信息、关系压力与能力边界，依据已给定故事，不重复整篇情节，不把无名岗位群体扩写成完整传记。") + castCardLanguageInstruction},
       {role:"user",content:castContext},
     ],{name:"submit_foundation_cast_documents",label:"Submit opening character cards",description:"Submit each character card as text in its named field.",parameters:foundationCastDocumentsToolSchema(cast.roles)},
     {temperature:input.temperature,maxTokens:Math.min(8192,this.ctx.client.defaults.maxTokens)});
