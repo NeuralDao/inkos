@@ -25,6 +25,7 @@ export async function compileImportSource(input: {
   readonly client: LLMClient;
   readonly model: string;
   readonly projectRoot: string;
+  readonly workId?: string;
   readonly chapters: ReadonlyArray<ImportedChapterSource>;
   readonly language: "zh" | "en";
   readonly activeSkills?: ReadonlyArray<ActivatedSkillGuidance>;
@@ -57,6 +58,7 @@ export async function compileImportSource(input: {
     ], undefined, "import-context"), {
       temperature: 0.2,
       signal: input.signal,
+      responseArchive: { projectRoot: input.projectRoot, workId: input.workId, role: "import-context" },
     });
     const body = response.content.trim();
     if (!body) throw new Error(`Import context compiler returned empty output for chunk ${index + 1}/${chunks.length}.`);

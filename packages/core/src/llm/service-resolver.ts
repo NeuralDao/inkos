@@ -7,6 +7,7 @@ import { lookupModel } from "./providers/lookup.js";
 import type { InkosEndpoint } from "./providers/types.js";
 import { isApiKeyOptionalForEndpoint } from "../utils/llm-endpoint-auth.js";
 import { toPiApi, type LLMApiFormat } from "./api-format.js";
+import { MAX_MODEL_OUTPUT_TOKENS } from "./token-limits.js";
 
 export interface ResolvedModel {
   model: Model<Api>;
@@ -86,7 +87,7 @@ export async function resolveServiceModel(
     input: piModel?.input ?? ["text"] as ("text" | "image")[],
     cost: piModel?.cost ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     contextWindow: endpointModel?.contextWindowTokens ?? piModel?.contextWindow ?? 0,
-    maxTokens: endpointModel?.maxOutput ?? piModel?.maxTokens ?? 16384,
+    maxTokens: Math.min(endpointModel?.maxOutput ?? piModel?.maxTokens ?? MAX_MODEL_OUTPUT_TOKENS, MAX_MODEL_OUTPUT_TOKENS),
     ...(compat ? { compat: compat as Model<Api>["compat"] } : {}),
   };
 

@@ -10,7 +10,7 @@ import { clientWithModel } from "../llm/provider.js";
 import { runWorkerAgent, runWorkerAgentTool, type WorkerResultTool } from "../agent/worker-agent.js";
 import type { Static, TSchema } from "@sinclair/typebox";
 import type { Logger } from "../utils/logger.js";
-import { SourcedReviewIndexToolSchema, ArtifactReviewIndexToolSchema } from "./review-tool.js";
+import { SourcedReviewIndexToolSchema, ArtifactReviewIndexToolSchema, ChapterReviewIndexToolSchema } from "./review-tool.js";
 import { resolveObservationSources } from "../models/observation.js";
 import {
   hydrateActivatedSkillGuidance,
@@ -48,6 +48,7 @@ export abstract class BaseAgent {
   ): Promise<LLMResponse> {
     return runWorkerAgent(this.ctx.client, this.ctx.model, await this.appendTaskSkillGuidance(messages, options?.maxTokens), {
       ...options,
+      responseArchive: { projectRoot: this.ctx.projectRoot, workId: this.ctx.bookId, role: this.name },
       onStreamProgress: this.ctx.onStreamProgress,
       signal: this.ctx.signal,
     });
@@ -67,6 +68,7 @@ export abstract class BaseAgent {
       resultTool,
       {
         ...options,
+        responseArchive: { projectRoot: this.ctx.projectRoot, workId: this.ctx.bookId, role: this.name },
         disableRetries: options?.disableRetries ?? this.ctx.disableRetries,
         signal: this.ctx.signal,
         onStreamProgress: this.ctx.onStreamProgress,
@@ -90,16 +92,16 @@ export abstract class BaseAgent {
     messages: ReadonlyArray<LLMMessage>,
     sources: ReadonlyMap<string, string>,
     tool: { name: string; label: string; description: string },
-    options: { temperature?: number; maxTokens: number; categoryRequired?: boolean; disableRetries?: boolean; validateObservations?: (observations: ReturnType<typeof resolveObservationSources>) => void },
+    options: { temperature?: number; maxTokens: number; categoryRequired?: boolean; chapterReview?: boolean; disableRetries?: boolean; validateObservations?: (observations: ReturnType<typeof resolveObservationSources>) => void },
   ) {
-    const { categoryRequired, validateObservations, ...generationOptions } = options;
+    const { categoryRequired, chapterReview, validateObservations, ...generationOptions } = options;
     const resolve = (observations: Static<typeof SourcedReviewIndexToolSchema>["observations"]) => {
       const resolved=resolveObservationSources(observations.map(observation => ({ ...observation, evidence: [] })), sources);
       validateObservations?.(resolved);
       return resolved;
     };
     const index = await this.submitStructured(messages, {
-      ...tool, parameters: categoryRequired ? ArtifactReviewIndexToolSchema : SourcedReviewIndexToolSchema,
+      ...tool, parameters: chapterReview ? ChapterReviewIndexToolSchema : categoryRequired ? ArtifactReviewIndexToolSchema : SourcedReviewIndexToolSchema,
       validate: result => { resolve(result.observations); return result; },
     }, {...generationOptions,maxTokens:Math.min(generationOptions.maxTokens*2,this.ctx.client.defaults.maxTokens)});
     const observations = resolve(index.result.observations);

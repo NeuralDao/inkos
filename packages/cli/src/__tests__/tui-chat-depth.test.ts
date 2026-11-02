@@ -6,7 +6,7 @@ describe("tui chat depth", () => {
     expect(resolveChatDepthProfile("light")).toEqual({
       depth: "light",
       temperature: 0.3,
-      maxTokens: 160,
+      maxTokens: 96_000,
       label: "light",
     });
     const normal = resolveChatDepthProfile("normal");
@@ -20,7 +20,7 @@ describe("tui chat depth", () => {
     expect(resolveChatDepthProfile("deep")).toEqual({
       depth: "deep",
       temperature: 0.45,
-      maxTokens: 420,
+      maxTokens: 96_000,
       label: "deep",
     });
   });

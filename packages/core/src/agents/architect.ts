@@ -9,6 +9,7 @@ import type { HookRecord } from "../models/runtime-state.js";
 import { createInitialRuntimeState } from "../state/runtime-state-store.js";
 import { commitAtomicFileSet, type AtomicFileWrite } from "../utils/atomic-file-set.js";
 import { resolveNarrativeLanguage, type NarrativeLanguage } from "../utils/book-language.js";
+import { MAX_MODEL_OUTPUT_TOKENS } from "../llm/token-limits.js";
 
 // Architect owns the five-section persistence protocol. Foundation craft is
 // supplied by the active long-writing and derivative-work Skills.
@@ -298,7 +299,7 @@ ${reviseFrom.userFeedback || "（无）"}
           : "提交可读的故事框架与卷纲。",
         parameters: FoundationOutlineToolSchema,
       },
-      { temperature: input.temperature, maxTokens: Math.min(32768, this.ctx.client.defaults.maxTokens) },
+      { temperature: input.temperature, maxTokens: Math.min(MAX_MODEL_OUTPUT_TOKENS, this.ctx.client.defaults.maxTokens) },
     );
     await input.onOutline?.({
       storyFrame: outline.storyFrame.trim(),
@@ -341,7 +342,7 @@ ${reviseFrom.userFeedback || "（无）"}
         : "列出影响开篇冲突的具名人物，只提交姓名和主要/次要角色级别，不把无名岗位群体扩写成虚构人物。"},
       {role:"user",content:castContext},
     ],{name:"submit_foundation_cast_index",label:"Identify opening cast",description:"Submit the names and tiers of the opening cast.",parameters:FoundationCastIndexToolSchema},
-    {temperature:input.temperature,maxTokens:Math.min(2048,this.ctx.client.defaults.maxTokens)});
+    {temperature:input.temperature,maxTokens:Math.min(MAX_MODEL_OUTPUT_TOKENS,this.ctx.client.defaults.maxTokens)});
     const castCardLanguageInstruction = input.narrativeLanguage === "ru"
       ? " Write each character card's free-text content in Russian; preserve names and supplied identifiers."
       : "";
@@ -351,7 +352,7 @@ ${reviseFrom.userFeedback || "（无）"}
         : "为影响开篇冲突的具名人物写简明角色卡。每人约150—250字，写清当下动机、已知信息、关系压力与能力边界，依据已给定故事，不重复整篇情节，不把无名岗位群体扩写成完整传记。") + castCardLanguageInstruction},
       {role:"user",content:castContext},
     ],{name:"submit_foundation_cast_documents",label:"Submit opening character cards",description:"Submit each character card as text in its named field.",parameters:foundationCastDocumentsToolSchema(cast.roles)},
-    {temperature:input.temperature,maxTokens:Math.min(32768,this.ctx.client.defaults.maxTokens)});
+    {temperature:input.temperature,maxTokens:Math.min(MAX_MODEL_OUTPUT_TOKENS,this.ctx.client.defaults.maxTokens)});
     const roles: ArchitectRole[] = cast.roles.map((role,index)=>({tier:role.tier,name:role.name.trim(),content:cards[`role_${index+1}_content`]!.trim()}));
 
     return {

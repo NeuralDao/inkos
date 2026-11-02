@@ -10,6 +10,7 @@ import type {
   SimpleStreamOptions,
   ToolCall,
 } from "@mariozechner/pi-ai";
+import { MAX_MODEL_OUTPUT_TOKENS } from "../llm/token-limits.js";
 import {
   assertWithinContextWindow,
   createRequestDeadline,
@@ -33,15 +34,16 @@ export function guardedPiStream<TApi extends Api>(
   model: Model<TApi>,
   context: Context,
   options?: SimpleStreamOptions,
-  emptyRetries = 1,
+  emptyRetries = 0,
   deadlineOptions?: StreamDeadlineOptions,
-  retryOnInactivity = true,
+  retryOnInactivity = false,
 ): AssistantMessageEventStream {
-  const reservedOutputTokens = Number.isFinite(options?.maxTokens)
-    ? options!.maxTokens!
-    : Number.isFinite(model.maxTokens)
-      ? model.maxTokens
-      : 4096;
+  const reservedOutputTokens = Math.min(
+    Number.isFinite(options?.maxTokens) ? options!.maxTokens! : Number.isFinite(model.maxTokens) ? model.maxTokens : MAX_MODEL_OUTPUT_TOKENS,
+    Number.isFinite(model.maxTokens) ? model.maxTokens : MAX_MODEL_OUTPUT_TOKENS,
+    MAX_MODEL_OUTPUT_TOKENS,
+  );
+  const boundedOptions = { ...options, maxTokens: reservedOutputTokens };
   assertWithinContextWindow({
     piModel: model,
     model: model.id,
@@ -56,8 +58,8 @@ export function guardedPiStream<TApi extends Api>(
   return observeModelStream(model, modelCall?.modelCallId, guardAssistantMessageStream(
     model,
     (signal) => streamSimple(model, context, {
-      ...options,
-      headers: { ...(options?.headers ?? {}), ...traceHeaders },
+      ...boundedOptions,
+      headers: { ...(boundedOptions.headers ?? {}), ...traceHeaders },
       onPayload: async (payload, activeModel) => {
         let configured = explicitDeepSeekThinkingMode(payload, activeModel);
         const choice = (options as SimpleStreamOptions & { toolChoice?: unknown } | undefined)?.toolChoice;
@@ -101,14 +103,14 @@ export function guardedPiNonStreaming<TApi extends Api>(
   context: Context,
   options?: SimpleStreamOptions,
   proxyUrl?: string,
-  emptyRetries = 1,
+  emptyRetries = 0,
 ): AssistantMessageEventStream {
   if (model.api !== "openai-completions") return guardedPiStream(model, context, options);
-  const reservedOutputTokens = Number.isFinite(options?.maxTokens)
-    ? options!.maxTokens!
-    : Number.isFinite(model.maxTokens)
-      ? model.maxTokens
-      : 4096;
+  const reservedOutputTokens = Math.min(
+    Number.isFinite(options?.maxTokens) ? options!.maxTokens! : Number.isFinite(model.maxTokens) ? model.maxTokens : MAX_MODEL_OUTPUT_TOKENS,
+    Number.isFinite(model.maxTokens) ? model.maxTokens : MAX_MODEL_OUTPUT_TOKENS,
+    MAX_MODEL_OUTPUT_TOKENS,
+  );
   assertWithinContextWindow({
     piModel: model,
     model: model.id,
@@ -136,7 +138,7 @@ export function guardedPiNonStreaming<TApi extends Api>(
           },
         }));
       }
-      if (options?.maxTokens) payload.max_tokens = options.maxTokens;
+      payload.max_tokens = reservedOutputTokens;
       if (options?.temperature !== undefined) payload.temperature = options.temperature;
       const toolChoice = (options as SimpleStreamOptions & { toolChoice?: unknown } | undefined)?.toolChoice;
       if (toolChoice !== undefined) payload.tool_choice = toolChoice;
@@ -200,7 +202,7 @@ function missingRequiredTool(message: AssistantMessage, choice: unknown): boolea
   return !message.content.some(part => part.type === "toolCall" && (!name || part.name === name));
 }
 
-export function observeModelStream(model: Model<Api>, modelCallId: string | undefined, source: AssistantMessageEventStream, retry?: () => AssistantMessageEventStream, toolChoice?: unknown, retryOnInactivity = true): AssistantMessageEventStream {
+export function observeModelStream(model: Model<Api>, modelCallId: string | undefined, source: AssistantMessageEventStream, retry?: () => AssistantMessageEventStream, toolChoice?: unknown, retryOnInactivity = false): AssistantMessageEventStream {
   const output = createAssistantMessageEventStream();
   let started = false;
   const forward = (event: Parameters<typeof output.push>[0]) => {
@@ -228,13 +230,17 @@ export function observeModelStream(model: Model<Api>, modelCallId: string | unde
           && !discardedToolOutputs.has(event.message)
           && !lastPartial?.content.some(part => part.type === "toolCall")
           && !event.message.content.some(part => part.type === "toolCall" || (part.type === "text" && part.text.trim().length > 0))) {
-          recordExecutionEvidence("model-call-completed", { modelCallId, status: "empty", response: event.message });
-          if (retry) {
+          const outputLimitReached = event.message.stopReason === "length";
+          recordExecutionEvidence("model-call-completed", { modelCallId, status: outputLimitReached ? "output_limit" : "empty", response: event.message });
+          if (retry && !outputLimitReached) {
             recordExecutionEvidence("model-call-retry", { modelCallId, reason: "MODEL_EMPTY_RESPONSE" });
             for await (const retried of retry()) forward(retried);
           } else {
-            const failure = { ...event.message, stopReason: "error" as const, errorCode: "MODEL_EMPTY_RESPONSE",
-              errorMessage: "The provider completed without text or a tool call; the transport retry budget is exhausted." };
+            const failure = { ...event.message, stopReason: "error" as const,
+              errorCode: outputLimitReached ? "MODEL_OUTPUT_LIMIT" : "MODEL_EMPTY_RESPONSE",
+              errorMessage: outputLimitReached
+                ? "The provider exhausted the requested output token limit without producing a usable response; no retry was attempted."
+                : "The provider completed without text or a tool call; automatic retry was suppressed to avoid a duplicate paid generation." };
             output.push({ type: "error", reason: "error", error: failure });
           }
           return;

@@ -19,6 +19,7 @@ import {
 } from "./planner-prompts.js";
 import { ComposerAgent } from "./composer.js";
 import { resolveNarrativeLanguage } from "../utils/book-language.js";
+import { MAX_MODEL_OUTPUT_TOKENS } from "../llm/token-limits.js";
 
 export interface PlanChapterInput {
   readonly book: BookConfig;
@@ -156,7 +157,7 @@ export class PlannerAgent extends BaseAgent {
         description: "Submit the complete semantic chapter plan for host persistence.",
         parameters: ChapterMemoToolSchema,
       },
-      { temperature: 0.7, maxTokens: Math.min(8192, this.ctx.client.defaults.maxTokens) },
+      { temperature: 0.7, maxTokens: Math.min(MAX_MODEL_OUTPUT_TOKENS, this.ctx.client.defaults.maxTokens) },
     );
     return ChapterMemoSchema.parse({
       chapter: input.chapterNumber,

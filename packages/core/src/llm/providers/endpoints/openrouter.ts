@@ -28,7 +28,9 @@ export const OPENROUTER: InkosEndpoint = {
     // OpenRouter advertises 200K context for the free router; keep the local
     // output budget conservative because the selected model varies per call.
     { id: "openrouter/free", maxOutput: 8192, contextWindowTokens: 200000, enabled: true },
-    { id: "openrouter/auto", maxOutput: 4096, contextWindowTokens: 2000000, enabled: true },
+    // Router preset rather than a fixed model; request the fork-wide output ceiling and
+    // let OpenRouter choose only a route that can handle the actual request.
+    { id: "openrouter/auto", maxOutput: 96000, contextWindowTokens: 2000000, enabled: true },
     { id: "deepseek/deepseek-chat-v3.1", maxOutput: 4096, contextWindowTokens: 163840, releasedAt: "2025-08-21" },
     { id: "google/gemini-3.1-flash-image-preview", maxOutput: 65536, contextWindowTokens: 131072, releasedAt: "2026-02-26" },
     { id: "google/gemini-3-pro-image-preview", maxOutput: 32768, contextWindowTokens: 163840, releasedAt: "2025-11-20" },

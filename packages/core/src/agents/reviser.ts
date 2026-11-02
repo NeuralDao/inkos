@@ -11,6 +11,7 @@ import {chapterDocumentBody} from '../utils/chapter-document.js';
 import { renderNarrativeSelectedContext } from "../utils/narrative-control.js";
 import type { NarrativeLanguage } from "../utils/book-language.js";
 import type { RevisionFinding } from "../pipeline/auto-revision-policy.js";
+import { MAX_MODEL_OUTPUT_TOKENS } from "../llm/token-limits.js";
 
 export interface FindingDisposition {
   readonly findingId: string;
@@ -106,7 +107,15 @@ export class ReviserAgent extends BaseAgent {
       { role: "system" as const, content: systemPrompt },
       { role: "user" as const, content: userPrompt },
     ];
-    const outputBudget = Math.min(this.ctx.client.defaults.maxTokens, Math.max(8192, Math.ceil((options.lengthSpec?.target ?? chapterContent.length) * 4) + 8192));
+    const requestedOutputBudget = Math.max(
+      8_192,
+      Math.ceil((options.lengthSpec?.target ?? chapterContent.length) * 16) + 8_192,
+    );
+    const outputBudget = Math.min(
+      MAX_MODEL_OUTPUT_TOKENS,
+      this.ctx.client.defaults.maxTokens,
+      requestedOutputBudget,
+    );
     const output = mode === "spot-fix" || options.targetText!==undefined
       ? await this.submitSpotFix(messages, chapterContent, outputBudget, options.lengthSpec,options.targetText,options.onCandidate,options.autoFindings)
       : await this.submitRewrite(messages, outputBudget, options.lengthSpec,body,options.onCandidate,options.autoFindings);
@@ -134,7 +143,7 @@ export class ReviserAgent extends BaseAgent {
       description:'Select the smallest non-overlapping inclusive source line ranges needed for the requested local changes. Do not submit prose or select unrelated passages.',
       parameters:Type.Object({ranges:Type.Array(TextEditRangeSchema,{minItems:1})},{additionalProperties:false}),
       validate:result=>{textRangeEditContract(originalChapter,result.ranges);return result;},
-    },{temperature:0.3,maxTokens:Math.min(maxTokens,4096),disableRetries:!!autoFindings});
+    },{temperature:0.3,maxTokens:Math.min(maxTokens,MAX_MODEL_OUTPUT_TOKENS),disableRetries:!!autoFindings});
     planUsage=plan.usage;
     contract=textRangeEditContract(originalChapter,plan.result.ranges);
     }
@@ -200,10 +209,14 @@ export class ReviserAgent extends BaseAgent {
       parameters: autoFindings ? Type.Object({ ...ChapterRewriteToolSchema.properties, findingDispositions: Type.Optional(FindingDispositionsSchema) }, { additionalProperties: false }) : ChapterRewriteToolSchema,
       validate: async result => {
         const revisedContent=normalizeContent(result.revisedContent);
-        await onCandidate?.(revisedContent);
-        if (autoFindings) validateDispositions((result as unknown as {findingDispositions:unknown}).findingDispositions, autoFindings);
         if(!revisedContent.trim())throw Object.assign(new Error('Submit chapter prose in addition to its title'),{code:'CHAPTER_BODY_EMPTY'});
+        if (!hasCompleteChapterEnding(revisedContent)) throw Object.assign(
+          new Error("Reviser output appears to end mid-sentence; the candidate was not saved."),
+          { code: "PARTIAL_CHAPTER_OUTPUT" },
+        );
         assertChapterLength(revisedContent,lengthSpec);
+        if (autoFindings) validateDispositions((result as unknown as {findingDispositions:unknown}).findingDispositions, autoFindings);
+        await onCandidate?.(revisedContent);
         return{...result,revisedContent};
       },
     }, { temperature: 0.3, maxTokens, disableRetries: !!autoFindings });
@@ -214,6 +227,11 @@ export class ReviserAgent extends BaseAgent {
       tokenUsage: usage,
     };
   }
+}
+
+function hasCompleteChapterEnding(content: string): boolean {
+  const finalCharacter = content.trimEnd().at(-1);
+  return finalCharacter !== undefined && /[.!?…。”’»）)\]}*]/u.test(finalCharacter);
 }
 
 function revisionNarrativeLanguageContract(language: NarrativeLanguage): string {

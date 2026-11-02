@@ -5,6 +5,7 @@ import { prepareWorkerMessages } from "../agents/base.js";
 import type { ActivatedSkillGuidance } from "../agent/skill-tool.js";
 import type { TranslationModelPort, TranslationSegment } from "./types.js";
 import { ObservationToolSchema } from "../agents/review-tool.js";
+import { MAX_MODEL_OUTPUT_TOKENS } from "../llm/token-limits.js";
 
 const TranslationResultToolSchema = Type.Object({
   chapterTitle: Type.Optional(Type.String()),
@@ -28,6 +29,9 @@ const TranslationReviewToolSchema = Type.Object({
 export function createLLMTranslationModel(input: {
   readonly client: LLMClient;
   readonly model: string;
+  readonly projectRoot?: string;
+  readonly workId?: string;
+  readonly agentRole?: string;
   readonly maxTokens?: number;
   readonly activatedSkills?: ReadonlyArray<ActivatedSkillGuidance>;
   readonly signal?: AbortSignal;
@@ -37,11 +41,12 @@ export function createLLMTranslationModel(input: {
       return runWorkerAgentTool(input.client,input.model,await prepareWorkerMessages(input,[
         {role:"system",content:"Revise only the supplied translated paragraph according to the instruction. Preserve all facts, identities, terminology and point of view in its source. Use neighboring paragraphs only for continuity. Return the complete revised target text, without commentary."},
         {role:"user",content:JSON.stringify(request)},
-      ],input.maxTokens??4096,"translation-revision"),{
+      ],input.maxTokens??MAX_MODEL_OUTPUT_TOKENS,"translation-revision"),{
         name:"submit_translation_revision",label:"Revise one translated paragraph",description:"Submit only the revised target paragraph.",
         parameters:Type.Object({target:Type.String({minLength:1})}),
         validate:result=>{if(!result.target.trim())throw Object.assign(new Error("A translated paragraph cannot be empty"),{code:"TRANSLATION_TARGET_EMPTY"});return{target:result.target.trim()};},
-      },{temperature:0.2,maxTokens:input.maxTokens??4096,signal:input.signal});
+      },{temperature:0.2,maxTokens:Math.min(input.maxTokens??MAX_MODEL_OUTPUT_TOKENS,MAX_MODEL_OUTPUT_TOKENS),signal:input.signal,
+        ...(input.projectRoot?{responseArchive:{projectRoot:input.projectRoot,workId:input.workId,role:input.agentRole??"translation"}}:{})});
     },
     async translateSegments(request) {
       const parsed = await runWorkerAgentTool(input.client, input.model, await prepareWorkerMessages(input, [
@@ -65,13 +70,14 @@ export function createLLMTranslationModel(input: {
             })),
           }, null, 2),
         },
-      ], input.maxTokens ?? 8192, "translation"), {
+      ], input.maxTokens ?? MAX_MODEL_OUTPUT_TOKENS, "translation"), {
         name: "submit_translation",
         label: "Submit translation",
         description: "Submit translated segments and glossary updates.",
         parameters: TranslationResultToolSchema,
         validate:result=>{validateTranslatedSegments(result.segments,request.segments);return result;},
-      }, { temperature: 0.2, maxTokens: input.maxTokens ?? 8192, signal: input.signal });
+      }, { temperature: 0.2, maxTokens: Math.min(input.maxTokens ?? MAX_MODEL_OUTPUT_TOKENS,MAX_MODEL_OUTPUT_TOKENS), signal: input.signal,
+        ...(input.projectRoot?{responseArchive:{projectRoot:input.projectRoot,workId:input.workId,role:input.agentRole??"translation"}}:{}) });
   return {
         ...(parsed.chapterTitle?.trim()
           ? { chapterTitle: parsed.chapterTitle.trim() }
@@ -107,12 +113,13 @@ export function createLLMTranslationModel(input: {
             })),
           }, null, 2),
         },
-      ], 4096, "translation-review"), {
+      ], MAX_MODEL_OUTPUT_TOKENS, "translation-review"), {
         name: "submit_translation_review",
         label: "Submit translation review",
         description: "Submit the translation review.",
         parameters: TranslationReviewToolSchema,
-      }, { temperature: 0.1, maxTokens: 4096, signal: input.signal });
+      }, { temperature: 0.1, maxTokens: Math.min(MAX_MODEL_OUTPUT_TOKENS,input.client.defaults.maxTokens), signal: input.signal,
+        ...(input.projectRoot?{responseArchive:{projectRoot:input.projectRoot,workId:input.workId,role:input.agentRole??"translation-review"}}:{}) });
       return {
         summary: parsed.summary,
         observations: parsed.observations,

@@ -332,6 +332,7 @@ export function createProductionCapabilityRegistry(
           environment.pipeline.createAgentContext("film-authoring", environment.work.id).client,
           environment.pipeline.createAgentContext("film-authoring", environment.work.id).model,
           {
+            responseArchive: { projectRoot: environment.projectRoot, workId: environment.work.id, role: "film-authoring" },
             activatedSkills: () => mergeActivatedSkillGuidance(
               environment.profileSkills?.("interactive-film") ?? [],
               environment.activeSkills?.() ?? [],

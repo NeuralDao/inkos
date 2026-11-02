@@ -2,6 +2,7 @@ import { createAssistantMessageEventStream, type Api, type AssistantMessage, typ
 import { assertWithinContextWindow, createRequestDeadline, createStreamActivityDeadline, estimatePiContextTokens } from "../llm/provider.js";
 import { agentTrajectoryHeaders, beginAgentModelCall } from "../llm/agent-trajectory.js";
 import { recordExecutionEvidence } from "../harness/execution-evidence.js";
+import { MAX_MODEL_OUTPUT_TOKENS } from "../llm/token-limits.js";
 import { fetchWithProxy } from "../utils/proxy-fetch.js";
 import { emptyAssistantMessage, emitCompletedMessage, explicitDeepSeekThinkingMode, markDiscardedToolOutput, observeModelStream, parseToolArguments, populateAssistantMessage, readOpenAIError, toOpenAIChatMessages } from "./pi-stream.js";
 
@@ -10,7 +11,7 @@ export function singleAttemptStream(model: Model<Api>, context: Context, options
   proxyUrl: string | undefined, streaming: boolean, onChunk?: (text: string) => void): AssistantMessageEventStream {
   const out = createAssistantMessageEventStream();
   const modelCall = beginAgentModelCall();
-  let maxTokens = options.maxTokens ?? model.maxTokens ?? 4096;
+  let maxTokens = Math.min(options.maxTokens ?? model.maxTokens ?? MAX_MODEL_OUTPUT_TOKENS, model.maxTokens ?? MAX_MODEL_OUTPUT_TOKENS, MAX_MODEL_OUTPUT_TOKENS);
   let anthropicThinking: Record<string, unknown> | undefined;
   let anthropicEffort: Record<string, unknown> | undefined;
   if (model.api === "anthropic-messages" && model.reasoning && !options.reasoning) anthropicThinking = { type: "disabled" };
@@ -31,7 +32,7 @@ export function singleAttemptStream(model: Model<Api>, context: Context, options
   }
   assertWithinContextWindow({ piModel: model, model: model.id, estimatedInputTokens: estimatePiContextTokens(context), reservedOutputTokens: maxTokens });
   const deadline = streaming
-    ? createStreamActivityDeadline(options.signal, undefined, { firstEventTimeoutMs: 300_000, idleTimeoutMs: 300_000 })
+    ? createStreamActivityDeadline(options.signal, undefined, { firstEventTimeoutMs: 900_000, idleTimeoutMs: 1_000_000 })
     : createRequestDeadline(options.signal);
   const activity = () => { if ("activity" in deadline) deadline.activity(); };
   void (async () => {

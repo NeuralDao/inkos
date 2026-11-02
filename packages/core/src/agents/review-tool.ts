@@ -33,6 +33,18 @@ export const SourcedReviewIndexToolSchema=Type.Object({
   },{additionalProperties:false})),
 });
 
+/** Long-form chapter reviews use an explicit contract; short-fiction reviews keep the shared, more flexible schema. */
+export const ChapterReviewIndexToolSchema=Type.Object({
+  summary:Type.String({minLength:1,description:"Required overall assessment of the chapter. This does not replace the summary required on each observation."}),
+  observations:Type.Array(Type.Object({
+    ...SourcedReviewIndexToolSchema.properties.observations.items.properties,
+    summary:Type.String({minLength:1,description:"Required nonempty explanation of this specific finding, its exact evidence, and its effect on the story. The root-level summary does not replace it; the explanation and assessment must describe the same finding."}),
+    assessment:Type.Union([Type.Literal("issue"),Type.Literal("resolved"),Type.Literal("observation"),Type.Literal("unavailable")], {description:"Use issue for a defect, observation for a neutral or positive note, resolved only for an explicitly supplied prior finding verified as fixed, and unavailable only when required evidence is missing."}),
+    category:Type.Union([Type.Literal("quality"),Type.Literal("execution"),Type.Literal("scope")], { description: "quality: prose, canon, chronology, causality, or chapter-plan adherence; execution: completion of a tool, API, or external operation only; scope: a verified change outside an explicitly authorized edit region." }),
+    scope:Type.Union([Type.Literal("local"),Type.Literal("structural"),Type.Literal("unknown")], {description:"Repair scope: the smallest edit breadth needed to correct an issue. Use unknown for non-issue assessments. This is distinct from category='scope'."}),
+  },{additionalProperties:false})),
+});
+
 export const ArtifactReviewIndexToolSchema = Type.Object({
   ...SourcedReviewIndexToolSchema.properties,
   observations: Type.Array(Type.Object({

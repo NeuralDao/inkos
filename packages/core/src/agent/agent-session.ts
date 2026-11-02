@@ -16,6 +16,7 @@ import type {
   ToolResultMessage,
 } from "@mariozechner/pi-ai";
 import type { PipelineRunner } from "../pipeline/runner.js";
+import { FALLBACK_MODEL_CONTEXT_TOKENS, MAX_MODEL_OUTPUT_TOKENS } from "../llm/token-limits.js";
 import {
   CreativeEpisodeStore,
   CreativeHarnessRuntime,
@@ -603,9 +604,9 @@ export async function compileHarnessContextText(input: {
   readonly maxTokens: number;
   readonly signal?: AbortSignal;
 }): Promise<string> {
-  const outputBudget = Math.min(input.maxTokens, 4096);
+  const outputBudget = Math.min(input.maxTokens, MAX_MODEL_OUTPUT_TOKENS);
   const contextWindow = Number.isFinite(input.model.contextWindow) && input.model.contextWindow > 0
-    ? input.model.contextWindow : 32_000;
+    ? input.model.contextWindow : FALLBACK_MODEL_CONTEXT_TOKENS;
   const inputBudget = Math.max(256, contextWindow - outputBudget - estimateTextTokens(input.systemPrompt) - 2048);
   const chunks = splitTextByEstimatedTokens(input.userPrompt, inputBudget);
   if (chunks.length > 1) {
@@ -726,13 +727,13 @@ function isHostConfirmedAction(
 }
 
 function agentOutputBudget(model: Model<Api>): number {
-  return Math.min(8192, typeof model.maxTokens === "number" && model.maxTokens > 0 ? model.maxTokens : 4096);
+  return Math.min(MAX_MODEL_OUTPUT_TOKENS, typeof model.maxTokens === "number" && model.maxTokens > 0 ? model.maxTokens : MAX_MODEL_OUTPUT_TOKENS);
 }
 
 function agentContextBudget(model: Model<Api>): number {
   const contextWindow = typeof model.contextWindow === "number" && model.contextWindow > 0
     ? model.contextWindow
-    : 32_000;
+    : FALLBACK_MODEL_CONTEXT_TOKENS;
   const reservedOutput = agentOutputBudget(model);
   const transportOverhead = Math.max(2048, Math.floor(contextWindow * 0.05));
   return Math.max(2000, contextWindow - reservedOutput - transportOverhead);

@@ -8,6 +8,7 @@ export async function compileStyleGuide(input: {
   readonly client: LLMClient;
   readonly model: string;
   readonly projectRoot: string;
+  readonly workId?: string;
   readonly referenceText: string;
   readonly sourceName?: string;
   readonly language?: "zh" | "en";
@@ -39,6 +40,7 @@ export async function compileStyleGuide(input: {
   ], undefined, "style-guide"), {
     temperature: 0.3,
     signal: input.signal,
+    responseArchive: { projectRoot: input.projectRoot, workId: input.workId, role: "style-guide" },
   });
   const guide = response.content.trim();
   if (!guide) throw new Error("Style extraction returned an empty guide.");
