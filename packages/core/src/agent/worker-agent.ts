@@ -4,6 +4,7 @@ import {
   createAssistantMessageEventStream,
   type Api,
   type AssistantMessage,
+  type AssistantMessageEventStream,
   type Context,
   type Message,
   type Model,
@@ -29,6 +30,8 @@ import { toPiApi } from "../llm/api-format.js";
 import { recordExecutionEvidence } from "../harness/execution-evidence.js";
 import {decodeStructuredFields} from './structured-arguments.js';
 import { preserveToolArgumentTypes, toolArgumentIssues } from "./tool-arguments.js";
+import { archiveWorkerResponse, markWorkerResponseArchive, type WorkerResponseArchiveContext } from "./worker-response-archive.js";
+import { MAX_MODEL_OUTPUT_TOKENS } from "../llm/token-limits.js";
 
 export interface WorkerAgentOptions {
   readonly temperature?: number;
@@ -38,6 +41,8 @@ export interface WorkerAgentOptions {
   readonly onTextDelta?: (text: string) => void;
   readonly signal?: AbortSignal;
   readonly onUsage?: (usage: LLMResponse["usage"]) => void;
+  /** Durable location for raw worker outputs; saved before returning or validating tool arguments. */
+  readonly responseArchive?: WorkerResponseArchiveContext;
   /** Avoid another paid generation after an invalid or empty result. */
   readonly disableRetries?: boolean;
 }
@@ -71,7 +76,7 @@ function workerModel(client: LLMClient, modelId: string, maxTokens?: number): Mo
     input: ["text"],
     cost: EMPTY_COST,
     contextWindow: 200_000,
-    maxTokens: maxTokens ?? client.defaults?.maxTokens ?? 32_768,
+    maxTokens: Math.min(maxTokens ?? client.defaults?.maxTokens ?? MAX_MODEL_OUTPUT_TOKENS, MAX_MODEL_OUTPUT_TOKENS),
   };
 }
 
@@ -123,6 +128,49 @@ function localStopStream(model: Model<Api>) {
     stream.end(message);
   });
   return stream;
+}
+
+/** Archive a structured worker's complete response before Pi validates tool arguments. */
+function archiveResponseStream(
+  source: AssistantMessageEventStream,
+  model: Model<Api>,
+  context: WorkerResponseArchiveContext,
+  attempt: number,
+  onArchived: (response: AssistantMessage, path: string) => void,
+  onArchiveFailure: (error: unknown) => void,
+): AssistantMessageEventStream {
+  const output = createAssistantMessageEventStream();
+  void (async () => {
+    try {
+      for await (const event of source) {
+        if (event.type === "done" || event.type === "error") {
+          const response = event.type === "done" ? event.message : event.error;
+          let path: string;
+          try {
+            path = await archiveWorkerResponse({ context, model, response, attempt });
+          } catch (error) {
+            onArchiveFailure(error);
+            const failure = assistantMessage(model, "", undefined, "error", `Could not archive the raw worker response: ${String(error)}`);
+            output.push({ type: "error", reason: "error", error: failure });
+            output.end(failure);
+            return;
+          }
+          onArchived(response, path);
+        }
+        output.push(event);
+        if (event.type === "done") { output.end(event.message); return; }
+        if (event.type === "error") { output.end(event.error); return; }
+      }
+      const failure = assistantMessage(model, "", undefined, "error", "Worker response stream ended without a final response.");
+      output.push({ type: "error", reason: "error", error: failure });
+      output.end(failure);
+    } catch (error) {
+      const failure = assistantMessage(model, "", undefined, "error", String(error));
+      output.push({ type: "error", reason: "error", error: failure });
+      output.end(failure);
+    }
+  })();
+  return output;
 }
 
 function textFromContent(content: Message["content"]): string {
@@ -283,11 +331,15 @@ export async function runWorkerAgent(
 
   try {
     await agent.prompt(promptMessages);
-    options.signal?.throwIfAborted();
-    if (streamFailure !== undefined) throw streamFailure;
     const final = [...agent.state.messages].reverse().find(
       (message): message is AssistantMessage => message.role === "assistant",
     );
+    if (final && options.responseArchive) {
+      const artifactPath = await archiveWorkerResponse({ context: options.responseArchive, model, response: final, attempt: 1 });
+      recordExecutionEvidence("worker-response-archived", { artifactPath, role: options.responseArchive.role, model: model.id });
+    }
+    options.signal?.throwIfAborted();
+    if (streamFailure !== undefined) throw streamFailure;
     if (!final) throw new Error("Worker Agent completed without an assistant response");
     if (final.stopReason === "error" || final.stopReason === "aborted") {
       throw Object.assign(new Error(final.errorMessage ?? `Worker Agent stopped: ${final.stopReason}`), {
@@ -343,6 +395,10 @@ export async function runWorkerAgentTool<TParameters extends TSchema>(
   let modelTurns = 0;
   let resultAttemptsExhausted = false;
   let lastValidationError: (Error & {code?:string}) | undefined;
+  let activeResponseArtifactPath: string | undefined;
+  let responseArchiveFailure: unknown;
+  const responseArtifactPaths: string[] = [];
+  const resultArtifactByToolCall = new Map<string, string>();
   const maxResultTurns = options.disableRetries ? 1 : 3;
   const monitor = createStreamMonitor(progress => {
     options.onStreamProgress?.(progress);
@@ -357,7 +413,7 @@ export async function runWorkerAgentTool<TParameters extends TSchema>(
       if(decodedPaths.length)recordExecutionEvidence('worker-arguments-decoded',{resultTool:resultTool.name,paths:decodedPaths});
       const issues = toolArgumentIssues(resultTool.parameters, params);
       if (issues.length) {
-        const failure={code:'WORKER_SCHEMA_INVALID',resultTool:resultTool.name,issues};
+        const failure={code:'WORKER_SCHEMA_INVALID',resultTool:resultTool.name,issues,artifactPath:activeResponseArtifactPath};
         recordExecutionEvidence('worker-result-invalid',failure);
         lastValidationError=undefined;
         throw new Error(JSON.stringify(failure));
@@ -368,13 +424,18 @@ export async function runWorkerAgentTool<TParameters extends TSchema>(
       const parsed = Value.Parse(resultTool.parameters, params) as Static<TParameters>;
       try {
         submitted = validate ? await validate(parsed) : parsed;
+        if (activeResponseArtifactPath) await markWorkerResponseArchive(activeResponseArtifactPath,
+          { stage: "domain", status: "passed" });
       } catch(error) {
         lastValidationError=error instanceof Error?error:new Error(String(error));
         recordExecutionEvidence('worker-result-invalid',{
           code:lastValidationError.code??'WORKER_DOMAIN_INVALID',
           resultTool:resultTool.name,
           message:lastValidationError.message,
+          artifactPath:activeResponseArtifactPath,
         });
+        if (activeResponseArtifactPath) await markWorkerResponseArchive(activeResponseArtifactPath,
+          { stage: "domain", status: "failed", code: lastValidationError.code, message: lastValidationError.message });
         throw error;
       }
       return {
@@ -385,7 +446,19 @@ export async function runWorkerAgentTool<TParameters extends TSchema>(
   };
   const agent = new Agent({
     initialState: { model, systemPrompt, tools: [tool], messages: [] },
-    beforeToolCall: preserveToolArgumentTypes,
+    beforeToolCall: async (context) => {
+      activeResponseArtifactPath = resultArtifactByToolCall.get(context.toolCall.id);
+      try {
+        await preserveToolArgumentTypes(context);
+        if (activeResponseArtifactPath) await markWorkerResponseArchive(activeResponseArtifactPath,
+          { stage: "schema", status: "passed" });
+      } catch (error) {
+        if (activeResponseArtifactPath) await markWorkerResponseArchive(activeResponseArtifactPath,
+          { stage: "schema", status: "failed", code: (error as {code?:string})?.code, message: String(error) });
+        throw error;
+      }
+      return undefined;
+    },
     toolExecution: "sequential",
     streamFn: (streamModel, context, streamOptions) => {
       if (submitted) return localStopStream(streamModel);
@@ -405,10 +478,19 @@ export async function runWorkerAgentTool<TParameters extends TSchema>(
           toolChoice: "required" as const,
           onPayload: (payload: unknown) => payload && typeof payload === "object" ? { ...client.defaults.extra, ...payload } : payload,
         };
-      if (options.disableRetries) return singleAttemptStream(streamModel, context, resultOptions, client.proxyUrl, client.stream !== false, monitor.onChunk);
-      return client.stream === false
+      const rawStream = options.disableRetries
+        ? singleAttemptStream(streamModel, context, resultOptions, client.proxyUrl, client.stream !== false, monitor.onChunk)
+        : client.stream === false
         ? guardedPiNonStreaming(streamModel, context, resultOptions, client.proxyUrl)
-        : guardedPiStream(streamModel, context, resultOptions, 1, {firstEventTimeoutMs:300_000,idleTimeoutMs:300_000}, false);
+        : guardedPiStream(streamModel, context, resultOptions, 0, {firstEventTimeoutMs:900_000,idleTimeoutMs:1_000_000}, false);
+      return options.responseArchive ? archiveResponseStream(rawStream, streamModel, options.responseArchive, modelTurns,
+        (response, artifactPath) => {
+          responseArtifactPaths.push(artifactPath);
+          for (const part of response.content) if (part.type === "toolCall") resultArtifactByToolCall.set(part.id, artifactPath);
+          activeResponseArtifactPath = artifactPath;
+          recordExecutionEvidence("worker-response-archived", { artifactPath, role: options.responseArchive!.role,
+            model: streamModel.id, resultTool: resultTool.name, attempt: modelTurns });
+        }, error => { responseArchiveFailure = error; agent.abort(); }) : rawStream;
     },
     getApiKey: () => client._apiKey,
   });
@@ -433,25 +515,32 @@ export async function runWorkerAgentTool<TParameters extends TSchema>(
 
   try {
     await agent.prompt(promptMessages);
+    if (responseArchiveFailure !== undefined) throw Object.assign(new Error("Could not preserve the raw worker response before processing."), {
+      code: "WORKER_RESPONSE_ARCHIVE_FAILED", cause: responseArchiveFailure,
+    });
     options.signal?.throwIfAborted();
     if (resultAttemptsExhausted) throw Object.assign(new Error(lastValidationError?.message??'Structured result remained invalid after bounded correction attempts'), {
       code:lastValidationError?.code??'WORKER_RESULT_INVALID',resultTool:resultTool.name,attempts:modelTurns,
+      artifactPaths:responseArtifactPaths,
       lastToolError:[...agent.state.messages].reverse().find(message=>message.role==='toolResult'&&message.isError),
     });
     const initialResult = agent.state.messages.at(-1);
-    if (!submitted && initialResult?.role === "assistant" && initialResult.stopReason === "length") {
+    if (initialResult?.role === "assistant" && initialResult.stopReason === "length") {
       throw Object.assign(new Error("Worker output reached the configured model output limit"), {
-        code: "MODEL_OUTPUT_LIMIT", resultTool: resultTool.name, stopReason: initialResult.stopReason,
+        code: "MODEL_OUTPUT_LIMIT", resultTool: resultTool.name, stopReason: initialResult.stopReason, artifactPaths: responseArtifactPaths,
       });
     }
     if (!submitted && initialResult?.role === "assistant" && initialResult.stopReason === "error") {
       throw Object.assign(new Error(initialResult.errorMessage ?? "Worker model request failed"), {
         code: (initialResult as AssistantMessage & { errorCode?: string }).errorCode ?? "WORKER_MODEL_ERROR",
-        resultTool: resultTool.name, stopReason: initialResult.stopReason, attempts: modelTurns,
+        resultTool: resultTool.name, stopReason: initialResult.stopReason, attempts: modelTurns, artifactPaths: responseArtifactPaths,
       });
     }
     if (!submitted) {
       await agent.prompt(`You did not call ${resultTool.name}. Call it now with the complete result.`);
+      if (responseArchiveFailure !== undefined) throw Object.assign(new Error("Could not preserve the raw worker response before processing."), {
+        code: "WORKER_RESPONSE_ARCHIVE_FAILED", cause: responseArchiveFailure,
+      });
       options.signal?.throwIfAborted();
     }
     if (!submitted) {
@@ -464,6 +553,7 @@ export async function runWorkerAgentTool<TParameters extends TSchema>(
         attempts: modelTurns,
         resultTool: resultTool.name,
         stopReason: last?.stopReason,
+        artifactPaths: responseArtifactPaths,
         lastToolError: [...agent.state.messages].reverse().find((message)=>message.role==="toolResult"&&message.isError),
         lastAssistantText: last?.content.filter((part)=>part.type==="text").map((part)=>part.text).join(""),
       });

@@ -2,6 +2,7 @@ import { BaseAgent } from "./base.js";
 import { completeLongForm } from "../llm/long-form-completion.js";
 import { materializeStoryGraph } from "../interactive-film/generate.js";
 import { InteractiveFilmPackageToolSchema, StoryboardPackageToolSchema } from "./production-document-tool.js";
+import { MAX_MODEL_OUTPUT_TOKENS } from "../llm/token-limits.js";
 
 export type ScriptTargetFormat = string;
 
@@ -83,7 +84,7 @@ export class ScriptCreationAgent extends BaseAgent {
       },
     ], {
       temperature: 0.1,
-      maxTokens: 32_000,
+      maxTokens: Math.min(MAX_MODEL_OUTPUT_TOKENS,this.ctx.client.defaults.maxTokens),
     });
     return response.content.trim();
   }

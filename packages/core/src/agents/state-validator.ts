@@ -2,6 +2,7 @@ import { BaseAgent } from "./base.js";
 import { StateValidationToolSchema } from "./state-validation-tool.js";
 import type { Observation } from "../models/observation.js";
 import type { NarrativeLanguage } from "../utils/book-language.js";
+import { MAX_MODEL_OUTPUT_TOKENS } from "../llm/token-limits.js";
 
 export interface ValidationResult {
   readonly observations: ReadonlyArray<Observation>;
@@ -87,7 +88,7 @@ ${chapterContent}`;
             return result;
           },
         },
-        { temperature: 0.1, maxTokens: Math.min(16384, this.ctx.client.defaults.maxTokens) },
+        { temperature: 0.1, maxTokens: Math.min(MAX_MODEL_OUTPUT_TOKENS, this.ctx.client.defaults.maxTokens) },
       );
       return {
         observations: result.reportMarkdown.trim() ? [{code:result.reconciliationRequired ? "state-reconciliation" : "state-projection-review",summary:result.reportMarkdown.trim(),evidence:[]}] : [],

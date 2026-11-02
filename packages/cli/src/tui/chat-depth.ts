@@ -10,9 +10,9 @@ export interface ChatDepthProfile {
 export function resolveChatDepthProfile(depth: ChatDepth): ChatDepthProfile {
   switch (depth) {
     case "light":
-      return { depth, temperature: 0.3, maxTokens: 160, label: "light" };
+      return { depth, temperature: 0.3, maxTokens: 96_000, label: "light" };
     case "deep":
-      return { depth, temperature: 0.45, maxTokens: 420, label: "deep" };
+      return { depth, temperature: 0.45, maxTokens: 96_000, label: "deep" };
     case "normal":
     default:
       // No maxTokens — let the model decide its own output length.

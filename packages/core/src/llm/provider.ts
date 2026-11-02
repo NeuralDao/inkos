@@ -1,4 +1,5 @@
 import type { LLMConfig } from "../models/project.js";
+import { FALLBACK_MODEL_CONTEXT_TOKENS, MAX_MODEL_INPUT_TOKENS, MAX_MODEL_OUTPUT_TOKENS } from "./token-limits.js";
 import {
   streamSimple as piStreamSimple,
   completeSimple as piCompleteSimple,
@@ -37,12 +38,12 @@ export interface StreamProgress {
 export type OnStreamProgress = (progress: StreamProgress) => void;
 
 const INKOS_USER_AGENT = "InkOS/2.0.0";
-const UNKNOWN_MODEL_FALLBACK_MAX_TOKENS = 8192 * 3;
+const UNKNOWN_MODEL_FALLBACK_MAX_TOKENS = MAX_MODEL_OUTPUT_TOKENS;
 const TRANSIENT_LLM_RETRIES = 2;
-const DEFAULT_FIRST_STREAM_EVENT_TIMEOUT_MS = 120_000;
-const DEFAULT_STREAM_IDLE_TIMEOUT_MS = 90_000;
-const DEFAULT_PIPELINE_FIRST_STREAM_EVENT_TIMEOUT_MS = 300_000;
-const DEFAULT_PIPELINE_STREAM_IDLE_TIMEOUT_MS = 180_000;
+const DEFAULT_FIRST_STREAM_EVENT_TIMEOUT_MS = 900_000;
+const DEFAULT_STREAM_IDLE_TIMEOUT_MS = 300_000;
+const DEFAULT_PIPELINE_FIRST_STREAM_EVENT_TIMEOUT_MS = 900_000;
+const DEFAULT_PIPELINE_STREAM_IDLE_TIMEOUT_MS = 1_000_000;
 
 export interface StreamDeadlineOptions {
   readonly firstEventTimeoutMs?: number;
@@ -71,7 +72,7 @@ export class LLMRequestTimeoutError extends Error {
 
 /** Buffered responses have a total request deadline, not a stream inactivity clock. */
 export function createRequestDeadline(callerSignal?: AbortSignal) {
-  const timeoutMs = readPositiveTimeout(process.env.INKOS_LLM_REQUEST_TIMEOUT_MS, 300_000);
+  const timeoutMs = readPositiveTimeout(process.env.INKOS_LLM_REQUEST_TIMEOUT_MS, 3_600_000);
   const controller = new AbortController();
   let error: LLMRequestTimeoutError | undefined;
   const timer = setTimeout(() => {
@@ -370,7 +371,7 @@ export function createLLMClient(config: LLMConfig): LLMClient {
   const _earlyCard = lookupModel(config.service ?? "custom", config.model);
   const defaults = {
     temperature: config.temperature ?? 0.7,
-    maxTokens: config.maxTokens ?? _earlyCard?.maxOutput ?? UNKNOWN_MODEL_FALLBACK_MAX_TOKENS,
+    maxTokens: Math.min(config.maxTokens ?? _earlyCard?.maxOutput ?? UNKNOWN_MODEL_FALLBACK_MAX_TOKENS, _earlyCard?.maxOutput ?? MAX_MODEL_OUTPUT_TOKENS, MAX_MODEL_OUTPUT_TOKENS),
     thinkingBudget: config.thinkingBudget ?? 0,
     reasoning: config.reasoning,
     extra: config.extra ?? {},
@@ -417,7 +418,7 @@ export function createLLMClient(config: LLMConfig): LLMClient {
     reasoning: config.reasoning ?? (config.thinkingBudget ?? 0) > 0,
     input: ["text"] as ("text" | "image")[],
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: config.contextWindow ?? modelCard?.contextWindowTokens ?? 128_000,
+    contextWindow: config.contextWindow ?? modelCard?.contextWindowTokens ?? FALLBACK_MODEL_CONTEXT_TOKENS,
     maxTokens: defaults.maxTokens,
     ...(extraHeaders ? { headers: extraHeaders } : {}),
     ...(compat ? { compat } : {}),
@@ -505,9 +506,7 @@ function parseEnvHeaders(): Record<string, string> | undefined {
 }
 
 // === Partial Response（流式生成中途被掐断）===
-// 语义：内容不完整、不可信。由 withTransientLLMRetry 整体重新生成；
-// 重试耗尽后如实抛错。绝不把半截内容当成功返回（那会产出写到一半就
-// 结束的章节/设定文件）。partialContent 仅用于错误诊断。
+// 内容不完整且可能已经计费；保留片段用于错误诊断，不自动重复付费生成。
 
 export class PartialResponseError extends Error {
   readonly partialContent: string;
@@ -677,6 +676,11 @@ export function assertWithinContextWindow(params: {
   readonly estimatedInputTokens: number;
   readonly reservedOutputTokens: number;
 }): void {
+  if (params.estimatedInputTokens > MAX_MODEL_INPUT_TOKENS) {
+    throw new Error(
+      `Estimated model input ${params.estimatedInputTokens} tokens exceeds InkOS input ceiling ${MAX_MODEL_INPUT_TOKENS} for ${params.model}.`,
+    );
+  }
   const contextWindow = params.piModel.contextWindow;
   if (!Number.isFinite(contextWindow) || contextWindow <= 0) return;
   if (params.estimatedInputTokens + params.reservedOutputTokens <= contextWindow) return;
@@ -846,12 +850,11 @@ function isIncompleteLLMResponseError(error: unknown): boolean {
 }
 
 function isRetryableLLMError(error: unknown): boolean {
-  // PartialResponseError = 流在生成中途被掐断（网关切长连接等）。重试会完整
-  // 重新生成一次，比把半截内容当成功交付（截断的章节/设定文件）要正确。
+  // Provider-completed or interrupted outputs may already be billable. Never
+  // rerun those paid generations automatically; surface the partial/empty result.
   if (error instanceof LLMStreamInactivityError || error instanceof LLMRequestTimeoutError) return false;
-  return error instanceof PartialResponseError
-    || isIncompleteLLMResponseError(error)
-    || isTransientLLMTransportError(error)
+  if (error instanceof PartialResponseError || isIncompleteLLMResponseError(error)) return false;
+  return isTransientLLMTransportError(error)
     || isTransientLLMHttpError(error);
 }
 
@@ -1557,7 +1560,7 @@ export async function chatCompletion(
       model,
       options?.temperature ?? client.defaults.temperature,
     ),
-    maxTokens: options?.maxTokens ?? client.defaults.maxTokens,
+    maxTokens: Math.min(options?.maxTokens ?? client.defaults.maxTokens, client._piModel?.maxTokens ?? MAX_MODEL_OUTPUT_TOKENS, MAX_MODEL_OUTPUT_TOKENS),
     extra: client.defaults.extra,
   };
   const onStreamProgress = options?.onStreamProgress;
@@ -1634,9 +1637,9 @@ export async function chatCompletion(
       { enabled: (options?.retry ?? true) && !onTextDelta, signal },
     );
   } catch (error) {
-    // 注意：中断的流（PartialResponseError）不再"打捞"半截内容当成功返回——
-    // 那会产出写到一半就结束的章节/设定文件。重试由 withTransientLLMRetry
-    // 负责（完整重新生成）；重试耗尽后如实抛错。
+    // Never accept or automatically regenerate a partial stream: the provider
+    // may already have billed it. Retries are limited to transient HTTP/transport
+    // failures that did not yield a usable response.
     throw wrapLLMError(error, errorCtx);
   }
 }

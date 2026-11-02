@@ -3,6 +3,7 @@ import type { AgentTool, AgentToolResult } from "@mariozechner/pi-agent-core";
 import { applyGraphDelta } from "../interactive-film/authoring-store.js";
 import type { LLMClient } from "../llm/provider.js";
 import { runWorkerAgentTool } from "./worker-agent.js";
+import type { WorkerResponseArchiveContext } from "./worker-response-archive.js";
 import { loadStoryGraph, storyGraphPath } from "../interactive-film/graph-store.js";
 import { readFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
@@ -23,6 +24,7 @@ import { prepareWorkerMessages } from "../agents/base.js";
 import type { ActivatedSkillGuidance } from "./skill-tool.js";
 import { createInspectFilmTool, createExportFilmTool,createSetFilmRequirementsTool } from "../harness/tools/film-delivery.js";
 import{readFilmRequirements,checkFilmRequirements}from'../interactive-film/delivery-requirements.js';
+import { MAX_MODEL_OUTPUT_TOKENS } from "../llm/token-limits.js";
 
 // ---------------------------------------------------------------------------
 // Local helper — textResult is not exported from agent-tools.ts
@@ -185,18 +187,19 @@ function defaultSubmitNode(
   client: LLMClient,
   model: string,
   activatedSkills?: () => ReadonlyArray<ActivatedSkillGuidance>,
+  responseArchive?: WorkerResponseArchiveContext,
 ): FilmLLMDeps["submitNode"] {
   return async (system, user, nodeId, signal, currentNode, fields) => {
     const submitted = await runWorkerAgentTool(client, model, await prepareWorkerMessages({ client, activatedSkills: activatedSkills?.(), signal }, [
       { role: "system", content: system },
       { role: "user", content: user },
-    ], 4000, "film-node"), {
+    ], MAX_MODEL_OUTPUT_TOKENS, "film-node"), {
       name: currentNode ? "submit_story_node_revision" : "submit_story_node",
       label: currentNode ? "Submit node prose revision" : "Submit Story Node",
       description: currentNode ? "Submit only the selected prose fields. The host preserves every other node field."
         : "Submit the complete scene, dialogue, choices, and image direction for the requested node. The host owns the node id.",
       parameters: currentNode ? Type.Pick(StoryNodeRevisionToolSchema, fields ?? ["sceneDesc", "dialogue"]) : StoryNodeContentToolSchema,
-    }, { temperature: 0.6, maxTokens: 4000, signal });
+    }, { temperature: 0.6, maxTokens: Math.min(MAX_MODEL_OUTPUT_TOKENS,client.defaults.maxTokens), signal, responseArchive });
     return StoryNodeSchema.parse({ ...currentNode, ...submitted, id: nodeId });
   };
 }
@@ -205,17 +208,18 @@ function defaultSubmitStructure(
   client: LLMClient,
   model: string,
   activatedSkills?: () => ReadonlyArray<ActivatedSkillGuidance>,
+  responseArchive?: WorkerResponseArchiveContext,
 ): FilmLLMDeps["submitStructure"] {
   return async (system, user, signal) => {
     const submitted = await runWorkerAgentTool(client, model, await prepareWorkerMessages({ client, activatedSkills: activatedSkills?.(), signal }, [
       { role: "system", content: system },
       { role: "user", content: user },
-    ], 6000, "film-structure"), {
+    ], MAX_MODEL_OUTPUT_TOKENS, "film-structure"), {
       name: "submit_story_structure",
       label: "Submit Story Structure",
       description: "Submit the complete branching node skeleton. Node ids and choice targets must form one connected playable graph.",
       parameters: StoryStructureToolSchema,
-    }, { temperature: 0.6, maxTokens: 6000, signal });
+    }, { temperature: 0.6, maxTokens: Math.min(MAX_MODEL_OUTPUT_TOKENS,client.defaults.maxTokens), signal, responseArchive });
     return submitted.nodes.map((node) => StoryNodeSchema.parse(node));
   };
 }
@@ -326,11 +330,11 @@ export function createReviseNodeTool(
 export function filmLLMDepsFromClient(
   client: LLMClient,
   model: string,
-  options: { readonly activatedSkills?: () => ReadonlyArray<ActivatedSkillGuidance> } = {},
+  options: { readonly activatedSkills?: () => ReadonlyArray<ActivatedSkillGuidance>; readonly responseArchive?: WorkerResponseArchiveContext } = {},
 ): FilmLLMDeps {
   return {
-    submitNode: defaultSubmitNode(client, model, options.activatedSkills),
-    submitStructure: defaultSubmitStructure(client, model, options.activatedSkills),
+    submitNode: defaultSubmitNode(client, model, options.activatedSkills, options.responseArchive),
+    submitStructure: defaultSubmitStructure(client, model, options.activatedSkills, options.responseArchive),
     skillIds: () => (options.activatedSkills?.() ?? []).map((activation) => activation.skill.id),
   };
 }

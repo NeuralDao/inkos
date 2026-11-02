@@ -20,6 +20,7 @@ import {inspectFilmGraph} from './film-delivery.js';
 import {StoryGraphSchema} from '../../interactive-film/graph-schema.js';
 import {FilmRequirementsSchema,type FilmRequirements} from '../../interactive-film/delivery-requirements.js';
 import {Value} from '@sinclair/typebox/value';
+import { MAX_MODEL_OUTPUT_TOKENS } from "../../llm/token-limits.js";
 
 interface ReviewComparison {
   scope: 'episode_start' | 'parent_revision';
@@ -89,7 +90,7 @@ class ArtifactWorker extends BaseAgent {
     ], {name:'submit_author_edit_scope',label:'Locate authorized text',description:'Identify editable source ranges from the original author request, without proposed prose.',
       parameters:Type.Object({wholeDocument:Type.Boolean(),selections:Type.Array(TextEditSelectionSchema),reason:Type.String({description:'Briefly identify the source unit and protected boundaries matched by these selections.'})},{additionalProperties:false}),
       validate:result=>{if(result.wholeDocument){if(result.selections.length)throw new Error('Whole-document scope must not also select partial text');}else textScopedSelectionEditContract(content,result.selections);return result;},
-    },{maxTokens:Math.min(8192,this.ctx.client.defaults.maxTokens),temperature:0.2,professionalGuidance:false});
+    },{maxTokens:Math.min(MAX_MODEL_OUTPUT_TOKENS,this.ctx.client.defaults.maxTokens),temperature:0.2,professionalGuidance:false});
     return selected.result.wholeDocument ? textRangeEditContract(content,[{startLine:1,endLine:splitSourceLines(content).length}]) : textScopedSelectionEditContract(content,selected.result.selections);
   }
   async review(sources: ReadonlyMap<string, string>, instruction: string, criteria: string[], paths: ReadonlyMap<string,string>, versions:ReadonlyMap<string,{revisionId:string;checksum:string}>, comparison?: ReviewComparison, structure?: unknown) {
@@ -101,7 +102,7 @@ class ArtifactWorker extends BaseAgent {
       { role: "system", content: "Review the primary artifact using the activated professional methods within the user's requested scope. References are separate documents with separate responsibilities: storyboard shots belong in the storyboard, and supplied image prompts need not be duplicated there. Submit evidence-backed findings through the review tool. Distinguish content defects, resolved issues, neutral observations, and unavailable evidence. If a requested comparison or file-change claim lacks its source versions or execution evidence, mark it unavailable rather than calling it a content defect or demanding duplicated material. Cite short numbered source ranges with sourceId, startLine and endLine; the host copies the original text. Do not copy line-number prefixes into quotes. Use the supplied measurements for length facts; never estimate a different count. Measurements cover the full artifact, including headings and markup." },
       ...(structure ? [{role:'system' as const,content:'The supplied structure contains deterministic checks of the identified graph revision and executable path witnesses. Use it for structural counts and reachability; a witness is not a literary-quality judgment. Review character motivation, narrative continuity, and the meaning of choices independently.'}] : []),
       { role: "user", content: JSON.stringify({ instruction:authorRequest?.trim()?authorRequest:instruction, criteria, comparison, ...(structure?{structure}:{}), sources: [...sources].map(([sourceId, content], index) => ({ sourceId, ...versions.get(sourceId), role:index===0?'primary':sourceId===comparison?.sourceId?'comparison':'reference', path:paths.get(sourceId), measurements: measureSourceText(content), numberedLines: numberReviewSource(content) })) }) },
-    ], sources, { name: "submit_artifact_review", label: "Submit artifact review", description: "Submit observations with source line addresses and an explicit scope, quality or execution category." }, { maxTokens: Math.min(4096, this.ctx.client.defaults.maxTokens), categoryRequired: true,
+    ], sources, { name: "submit_artifact_review", label: "Submit artifact review", description: "Submit observations with source line addresses and an explicit scope, quality or execution category." }, { maxTokens: Math.min(MAX_MODEL_OUTPUT_TOKENS, this.ctx.client.defaults.maxTokens), categoryRequired: true,
       validateObservations: observations=>{
         for(const observation of observations.filter(item=>item.category==='scope'&&item.assessment==='issue')){
           const ids=new Set(observation.sourceRefs?.map(ref=>ref.sourceId));

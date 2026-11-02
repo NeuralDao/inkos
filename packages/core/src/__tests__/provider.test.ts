@@ -18,7 +18,7 @@ describe("explicit alias limits", () => {
   ])("resets same-ID deployment limits when connection changes: %j", change => {
     const a = createLLMClient(LLMConfigSchema.parse({ provider: "custom", baseUrl: "https://router.example/v1", model: "same-alias", apiKey: "fixture-old", contextWindow: 4096, maxTokens: 512 }));
     const fallback = clientWithModel(a, "same-alias", change);
-    expect(fallback._piModel?.contextWindow).toBe(128000);
+    expect(fallback._piModel?.contextWindow).toBe(200000);
     expect(fallback._piModel?.maxTokens).not.toBe(512);
     const b = clientWithModel(a, "same-alias", { ...change, contextWindow: 8192, maxTokens: 1024 });
     expect(b._piModel).toMatchObject({ id: "same-alias", contextWindow: 8192, maxTokens: 1024 });
@@ -31,7 +31,7 @@ describe("explicit alias limits", () => {
     expect(a._piModel).toMatchObject({ id: "alias-a", contextWindow: 4096, maxTokens: 512 });
     expect(b._piModel).toMatchObject({ id: "alias-b", contextWindow: 8192, maxTokens: 1024 });
     expect(b.defaults.maxTokens).toBe(1024);
-    expect(clientWithModel(b, "alias-a")._piModel?.contextWindow).toBe(128000);
+    expect(clientWithModel(b, "alias-a")._piModel?.contextWindow).toBe(200000);
     expect(clientWithModel(a, "alias-a")._piModel?.contextWindow).toBe(4096);
     expect(() => LLMConfigSchema.parse({ provider: "custom", baseUrl: "https://router.example/v1", model: "alias", contextWindow: 0 })).toThrow();
   });
@@ -1220,7 +1220,7 @@ describe("createLLMClient with providers lookup", () => {
     expect(client.defaults.maxTokens).toBe(4096);
   });
 
-  it("未知 model 走 8192 * 3 的写作兜底预算", async () => {
+  it("未知 model 走 96K 的写作兜底预算", async () => {
     const { createLLMClient } = await import("../llm/provider.js");
     const { LLMConfigSchema } = await import("../models/project.js");
     const client = createLLMClient(LLMConfigSchema.parse({
@@ -1230,8 +1230,8 @@ describe("createLLMClient with providers lookup", () => {
       apiKey: "test",
       baseUrl: "https://middleman.example/v1",
     }));
-    expect(client.defaults.maxTokens).toBe(24_576);
-    expect(client._piModel?.maxTokens).toBe(24_576);
+    expect(client.defaults.maxTokens).toBe(96_000);
+    expect(client._piModel?.maxTokens).toBe(96_000);
   });
 
   it("B7: kimiCodingPlan 的 kimi-k2.5 走 API 时 piModel.id 是 deploymentName (k2p5)", async () => {
@@ -1316,27 +1316,26 @@ describe("stream interruption detection", () => {
   // 网关把长流掐断：连接正常关闭，但既没有 finish_reason 也没有 [DONE]
   const TRUNCATED_SSE = "data: {\"choices\":[{\"delta\":{\"content\":\"写到一半的正文\"}}]}\n\n";
 
-  it("retries a native chat stream that closes without [DONE]/finish_reason and succeeds on the retry", async () => {
+  it("fails a native chat stream that closes without [DONE]/finish_reason without repeating a possibly billed generation", async () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(sseResponse(TRUNCATED_SSE))
       .mockResolvedValueOnce(sseResponse(COMPLETE_SSE));
     vi.stubGlobal("fetch", fetchMock);
 
-    const result = await chatCompletion(nativeStreamClient(), "glm-compat", [{ role: "user", content: "写第1章" }]);
+    await expect(chatCompletion(nativeStreamClient(), "glm-compat", [{ role: "user", content: "写第1章" }]))
+      .rejects.toThrow(/Stream interrupted|completion signal/);
 
-    expect(result.content).toBe("完整的正文内容");
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock).toHaveBeenCalledOnce();
     vi.unstubAllGlobals();
   });
 
-  it("throws instead of returning truncated content when every attempt is cut mid-stream", async () => {
+  it("throws instead of returning truncated content and does not repeat a cut stream", async () => {
     const fetchMock = vi.fn().mockImplementation(async () => sseResponse(TRUNCATED_SSE));
     vi.stubGlobal("fetch", fetchMock);
 
     await expect(chatCompletion(nativeStreamClient(), "glm-compat", [{ role: "user", content: "写第1章" }]))
       .rejects.toThrow(/Stream interrupted|completion signal/);
-    // 初次 + TRANSIENT_LLM_RETRIES(2) 次重试
-    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(fetchMock).toHaveBeenCalledOnce();
     vi.unstubAllGlobals();
   });
 
@@ -1366,11 +1365,11 @@ describe("stream interruption detection", () => {
 
     await expect(chatCompletion(nativeStreamClient(), "glm-compat", [{ role: "user", content: "写正文" }]))
       .rejects.toThrow(/output limit|length|Stream interrupted/i);
-    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(fetchMock).toHaveBeenCalledOnce();
     vi.unstubAllGlobals();
   });
 
-  it("retries a pi-ai stream that errors after a long partial instead of silently keeping the truncation", async () => {
+  it("fails a pi-ai stream that errors after a long partial without repeating the generation", async () => {
     const longPartial = "长".repeat(600);
     const partialMsg = makeAssistantMessage(longPartial);
     const partialThenError: AsyncIterable<Record<string, unknown>> = {
@@ -1388,28 +1387,24 @@ describe("stream interruption detection", () => {
         };
       },
     };
-    mockStreamSimple
-      .mockReturnValueOnce(partialThenError as never)
-      .mockReturnValueOnce(makeTextStream("重试后的完整内容") as never);
+    mockStreamSimple.mockReturnValueOnce(partialThenError as never);
 
-    const result = await chatCompletion(makeClient(), "test-model", [{ role: "user", content: "写" }]);
+    await expect(chatCompletion(makeClient(), "test-model", [{ role: "user", content: "写" }]))
+      .rejects.toThrow(/Stream interrupted/);
 
-    expect(result.content).toBe("重试后的完整内容");
-    expect(mockStreamSimple).toHaveBeenCalledTimes(2);
+    expect(mockStreamSimple).toHaveBeenCalledOnce();
   });
 
-  it("treats a pi-ai stream that ends without a done event as interrupted and retries", async () => {
+  it("treats a pi-ai stream that ends without a done event as interrupted without retry", async () => {
     const partialMsg = makeAssistantMessage("只有一半");
-    mockStreamSimple
-      .mockReturnValueOnce(makeEventStream([
+    mockStreamSimple.mockReturnValueOnce(makeEventStream([
         { type: "text_delta", contentIndex: 0, delta: "只有一半", partial: partialMsg },
-      ]) as never)
-      .mockReturnValueOnce(makeTextStream("第二次完整") as never);
+      ]) as never);
 
-    const result = await chatCompletion(makeClient(), "test-model", [{ role: "user", content: "写" }]);
+    await expect(chatCompletion(makeClient(), "test-model", [{ role: "user", content: "写" }]))
+      .rejects.toThrow(/Stream interrupted/);
 
-    expect(result.content).toBe("第二次完整");
-    expect(mockStreamSimple).toHaveBeenCalledTimes(2);
+    expect(mockStreamSimple).toHaveBeenCalledOnce();
   });
 
   it("rejects a pi-ai done message whose stop reason is length", async () => {
@@ -1422,6 +1417,6 @@ describe("stream interruption detection", () => {
 
     await expect(chatCompletion(makeClient(), "test-model", [{ role: "user", content: "写" }]))
       .rejects.toThrow(/output limit|length|Stream interrupted/i);
-    expect(mockStreamSimple).toHaveBeenCalledTimes(3);
+    expect(mockStreamSimple).toHaveBeenCalledOnce();
   });
 });

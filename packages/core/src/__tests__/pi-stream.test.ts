@@ -669,7 +669,7 @@ describe("guardedPiNonStreaming", () => {
     expect(result.chapters[0]?.charCount).toBe(25);
     expect(result.chapters[1]).toEqual(neighbor);
   });
-  it('bounds buffered drafting requests while producing every requested chapter',async()=>{
+  it('keeps buffered drafting within the shared 96K ceiling while producing every requested chapter',async()=>{
     const budgets:number[]=[];
     fetchWithProxyMock.mockImplementation(async(_url:string,init:RequestInit)=>{
       const body=JSON.parse(String(init.body)),tool=body.tools[0].function;budgets.push(body.max_tokens);
@@ -680,8 +680,8 @@ describe("guardedPiNonStreaming", () => {
     const client=createLLMClient({provider:'openai',service:'custom',configSource:'studio',baseUrl:model.baseUrl,model:model.id,apiKey:'fixture',apiFormat:'chat',stream:false,temperature:0,thinkingBudget:0});
     const result=await new ShortFictionWriterAgent({client,model:model.id,projectRoot:'/tmp'}).writeDraft({direction:'Complete the story',outlineMarkdown:'Six chapters',chapterCount:6,charsPerChapter:1000,language:'zh'});
     expect(result.chapters.map(c=>c.number)).toEqual([1,2,3,4,5,6]);
-    expect(budgets.length).toBeGreaterThan(1);
-    expect(budgets.every(budget=>budget<=8192)).toBe(true);
+    expect(budgets).toHaveLength(1);
+    expect(budgets.every(budget=>budget<=96_000)).toBe(true);
   });
   beforeEach(() => {
     fetchWithProxyMock.mockReset();

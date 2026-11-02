@@ -15,6 +15,10 @@ export const ObservationSchema = z.object({
 
 export type Observation = z.infer<typeof ObservationSchema>;
 
+// Two real chapter audits ended their last citation one or two lines past EOF.
+// Keep recovery bounded so a wildly invalid range is still rejected.
+const MAX_SOURCE_RANGE_END_OVERRUN = 2;
+
 /** Number display lines without modifying the authoritative source text. */
 export function numberReviewSource(source: string): string {
   return numberSourceLines(source);
@@ -30,7 +34,14 @@ export function resolveObservationSources<T extends ReviewSourceSubmission>(obse
     if (reference.quote !== undefined) return {sourceId:reference.sourceId,quote:reference.quote};
     const source = sources.get(reference.sourceId);
     const lines = source === undefined ? undefined : sourceLineBodies(source);
-    const start=reference.startLine, end=reference.endLine;
+    const start=reference.startLine;
+    const requestedEnd=reference.endLine;
+    // Recover only small end-of-file off-by errors, preserving exact source text.
+    const end=lines && Number.isInteger(start) && start! >= 1 && start! <= lines.length
+      && Number.isInteger(requestedEnd) && requestedEnd! > lines.length
+      && requestedEnd! <= lines.length + MAX_SOURCE_RANGE_END_OVERRUN
+      ? lines.length
+      : requestedEnd;
     if (!lines || !Number.isInteger(start) || !Number.isInteger(end) || start! < 1 || end! < start! || end! > lines.length) {
       const details={code:"REVIEW_SOURCE_RANGE_INVALID",path:`/observations/${index}/sourceRefs/${referenceIndex}`,sourceId:reference.sourceId,startLine:start,endLine:end,lineCount:lines?.length??0};
       throw Object.assign(new Error(JSON.stringify(details)),details);

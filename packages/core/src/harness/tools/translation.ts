@@ -93,8 +93,8 @@ export function createTranslationRunTool(
         const context = pipeline.createAgentContext("translation", workId);
         const reviewContext = pipeline.createAgentContext("auditor", workId);
         const createModel = options.createModel ?? createLLMTranslationModel;
-        const translator = createModel({client: context.client, model: context.model, maxTokens: params.maxTokens, activatedSkills: skills, signal});
-        const reviewer = createModel({client: reviewContext.client, model: reviewContext.model, activatedSkills: skills, signal});
+        const translator = createModel({client: context.client, model: context.model, projectRoot, workId, agentRole:"translation", maxTokens: params.maxTokens, activatedSkills: skills, signal});
+        const reviewer = createModel({client: reviewContext.client, model: reviewContext.model, projectRoot, workId, agentRole:"translation-review", activatedSkills: skills, signal});
         return runTranslationProject(projectRoot, workId, {
           model: { ...translator, reviewChapter: reviewer.reviewChapter },
           batchSize: params.batchSize,
@@ -125,7 +125,7 @@ export function createTranslationRevisionTool(pipeline:PipelineRunner,projectRoo
       const skills=mergeActivatedSkillGuidance(options.defaultSkills??[],options.activeSkills?.()??[]);
       const result=await withWorkMutationScope(projectRoot,workId,()=>new StateManager(projectRoot).acquireBookLock(workId),()=>pipeline.runWithAgentContext({signal,activatedSkills:skills},async()=>{
         const context=pipeline.createAgentContext("translation",workId);
-        return reviseTranslationSegment(projectRoot,workId,{chapterNumber:params.chapterNumber,paragraph:params.paragraph,instruction:params.instruction,model:(options.createModel??createLLMTranslationModel)({client:context.client,model:context.model,activatedSkills:skills,signal})});
+        return reviseTranslationSegment(projectRoot,workId,{chapterNumber:params.chapterNumber,paragraph:params.paragraph,instruction:params.instruction,model:(options.createModel??createLLMTranslationModel)({client:context.client,model:context.model,projectRoot,workId,agentRole:"translation-revision",activatedSkills:skills,signal})});
       }));
       return textResult(`${result.changed?"Revised":"Kept"} chapter ${result.chapterNumber}, paragraph ${result.paragraphNumber} of ${result.paragraphCount}${result.isLastParagraph?" (last paragraph)":" (not the last paragraph)"}. Selected source: ${result.sourceExcerpt}`,{kind:"translation_segment_revised",workId,...result});
     },
