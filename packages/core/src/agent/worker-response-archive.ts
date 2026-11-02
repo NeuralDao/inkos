@@ -1,7 +1,7 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
-import type { AssistantMessage, Model } from "@mariozechner/pi-ai";
+import type { Api, AssistantMessage, Model } from "@mariozechner/pi-ai";
 
 export interface WorkerResponseArchiveContext {
   readonly projectRoot: string;
@@ -27,7 +27,7 @@ function rolePart(value: string): string {
 /** Save a raw assistant response before any caller or validator consumes it. */
 export async function archiveWorkerResponse(input: {
   readonly context: WorkerResponseArchiveContext;
-  readonly model: Model;
+  readonly model: Model<Api>;
   readonly response: AssistantMessage | { readonly type: "tool_call"; readonly id: string; readonly name: string; readonly arguments: unknown };
   readonly attempt: number;
 }): Promise<string> {
@@ -52,7 +52,9 @@ export async function archiveWorkerResponse(input: {
 
 /** Attach the host's validation result after the original response is durable. */
 export async function markWorkerResponseArchive(path: string, outcome: WorkerResponseArchiveOutcome): Promise<void> {
-  const document = JSON.parse(await readFile(path, "utf8")) as { validation?: { stages?: WorkerResponseArchiveOutcome[] } };
+  const document = JSON.parse(await readFile(path, "utf8")) as {
+    validation?: { status?: string; stages?: WorkerResponseArchiveOutcome[] };
+  };
   document.validation = { status: "checked", stages: [...(document.validation?.stages ?? []), outcome] };
   await writeFile(path, `${JSON.stringify(document, null, 2)}\n`, "utf8");
 }
