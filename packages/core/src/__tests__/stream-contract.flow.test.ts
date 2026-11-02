@@ -9,6 +9,231 @@ import { guardedPiStream, guardedPiNonStreaming } from "../agent/pi-stream.js";
 import { withExecutionEvidence } from "../harness/execution-evidence.js";
 import { compileHarnessContextText } from "../agent/agent-session.js";
 import { runWorkerAgentTool } from "../agent/worker-agent.js";
+import { singleAttemptStream } from "../agent/single-attempt-stream.js";
+
+it.each([true, false])("does not repeat an invalid structured result when retries are disabled (stream=%s)", async (streaming) => {
+  let calls = 0;
+  const server = createServer(async (request, response) => {
+    for await (const _ of request) { /* Drain request. */ }
+    calls++;
+    if (streaming) {
+      response.writeHead(200, { "Content-Type": "text/event-stream" });
+      response.write(`data: ${JSON.stringify({ id: "invalid", object: "chat.completion.chunk", choices: [{ index: 0, delta: { role: "assistant", tool_calls: [{ index: 0, id: "call", type: "function", function: { name: "submit_value", arguments: '{"value":"wrong"}' } }] }, finish_reason: null }] })}\n\n`);
+      response.write(`data: ${JSON.stringify({ id: "invalid", object: "chat.completion.chunk", choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }] })}\n\n`);
+      response.end("data: [DONE]\n\n");
+    } else {
+      response.writeHead(200, { "Content-Type": "application/json" });
+      response.end(JSON.stringify({ choices: [{ finish_reason: "tool_calls", message: { role: "assistant", tool_calls: [{ id: "call", type: "function", function: { name: "submit_value", arguments: '{"value":"wrong"}' } }] } }] }));
+    }
+  });
+  server.listen(0, "127.0.0.1"); await once(server, "listening");
+  try {
+    const client = createLLMClient({ service: "custom", configSource: "studio", provider: "openai", model: "test-model", baseUrl: `http://127.0.0.1:${(server.address() as { port: number }).port}/v1`, apiKey: "fixture", apiFormat: "chat", stream: streaming, temperature: 0, thinkingBudget: 0 });
+    await expect(runWorkerAgentTool(client, "test-model", [{ role: "user", content: "Submit a number" }], {
+      name: "submit_value", label: "Submit", description: "Submit a number", parameters: Type.Object({ value: Type.Integer() }),
+    }, { maxTokens: 128, disableRetries: true })).rejects.toThrow();
+    expect(calls).toBe(1);
+  } finally { server.closeAllConnections(); await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve())); }
+}, 15000);
+
+it("does not repeat a domain-invalid structured result when retries are disabled", async () => {
+  let calls = 0;
+  const server = createServer(async (request, response) => {
+    for await (const _ of request) { /* Drain request. */ }
+    calls++; response.writeHead(200, { "Content-Type": "application/json" });
+    response.end(JSON.stringify({ choices: [{ finish_reason: "tool_calls", message: { role: "assistant", tool_calls: [{ id: "call", type: "function", function: { name: "submit_value", arguments: '{"value":7}' } }] } }], usage: { prompt_tokens: 2, completion_tokens: 3, total_tokens: 5 } }));
+  });
+  server.listen(0, "127.0.0.1"); await once(server, "listening");
+  try {
+    const client = createLLMClient({ service: "custom", configSource: "studio", provider: "openai", model: "test-model", baseUrl: `http://127.0.0.1:${(server.address() as { port: number }).port}/v1`, apiKey: "fixture", apiFormat: "chat", stream: false, temperature: 0, thinkingBudget: 0 });
+    const failure = await runWorkerAgentTool(client, "test-model", [{ role: "user", content: "Submit a number" }], {
+      name: "submit_value", label: "Submit", description: "Submit a number", parameters: Type.Object({ value: Type.Integer() }),
+      validate: () => { throw new Error("incomplete finding report"); },
+    }, { maxTokens: 128, disableRetries: true }).catch(error => error);
+    expect(failure.message).toMatch(/finding report/);
+    expect(failure.tokenUsage).toEqual({ promptTokens: 2, completionTokens: 3, totalTokens: 5 });
+    expect(calls).toBe(1);
+  } finally { server.closeAllConnections(); await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve())); }
+}, 15000);
+
+it.each((["chat", "responses", "anthropic"] as const).flatMap(format => [true, false].map(streaming => [format, streaming] as const)))("does not retry a %s transport failure when retries are disabled (stream=%s)", async (apiFormat, streaming) => {
+  let calls = 0;
+  const server = createServer(async (request, response) => {
+    for await (const _ of request) { /* Drain request. */ }
+    calls++; response.writeHead(503, { "Content-Type": "application/json" }); response.end('{"error":{"message":"unavailable"}}');
+  });
+  server.listen(0, "127.0.0.1"); await once(server, "listening");
+  try {
+    const client = createLLMClient({ service: "custom", configSource: "studio", provider: "openai", model: "test-model", baseUrl: `http://127.0.0.1:${(server.address() as { port: number }).port}/v1`, apiKey: "fixture", apiFormat, stream: streaming, temperature: 0, thinkingBudget: 0 });
+    await expect(runWorkerAgentTool(client, "test-model", [{ role: "user", content: "Submit a number" }], {
+      name: "submit_value", label: "Submit", description: "Submit a number", parameters: Type.Object({ value: Type.Integer() }),
+    }, { maxTokens: 128, disableRetries: true })).rejects.toThrow();
+    expect(calls).toBe(1);
+  } finally { server.closeAllConnections(); await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve())); }
+}, 15000);
+
+it.each((["chat", "responses", "anthropic"] as const).flatMap(format => [true, false].map(streaming => [format, streaming] as const)))(
+  "returns a structured single-attempt %s result (stream=%s)", async (apiFormat, streaming) => {
+    const requests: Array<Record<string, any>> = [];
+    const authorization: Array<string | undefined> = [];
+    const server = createServer(async (request, response) => {
+      const chunks: Buffer[] = []; for await (const chunk of request) chunks.push(Buffer.from(chunk));
+      requests.push(JSON.parse(Buffer.concat(chunks).toString("utf8")));
+      authorization.push(apiFormat === "anthropic" ? request.headers["x-api-key"] as string | undefined : request.headers.authorization);
+      const args = JSON.stringify({ value: 7 });
+      if (!streaming) {
+        response.writeHead(200, { "Content-Type": "application/json" });
+        response.end(JSON.stringify(apiFormat === "chat"
+          ? { choices: [{ finish_reason: "tool_calls", message: { role: "assistant", tool_calls: [{ id: "call", type: "function", function: { name: "submit_value", arguments: args } }] } }], usage: { prompt_tokens: 2, completion_tokens: 3, total_tokens: 5 } }
+          : apiFormat === "responses" ? { status: "completed", output: [{ type: "function_call", call_id: "call", name: "submit_value", arguments: args }], usage: { input_tokens: 2, output_tokens: 3, total_tokens: 5 } }
+            : { stop_reason: "tool_use", content: [{ type: "tool_use", id: "call", name: "submit_value", input: { value: 7 } }], usage: { input_tokens: 2, output_tokens: 3 } }));
+        return;
+      }
+      response.writeHead(200, { "Content-Type": "text/event-stream" });
+      const send = (value: unknown) => response.write(`data: ${JSON.stringify(value)}\n\n`);
+      if (apiFormat === "chat") {
+        send({ choices: [{ index: 0, delta: { tool_calls: [{ index: 0, id: "call", type: "function", function: { name: "submit_value", arguments: args } }] }, finish_reason: null }] });
+        send({ choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }], usage: { prompt_tokens: 2, completion_tokens: 3, total_tokens: 5 } });
+      } else if (apiFormat === "responses") {
+        send({ type: "response.output_item.added", output_index: 0, item: { type: "function_call", call_id: "call", name: "submit_value", arguments: "" } });
+        send({ type: "response.function_call_arguments.delta", output_index: 0, delta: args });
+        send({ type: "response.completed", response: { status: "completed", usage: { input_tokens: 2, output_tokens: 3, total_tokens: 5 } } });
+      } else {
+        send({ type: "message_start", message: { usage: { input_tokens: 2 } } });
+        send({ type: "content_block_start", index: 0, content_block: { type: "tool_use", id: "call", name: "submit_value", input: {} } });
+        send({ type: "content_block_delta", index: 0, delta: { type: "input_json_delta", partial_json: args } });
+        send({ type: "message_delta", delta: { stop_reason: "tool_use" }, usage: { output_tokens: 3 } });
+        send({ type: "message_stop" });
+      }
+      response.end(apiFormat === "anthropic" ? "" : "data: [DONE]\n\n");
+    });
+    server.listen(0, "127.0.0.1"); await once(server, "listening");
+    try {
+      const client = createLLMClient({ service: "custom", configSource: "studio", provider: "openai", model: "test-model", baseUrl: `http://127.0.0.1:${(server.address() as { port: number }).port}/v1`, apiKey: "fixture", apiFormat, stream: streaming, temperature: 0, thinkingBudget: 0, extra: { provider: { sort: "price" } } });
+      let usage = { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
+      const result = await runWorkerAgentTool(client, "test-model", [{ role: "system", content: "Keep the rules." }, { role: "user", content: "Submit a number." }], {
+        name: "submit_value", label: "Submit", description: "Submit a number", parameters: Type.Object({ value: Type.Integer() }),
+      }, { maxTokens: 128, disableRetries: true, onUsage: value => { usage = value; } });
+      expect(result).toEqual({ value: 7 });
+      expect(usage).toEqual({ promptTokens: 2, completionTokens: 3, totalTokens: 5 });
+      expect(requests).toHaveLength(1);
+      expect(requests[0]?.stream).toBe(streaming);
+      expect(requests[0]?.[apiFormat === "responses" ? "max_output_tokens" : apiFormat === "chat" && streaming ? "max_completion_tokens" : "max_tokens"]).toBe(128);
+      expect(requests[0]?.provider).toEqual({ sort: "price" });
+      expect(authorization).toEqual([apiFormat === "anthropic" ? "fixture" : "Bearer fixture"]);
+      expect(JSON.stringify(requests[0])).toContain("Keep the rules.");
+    } finally { server.closeAllConnections(); await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve())); }
+  }, 15000,
+);
+
+it.each((["chat", "responses", "anthropic"] as const).flatMap(format => [true, false].map(streaming => [format, streaming] as const)))("rejects a truncated %s tool result without retry (stream=%s)", async (apiFormat, streaming) => {
+  let calls = 0;
+  const server = createServer(async (request, response) => {
+    for await (const _ of request) { /* Drain request. */ }
+    calls++;
+    if (!streaming) {
+      response.writeHead(200, { "Content-Type": "application/json" });
+      response.end(JSON.stringify(apiFormat === "chat"
+        ? { choices: [{ finish_reason: "length", message: { role: "assistant", tool_calls: [{ id: "call", type: "function", function: { name: "submit_value", arguments: '{"value":7}' } }] } }] }
+        : apiFormat === "responses" ? { status: "incomplete", incomplete_details: { reason: "max_output_tokens" }, output: [{ type: "function_call", call_id: "call", name: "submit_value", arguments: '{"value":7}' }] }
+          : { stop_reason: "max_tokens", content: [{ type: "tool_use", id: "call", name: "submit_value", input: { value: 7 } }] }));
+      return;
+    }
+    response.writeHead(200, { "Content-Type": "text/event-stream" });
+    const send = (value: unknown) => response.write(`data: ${JSON.stringify(value)}\n\n`);
+    if (apiFormat === "chat") {
+      send({ choices: [{ index: 0, delta: { tool_calls: [{ index: 0, id: "call", type: "function", function: { name: "submit_value", arguments: '{"value":7}' } }] }, finish_reason: null }] });
+      send({ choices: [{ index: 0, delta: {}, finish_reason: "length" }] });
+    } else if (apiFormat === "responses") {
+      send({ type: "response.incomplete", response: { status: "incomplete", output: [{ type: "function_call", call_id: "call", name: "submit_value", arguments: '{"value":7}' }] } });
+    } else {
+      send({ type: "content_block_start", index: 0, content_block: { type: "tool_use", id: "call", name: "submit_value", input: {} } });
+      send({ type: "content_block_delta", index: 0, delta: { type: "input_json_delta", partial_json: '{"value":7}' } });
+      send({ type: "message_delta", delta: { stop_reason: "max_tokens" }, usage: { output_tokens: 128 } });
+      send({ type: "message_stop" });
+    }
+    response.end(apiFormat === "anthropic" ? "" : "data: [DONE]\n\n");
+  });
+  server.listen(0, "127.0.0.1"); await once(server, "listening");
+  try {
+    const client = createLLMClient({ service: "custom", configSource: "studio", provider: "openai", model: "test-model", baseUrl: `http://127.0.0.1:${(server.address() as { port: number }).port}/v1`, apiKey: "fixture", apiFormat, stream: streaming, temperature: 0, thinkingBudget: 0 });
+    await expect(runWorkerAgentTool(client, "test-model", [{ role: "user", content: "Submit a number" }], {
+      name: "submit_value", label: "Submit", description: "Submit a number", parameters: Type.Object({ value: Type.Integer() }),
+    }, { maxTokens: 128, disableRetries: true })).rejects.toMatchObject({ code: "MODEL_OUTPUT_LIMIT" });
+    expect(calls).toBe(1);
+  } finally { server.closeAllConnections(); await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve())); }
+}, 15000);
+
+it("cancels a single-attempt stream without starting another request", async () => {
+  let calls = 0;
+  const server = createServer(async (request, response) => {
+    for await (const _ of request) { /* Drain request. */ }
+    calls++; response.writeHead(200, { "Content-Type": "text/event-stream" });
+    response.write(`data: ${JSON.stringify({ choices: [{ index: 0, delta: { tool_calls: [{ index: 0, id: "call", type: "function", function: { name: "submit_value", arguments: '{"value":' } }] }, finish_reason: null }] })}\n\n`);
+  });
+  server.listen(0, "127.0.0.1"); await once(server, "listening");
+  try {
+    const client = createLLMClient({ service: "custom", configSource: "studio", provider: "openai", model: "test-model", baseUrl: `http://127.0.0.1:${(server.address() as { port: number }).port}/v1`, apiKey: "fixture", apiFormat: "chat", stream: true, temperature: 0, thinkingBudget: 0 });
+    const controller = new AbortController();
+    const stream = singleAttemptStream(client._piModel!, { messages: [{ role: "user", content: "Submit", timestamp: 1 }], tools: [{ name: "submit_value", description: "Submit", parameters: Type.Object({ value: Type.Integer() }) }] },
+      { apiKey: "fixture", maxTokens: 128, signal: controller.signal }, undefined, true, () => controller.abort());
+    expect((await stream.result()).stopReason).toBe("aborted");
+    expect(calls).toBe(1);
+  } finally { server.closeAllConnections(); await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve())); }
+}, 15000);
+
+it.each(["responses", "anthropic"] as const)("preserves the requested reasoning level for single-attempt %s", async apiFormat => {
+  let payload: Record<string, any> = {};
+  const server = createServer(async (request, response) => {
+    const chunks: Buffer[] = []; for await (const chunk of request) chunks.push(Buffer.from(chunk));
+    payload = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+    response.writeHead(200, { "Content-Type": "application/json" });
+    response.end(JSON.stringify(apiFormat === "responses"
+      ? { status: "completed", output: [{ type: "function_call", call_id: "call", name: "submit_value", arguments: '{"value":7}' }], usage: { input_tokens: 2, output_tokens: 3 } }
+      : { stop_reason: "tool_use", content: [{ type: "tool_use", id: "call", name: "submit_value", input: { value: 7 } }], usage: { input_tokens: 2, output_tokens: 3 } }));
+  });
+  server.listen(0, "127.0.0.1"); await once(server, "listening");
+  try {
+    const client = createLLMClient({ service: "custom", configSource: "studio", provider: "openai", model: "test-model", baseUrl: `http://127.0.0.1:${(server.address() as { port: number }).port}/v1`, apiKey: "fixture", apiFormat, stream: false, temperature: 0, thinkingBudget: 0 });
+    const model = { ...client._piModel!, reasoning: true, maxTokens: 32768 };
+    const stream = singleAttemptStream(model, { systemPrompt: "Keep the author rules", messages: [{ role: "user", content: "Submit", timestamp: 1 }], tools: [{ name: "submit_value", description: "Submit", parameters: Type.Object({ value: Type.Integer() }) }] },
+      { apiKey: "fixture", maxTokens: 4096, reasoning: "high", temperature: 0.3 }, undefined, false);
+    expect((await stream.result()).stopReason).toBe("toolUse");
+    if (apiFormat === "responses") {
+      expect(payload.reasoning).toEqual({ effort: "high" });
+      expect(payload.input[0]).toMatchObject({ role: "developer", content: "Keep the author rules" });
+    } else {
+      expect(payload.thinking).toEqual({ type: "enabled", budget_tokens: 16384 });
+      expect(payload.max_tokens).toBe(20480);
+      expect(payload.temperature).toBeUndefined();
+      expect(payload.tool_choice).toEqual({ type: "auto" });
+    }
+  } finally { server.closeAllConnections(); await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve())); }
+}, 15000);
+
+it("preserves Russian text across split UTF-8 streaming chunks", async () => {
+  const server = createServer(async (request, response) => {
+    for await (const _ of request) { /* Drain request. */ }
+    response.writeHead(200, { "Content-Type": "text/event-stream" });
+    const event = (value: unknown) => Buffer.from(`data: ${JSON.stringify(value)}\n\n`, "utf8");
+    response.write(event({ type: "response.output_item.added", output_index: 0, item: { type: "function_call", call_id: "call", name: "submit_text", arguments: "" } }));
+    const delta = event({ type: "response.function_call_arguments.delta", output_index: 0, delta: JSON.stringify({ text: "Ёж у пристани" }) });
+    const offset = delta.indexOf(Buffer.from("Ё", "utf8"));
+    response.write(delta.subarray(0, offset + 1));
+    await new Promise(resolve => setTimeout(resolve, 10));
+    response.write(delta.subarray(offset + 1));
+    response.write(event({ type: "response.completed", response: { status: "completed", usage: { input_tokens: 1, output_tokens: 2, total_tokens: 3 } } }));
+    response.end("data: [DONE]\n\n");
+  });
+  server.listen(0, "127.0.0.1"); await once(server, "listening");
+  try {
+    const client = createLLMClient({ service: "custom", configSource: "studio", provider: "openai", model: "test-model", baseUrl: `http://127.0.0.1:${(server.address() as { port: number }).port}/v1`, apiKey: "fixture", apiFormat: "responses", stream: true, temperature: 0, thinkingBudget: 0 });
+    const result = await runWorkerAgentTool(client, "test-model", [{ role: "user", content: "Submit Russian text" }], {
+      name: "submit_text", label: "Submit", description: "Submit text", parameters: Type.Object({ text: Type.String() }),
+    }, { maxTokens: 128, disableRetries: true });
+    expect(result).toEqual({ text: "Ёж у пристани" });
+  } finally { server.closeAllConnections(); await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve())); }
+}, 15000);
 
 it.each([true, false])('enforces required tool selection without rejecting an ordinary answer (stream=%s)', async (streaming) => {
   const received: Array<{ tool_choice?: unknown }> = [];
@@ -152,7 +377,7 @@ it.each(["chat", "responses", "anthropic"] as const)("carries the required resul
     }
     expect(requests[0]?.max_tokens).toBe(128);
     expect(requests[0]?.max_completion_tokens).toBeUndefined();
-    expect(requests[0]?.thinking).toEqual({ type: "disabled" });
+    expect(requests[0]?.thinking).toBeUndefined();
     expect(requests[0]?.tool_choice).toBe("required");
   } finally { server.closeAllConnections(); await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve())); }
 }, 15000);

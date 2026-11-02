@@ -976,7 +976,7 @@ describe("guardedPiNonStreaming", () => {
     expect(fetchWithProxyMock).toHaveBeenCalledTimes(2);
     expect(result.storyTitle).toBe("Story");
     expect(result.rawContent).toBe(`Story premise and ending\n\n## Chapter 1\n\n${chapterOne}\n\n## Chapter 2\n\n${chapterTwo}`);
-    expect(JSON.parse(fetchWithProxyMock.mock.calls[0]![1].body).thinking).toEqual({ type: "disabled" });
+    expect(JSON.parse(fetchWithProxyMock.mock.calls[0]![1].body)).not.toHaveProperty("thinking");
   });
 
   it("adapts a non-streaming tool call back into Pi events", async () => {

@@ -1,6 +1,7 @@
 import { Command } from "commander";
 import { loadWorkManifest, PipelineRunner, runAgentSession } from "@actalk/inkos-core";
 import { buildPipelineConfig, loadConfig, createClient, findProjectRoot, resolveBookId, resolveContext, log, logError } from "../utils.js";
+import { agentRunCommand } from "./agent-run.js";
 
 export const agentCommand = new Command("agent")
   .description("Natural language agent mode (LLM orchestrates via tool-use)")
@@ -85,3 +86,5 @@ export const agentCommand = new Command("agent")
       process.exit(1);
     }
   });
+
+agentCommand.addCommand(agentRunCommand);

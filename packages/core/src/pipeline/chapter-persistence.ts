@@ -1,5 +1,6 @@
 import type { AuditResult } from "../agents/continuity.js";
 import type { ChapterMeta } from "../models/chapter.js";
+import type { AutoRevisionOutcome } from "../models/chapter.js";
 import type { LengthTelemetry } from "../models/length-governance.js";
 
 export interface ChapterPersistenceUsage {
@@ -15,6 +16,7 @@ export async function persistChapterArtifacts(params: {
   readonly finalWordCount: number;
   readonly lengthTelemetry?: LengthTelemetry;
   readonly tokenUsage?: ChapterPersistenceUsage;
+  readonly autoRevision?: AutoRevisionOutcome;
   readonly loadChapterIndex: () => Promise<ReadonlyArray<ChapterMeta>>;
   readonly saveChapter: (index: ReadonlyArray<ChapterMeta>) => Promise<void>;
   readonly markBookActiveIfNeeded: () => Promise<void>;
@@ -32,6 +34,7 @@ export async function persistChapterArtifacts(params: {
     provenance: "generated",
     lengthTelemetry: params.lengthTelemetry,
     tokenUsage: params.tokenUsage,
+    ...(params.autoRevision ? { autoRevision: params.autoRevision } : {}),
   };
   const existingIdx = existingIndex.findIndex((e) => e.number === params.chapterNumber);
   const updatedIndex = existingIdx >= 0

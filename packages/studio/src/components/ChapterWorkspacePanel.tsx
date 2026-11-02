@@ -24,6 +24,17 @@ interface ChapterWorkspace {
   readonly plan: string | null;
   readonly versions: ReadonlyArray<ChapterVersion>;
   readonly canDelete: boolean;
+  readonly autoRevision?: {
+    readonly status: "skipped" | "applied" | "candidate" | "unchanged" | "unavailable";
+    readonly reason: string;
+    readonly candidateVersionId?: string;
+    readonly findings: ReadonlyArray<{ readonly id: string; readonly observation: { readonly summary: string; readonly evidence: ReadonlyArray<string>; readonly sourceRefs?: ReadonlyArray<{ readonly sourceId: string; readonly quote: string }> } }>;
+    readonly initialReview?: { readonly summary: string; readonly observations: ReadonlyArray<{ readonly summary: string; readonly evidence: ReadonlyArray<string>; readonly sourceRefs?: ReadonlyArray<{ readonly sourceId: string; readonly quote: string }> }> };
+    readonly dispositions?: ReadonlyArray<{ readonly findingId: string; readonly status: string; readonly explanation: string }>;
+    readonly assessments?: ReadonlyArray<{ readonly findingId: string; readonly status: string; readonly explanation: string }>;
+    readonly newIssues?: ReadonlyArray<{ readonly summary: string; readonly evidence: ReadonlyArray<string> }>;
+    readonly usage?: { readonly auditor?: { readonly promptTokens: number; readonly completionTokens: number }; readonly reviser?: { readonly promptTokens: number; readonly completionTokens: number }; readonly postAudit?: { readonly promptTokens: number; readonly completionTokens: number } };
+  };
 }
 
 interface VersionContent {
@@ -35,6 +46,20 @@ interface InspirationResult {
 }
 
 type BusyAction = "save" | "rewrite" | "inspiration" | "restore" | "delete" | null;
+
+function revisionReason(reason: string, t: TFunction): string {
+  switch (reason) {
+    case "manual-mode": return t("reader.autoReasonManual");
+    case "no-actionable-findings": return t("reader.autoReasonNoFindings");
+    case "audit-unavailable": return t("reader.autoReasonAuditUnavailable");
+    case "verified-improvement": return t("reader.autoReasonImproved");
+    case "revised-text-accepted; post-audit-notes-attached": return t("reader.autoReasonAcceptedWithNotes");
+    case "revised-text-accepted; post-audit-unavailable": return t("reader.autoReasonAcceptedAuditUnavailable");
+    case "unchanged": return t("reader.autoReasonUnchanged");
+    case "no-verified-improvement-or-new-issues": return t("reader.autoReasonRejected");
+    default: return reason;
+  }
+}
 
 export function ChapterWorkspacePanel({
   bookId,
@@ -224,6 +249,36 @@ export function ChapterWorkspacePanel({
         <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/5 px-4 py-3 text-sm text-emerald-700 dark:text-emerald-300">
           {notice}
         </div>
+      )}
+
+      {data?.autoRevision && (
+        <section className="rounded-xl border border-border/60 bg-background/50 p-4 space-y-3">
+          <h3 className="font-semibold">{t("reader.autoRevision")}</h3>
+          <p className="text-sm">{t(data.autoRevision.status === "applied" ? "reader.autoRevisionApplied" : data.autoRevision.status === "candidate" ? "reader.autoRevisionPending" : data.autoRevision.status === "unchanged" ? "reader.autoReasonUnchanged" : data.autoRevision.status === "unavailable" ? "reader.autoRevisionUnavailable" : "reader.autoRevisionSkipped")}</p>
+          <p className="text-xs text-muted-foreground">{revisionReason(data.autoRevision.reason, t)}</p>
+          {data.autoRevision.findings.map(({ id, observation }) => {
+            const disposition = data.autoRevision?.dispositions?.find((item) => item.findingId === id);
+            const assessment = data.autoRevision?.assessments?.find((item) => item.findingId === id);
+            return <div key={id} className="text-sm border-t border-border/40 pt-2">
+              <p>{observation.summary}</p>
+              {observation.evidence.map((evidence, index) => <blockquote key={index} className="text-xs text-muted-foreground">{evidence}</blockquote>)}
+              {observation.sourceRefs?.map((reference, index) => <blockquote key={index} className="text-xs text-muted-foreground">{reference.sourceId}: {reference.quote}</blockquote>)}
+              {disposition && <p className="text-xs">{t(disposition.status === "addressed" ? "reader.findingAddressed" : disposition.status === "rejected" ? "reader.findingRejected" : "reader.findingNotAddressed")}: {disposition.explanation}</p>}
+              {assessment && <p className="text-xs">{t(assessment.status === "resolved" ? "reader.findingResolved" : "reader.findingRemaining")}: {assessment.explanation}</p>}
+            </div>;
+          })}
+          {data.autoRevision.initialReview?.observations.some((_, index) => !data.autoRevision!.findings.some(finding => finding.id === `finding-${index + 1}`)) && <p className="text-xs font-semibold">{t("reader.auditAdditional")}</p>}
+          {data.autoRevision.initialReview?.observations.map((observation, index) => data.autoRevision!.findings.some(finding => finding.id === `finding-${index + 1}`) ? null : <div key={index} className="text-sm"><p>{observation.summary}</p>{observation.evidence.map((evidence, i) => <blockquote key={i} className="text-xs text-muted-foreground">{evidence}</blockquote>)}{observation.sourceRefs?.map((reference, i) => <blockquote key={i} className="text-xs text-muted-foreground">{reference.sourceId}: {reference.quote}</blockquote>)}</div>)}
+          {!!data.autoRevision.newIssues?.length && <p className="text-xs font-semibold">{t("reader.newIssues")}</p>}
+          {data.autoRevision.newIssues?.map((issue, index) => <div key={index} className="text-sm text-amber-700"><p>{issue.summary}</p>{issue.evidence.map((evidence, i) => <blockquote key={i} className="text-xs">{evidence}</blockquote>)}</div>)}
+          {data.autoRevision.usage && (data.autoRevision.usage.auditor || data.autoRevision.usage.reviser || data.autoRevision.usage.postAudit) && <div className="text-xs text-muted-foreground">
+            <p className="font-semibold">{t("reader.revisionUsage")}</p>
+            {data.autoRevision.usage.auditor && <p>{t("reader.initialAuditor")}: {data.autoRevision.usage.auditor.promptTokens} / {data.autoRevision.usage.auditor.completionTokens}</p>}
+            {data.autoRevision.usage.reviser && <p>{t("reader.reviserAgent")}: {data.autoRevision.usage.reviser.promptTokens} / {data.autoRevision.usage.reviser.completionTokens}</p>}
+            {data.autoRevision.usage.postAudit && <p>{t("reader.finalAuditor")}: {data.autoRevision.usage.postAudit.promptTokens} / {data.autoRevision.usage.postAudit.completionTokens}</p>}
+          </div>}
+          {data.autoRevision.candidateVersionId && <button type="button" className="text-sm underline" onClick={() => void previewVersion(data.autoRevision!.candidateVersionId!)}>{t("reader.autoRevisionCandidate")}</button>}
+        </section>
       )}
 
       {inspiration && (

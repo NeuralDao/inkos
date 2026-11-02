@@ -34,6 +34,7 @@ export async function validateChapterTruthPersistence(params: {
   readonly language: LengthLanguage;
   readonly logWarn: (message: { zh: string; en: string }) => void;
   readonly logger?: Pick<Logger, "warn">;
+  readonly allowRecovery?: boolean;
 }): Promise<{
   readonly validation: ValidationResult;
   readonly persistenceOutput: WriteChapterOutput;
@@ -82,6 +83,9 @@ export async function validateChapterTruthPersistence(params: {
   }
 
   if (!validation.consistent || validation.reconciliationRequired) {
+    if (params.allowRecovery === false) {
+      return { validation, persistenceOutput: await preserveCanonicalRuntimeState(params, persistenceOutput) };
+    }
     const recovery = await reconcileChapterStateAfterReview({
       writer: params.writer,
       validator: params.validator,

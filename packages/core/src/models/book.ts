@@ -38,6 +38,7 @@ export const BookConfigSchema = z.preprocess((value) => {
   maxChapterLength: z.number().int().min(1).optional(),
   language: z.enum(["zh", "en"]),
   narrativeLanguage: NarrativeLanguageSchema.optional(),
+  writing: z.object({ reviewMode: z.enum(["auto", "manual"]).optional() }).passthrough().optional(),
   createdAt: z.string().datetime(),
   updatedAt: z.string().datetime(),
   parentBookId: z.string().optional(),

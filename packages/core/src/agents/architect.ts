@@ -298,7 +298,7 @@ ${reviseFrom.userFeedback || "（无）"}
           : "提交可读的故事框架与卷纲。",
         parameters: FoundationOutlineToolSchema,
       },
-      { temperature: input.temperature, maxTokens: Math.min(8192, this.ctx.client.defaults.maxTokens) },
+      { temperature: input.temperature, maxTokens: Math.min(32768, this.ctx.client.defaults.maxTokens) },
     );
     await input.onOutline?.({
       storyFrame: outline.storyFrame.trim(),
@@ -351,7 +351,7 @@ ${reviseFrom.userFeedback || "（无）"}
         : "为影响开篇冲突的具名人物写简明角色卡。每人约150—250字，写清当下动机、已知信息、关系压力与能力边界，依据已给定故事，不重复整篇情节，不把无名岗位群体扩写成完整传记。") + castCardLanguageInstruction},
       {role:"user",content:castContext},
     ],{name:"submit_foundation_cast_documents",label:"Submit opening character cards",description:"Submit each character card as text in its named field.",parameters:foundationCastDocumentsToolSchema(cast.roles)},
-    {temperature:input.temperature,maxTokens:Math.min(8192,this.ctx.client.defaults.maxTokens)});
+    {temperature:input.temperature,maxTokens:Math.min(32768,this.ctx.client.defaults.maxTokens)});
     const roles: ArchitectRole[] = cast.roles.map((role,index)=>({tier:role.tier,name:role.name.trim(),content:cards[`role_${index+1}_content`]!.trim()}));
 
     return {

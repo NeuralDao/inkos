@@ -1,6 +1,6 @@
 // Models
 export { type BookConfig, type Platform, type Genre, type BookStatus, type FanficMode, BookConfigSchema, PlatformSchema, GenreSchema, BookStatusSchema, FanficModeSchema } from "./models/book.js";
-export { type ChapterMeta, ChapterMetaSchema } from "./models/chapter.js";
+export { type ChapterMeta, type AutoRevisionOutcome, ChapterMetaSchema, AutoRevisionOutcomeSchema } from "./models/chapter.js";
 export { type Observation, ObservationSchema } from "./models/observation.js";
 export { type ProjectConfig, type LLMConfig, type NotifyChannel, type DetectionConfig, type AgentLLMOverride, type ResearchSearchConfig, ProjectConfigSchema, LLMConfigSchema, AgentLLMOverrideSchema, DetectionConfigSchema, ResearchSearchConfigSchema } from "./models/project.js";
 export { type BookRules, type ParsedBookRules, BookRulesSchema } from "./models/book-rules.js";
@@ -187,7 +187,7 @@ export {
   resolveProxyUrl,
 } from "./utils/proxy-fetch.js";
 export { assertSafeBookId, deriveBookIdFromTitle, isSafeBookId } from "./utils/book-id.js";
-export { BookLanguageSchema, NarrativeLanguageSchema, resolveBookCreationLanguages, resolveNarrativeLanguage, type NarrativeLanguage } from "./utils/book-language.js";
+export { BookLanguageSchema, NarrativeLanguageSchema, LONGFORM_CREATION_LANGUAGES, resolveBookCreationLanguages, resolveNarrativeLanguage, type NarrativeLanguage } from "./utils/book-language.js";
 export { safeChildPath } from "./utils/path-safety.js";
 export { toPosixPath } from "./utils/posix-path.js";
 export {
@@ -405,7 +405,7 @@ export { probeModelsFromUpstream, type ProbedModel } from "./llm/providers/probe
 // Agents
 export { BaseAgent, type AgentContext } from "./agents/base.js";
 export { ArchitectAgent, type ArchitectOutput } from "./agents/architect.js";
-export { WriterAgent, type WriteChapterInput, type WriteChapterOutput, type TokenUsage } from "./agents/writer.js";
+export { WriterAgent, type WriteChapterInput, type WriteChapterOutput, type WriteChapterDraftOutput, type TokenUsage } from "./agents/writer.js";
 export { ContinuityAuditor, type AuditResult } from "./agents/continuity.js";
 export { ReviserAgent, DEFAULT_REVISE_MODE, type ReviseOutput, type ReviseMode } from "./agents/reviser.js";
 export { RadarAgent, type RadarResult, type RadarRecommendation } from "./agents/radar.js";
@@ -429,7 +429,7 @@ export {
   type ResearchReport,
 } from "./agents/researcher.js";
 export { StateValidatorAgent } from "./agents/state-validator.js";
-export { createInitialRuntimeState, loadRuntimeStateSnapshot, buildRuntimeStateArtifacts, saveRuntimeStateSnapshot, type RuntimeStateArtifacts } from "./state/runtime-state-store.js";
+export { createInitialRuntimeState, loadRuntimeStateSnapshot, loadRuntimeStateSnapshotAtChapter, buildRuntimeStateArtifacts, saveRuntimeStateSnapshot, type RuntimeStateArtifacts } from "./state/runtime-state-store.js";
 export { splitChapters, type SplitChapter } from "./utils/chapter-splitter.js";
 export * from "./translation/index.js";
 export { countChapterLength, resolveLengthCountingMode, formatLengthCount, buildLengthSpec, defaultChapterLength, DEFAULT_CHAPTER_LENGTH_ZH, DEFAULT_CHAPTER_LENGTH_EN, type LengthLanguage } from "./utils/length-metrics.js";
@@ -465,6 +465,8 @@ export {
 } from "./state/chapter-workspace.js";
 export { loadChaptersFromPath, compareChapterSourceNames } from "./agent/chapter-import-source.js";
 export { renderCurrentStateProjection, renderHooksProjection, renderChapterSummariesProjection } from "./state/state-projections.js";
+export { loadPersistedPlan, savePersistedPlan } from "./pipeline/persisted-governed-plan.js";
+export { syncWorkSourceArtifacts } from "./harness/source-sync.js";
 export { applyRuntimeStateDelta, type RuntimeStateSnapshot } from "./state/state-reducer.js";
 export { validateRuntimeState, type RuntimeStateValidationIssue } from "./state/state-validator.js";
 

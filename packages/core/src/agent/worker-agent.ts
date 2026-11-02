@@ -24,6 +24,7 @@ import {
   type OnStreamProgress,
 } from "../llm/provider.js";
 import { guardedPiNonStreaming, guardedPiStream } from "./pi-stream.js";
+import { singleAttemptStream } from "./single-attempt-stream.js";
 import { toPiApi } from "../llm/api-format.js";
 import { recordExecutionEvidence } from "../harness/execution-evidence.js";
 import {decodeStructuredFields} from './structured-arguments.js';
@@ -37,6 +38,8 @@ export interface WorkerAgentOptions {
   readonly onTextDelta?: (text: string) => void;
   readonly signal?: AbortSignal;
   readonly onUsage?: (usage: LLMResponse["usage"]) => void;
+  /** Avoid another paid generation after an invalid or empty result. */
+  readonly disableRetries?: boolean;
 }
 
 export interface WorkerResultTool<TParameters extends TSchema> {
@@ -64,7 +67,7 @@ function workerModel(client: LLMClient, modelId: string, maxTokens?: number): Mo
     api: toPiApi(client.apiFormat),
     provider: client.provider as Provider,
     baseUrl: "",
-    reasoning: false,
+    reasoning: client.defaults?.reasoning ?? ((client.defaults?.thinkingBudget ?? 0) > 0),
     input: ["text"],
     cost: EMPTY_COST,
     contextWindow: 200_000,
@@ -340,7 +343,11 @@ export async function runWorkerAgentTool<TParameters extends TSchema>(
   let modelTurns = 0;
   let resultAttemptsExhausted = false;
   let lastValidationError: (Error & {code?:string}) | undefined;
-  const maxResultTurns = 3;
+  const maxResultTurns = options.disableRetries ? 1 : 3;
+  const monitor = createStreamMonitor(progress => {
+    options.onStreamProgress?.(progress);
+    recordExecutionEvidence("model-stream-progress", { resultTool: resultTool.name, ...progress });
+  });
   const { validate, ...toolDefinition } = resultTool;
   const tool: AgentTool<TParameters, Static<TParameters>> = {
     ...toolDefinition,
@@ -398,6 +405,7 @@ export async function runWorkerAgentTool<TParameters extends TSchema>(
           toolChoice: "required" as const,
           onPayload: (payload: unknown) => payload && typeof payload === "object" ? { ...client.defaults.extra, ...payload } : payload,
         };
+      if (options.disableRetries) return singleAttemptStream(streamModel, context, resultOptions, client.proxyUrl, client.stream !== false, monitor.onChunk);
       return client.stream === false
         ? guardedPiNonStreaming(streamModel, context, resultOptions, client.proxyUrl)
         : guardedPiStream(streamModel, context, resultOptions, 1, {firstEventTimeoutMs:300_000,idleTimeoutMs:300_000}, false);
@@ -406,15 +414,22 @@ export async function runWorkerAgentTool<TParameters extends TSchema>(
   });
   const abortAgent = () => agent.abort();
   options.signal?.addEventListener("abort", abortAgent, { once: true });
-  const monitor = createStreamMonitor(progress => {
-    options.onStreamProgress?.(progress);
-    recordExecutionEvidence("model-stream-progress", { resultTool: resultTool.name, ...progress });
-  });
   const unsubscribeProgress = agent.subscribe(event => {
-    if (event.type !== "message_update") return;
+    if (event.type !== "message_update" || (options.disableRetries && client.stream !== false)) return;
     const update = event.assistantMessageEvent;
     if (update.type === "text_delta" || update.type === "toolcall_delta") monitor.onChunk(update.delta);
   });
+  const collectUsage = () => {
+    const usage = { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
+    const count = (value: unknown): number => typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : 0;
+    for (const message of agent.state.messages.slice(promptMessages.length)) {
+      if (message.role !== "assistant" || message.stopReason === "error" || message.stopReason === "aborted") continue;
+      usage.promptTokens += count(message.usage?.input);
+      usage.completionTokens += count(message.usage?.output);
+      usage.totalTokens += count(message.usage?.totalTokens);
+    }
+    return usage;
+  };
 
   try {
     await agent.prompt(promptMessages);
@@ -456,16 +471,16 @@ export async function runWorkerAgentTool<TParameters extends TSchema>(
     // Initial prompt messages may themselves include assistant history. Only
     // responses produced by this invocation belong to its usage. The local
     // stop message after a successful tool call carries zero usage.
-    const usage = { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
-    const count = (value: unknown): number => typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : 0;
-    for (const message of agent.state.messages.slice(promptMessages.length)) {
-      if (message.role !== "assistant" || message.stopReason === "error" || message.stopReason === "aborted") continue;
-      usage.promptTokens += count(message.usage?.input);
-      usage.completionTokens += count(message.usage?.output);
-      usage.totalTokens += count(message.usage?.totalTokens);
-    }
+    const usage = collectUsage();
     if (usage.promptTokens || usage.completionTokens || usage.totalTokens) options.onUsage?.(usage);
     return submitted;
+  } catch (error) {
+    const usage = collectUsage();
+    if (usage.promptTokens || usage.completionTokens || usage.totalTokens) {
+      options.onUsage?.(usage);
+      if (error instanceof Error) Object.assign(error, { tokenUsage: usage });
+    }
+    throw error;
   } finally {
     unsubscribeProgress();
     monitor.stop();

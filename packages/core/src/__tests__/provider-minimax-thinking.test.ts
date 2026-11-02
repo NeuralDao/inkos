@@ -71,7 +71,7 @@ function sseResponse(events: string[]): Response {
 }
 
 describe("MiniMax thinking defaults", () => {
-  it("disables MiniMax-M3 thinking and requests reasoning_split by default", async () => {
+  it("leaves MiniMax-M3 reasoning to the provider and requests reasoning_split", async () => {
     fetchCalls.length = 0;
     const client = minimaxClient("MiniMax-M3");
 
@@ -84,9 +84,9 @@ describe("MiniMax thinking defaults", () => {
     expect(fetchCalls[0]!.url).toBe("https://api.minimaxi.com/v1/chat/completions");
     expect(fetchCalls[0]!.body).toMatchObject({
       model: "MiniMax-M3",
-      thinking: { type: "disabled" },
       reasoning_split: true,
     });
+    expect(fetchCalls[0]!.body).not.toHaveProperty("thinking");
   });
 
   it("sends reasoning_split but no thinking control to MiniMax-M2.x models", async () => {

@@ -77,10 +77,11 @@ export function guardedPiStream<TApi extends Api>(
           }
         }
         const prepared = await options?.onPayload?.(configured, activeModel) ?? configured;
+        const effectivePayload = applyDefaultReasoningPolicy(prepared, activeModel, options);
         recordExecutionEvidence("model-request-prepared", { modelCallId: modelCall?.modelCallId, model: activeModel.id,
           api: activeModel.api,
-          parameters: prepared && typeof prepared === "object" ? Object.fromEntries(Object.entries(prepared).filter(([key]) => ["stream", "thinking", "max_tokens", "max_completion_tokens", "max_output_tokens", "tool_choice"].includes(key))) : {} });
-        return prepared;
+          parameters: effectivePayload && typeof effectivePayload === "object" ? Object.fromEntries(Object.entries(effectivePayload).filter(([key]) => ["stream", "reasoning", "reasoning_effort", "thinking", "enable_thinking", "max_tokens", "max_completion_tokens", "max_output_tokens", "tool_choice"].includes(key))) : {} });
+        return effectivePayload;
       },
       signal,
     }),
@@ -140,7 +141,11 @@ export function guardedPiNonStreaming<TApi extends Api>(
       const toolChoice = (options as SimpleStreamOptions & { toolChoice?: unknown } | undefined)?.toolChoice;
       if (toolChoice !== undefined) payload.tool_choice = toolChoice;
       const configured = explicitDeepSeekThinkingMode(payload, model);
-      const transformed = await options?.onPayload?.(configured, model);
+      const transformed = applyDefaultReasoningPolicy(
+        await options?.onPayload?.(configured, model) ?? configured,
+        model,
+        options,
+      );
       const json = await withTransientLLMRetry(async (attempt) => {
         const deadline = createRequestDeadline(options?.signal);
         const traceHeaders = agentTrajectoryHeaders(model.baseUrl, modelCall, attempt, {
@@ -183,6 +188,10 @@ export function guardedPiNonStreaming<TApi extends Api>(
 
 const discardedToolOutputs = new WeakSet<AssistantMessage>();
 
+export function markDiscardedToolOutput(message: AssistantMessage): void {
+  discardedToolOutputs.add(message);
+}
+
 function missingRequiredTool(message: AssistantMessage, choice: unknown): boolean {
   const selected = choice && typeof choice === "object"
     ? choice as { type?: string; name?: string; function?: { name?: string } } : undefined;
@@ -191,7 +200,7 @@ function missingRequiredTool(message: AssistantMessage, choice: unknown): boolea
   return !message.content.some(part => part.type === "toolCall" && (!name || part.name === name));
 }
 
-function observeModelStream(model: Model<Api>, modelCallId: string | undefined, source: AssistantMessageEventStream, retry?: () => AssistantMessageEventStream, toolChoice?: unknown, retryOnInactivity = true): AssistantMessageEventStream {
+export function observeModelStream(model: Model<Api>, modelCallId: string | undefined, source: AssistantMessageEventStream, retry?: () => AssistantMessageEventStream, toolChoice?: unknown, retryOnInactivity = true): AssistantMessageEventStream {
   const output = createAssistantMessageEventStream();
   let started = false;
   const forward = (event: Parameters<typeof output.push>[0]) => {
@@ -260,7 +269,7 @@ function observeModelStream(model: Model<Api>, modelCallId: string | undefined, 
   return output;
 }
 
-function emptyAssistantMessage(model: Model<Api>): AssistantMessage {
+export function emptyAssistantMessage(model: Model<Api>): AssistantMessage {
   return {
     role: "assistant",
     content: [],
@@ -280,11 +289,13 @@ function emptyAssistantMessage(model: Model<Api>): AssistantMessage {
   };
 }
 
-function explicitDeepSeekThinkingMode(payload: unknown, model: Model<Api>): unknown {
+export function explicitDeepSeekThinkingMode(payload: unknown, model: Model<Api>): unknown {
   if (!model.id.toLowerCase().startsWith("deepseek-v4-") || !payload || typeof payload !== "object") return payload;
-  // V4 enables high-effort thinking when the field is absent. Match the
-  // configured mode explicitly, including through OpenAI-compatible gateways.
-  const body = { ...payload, thinking: { type: model.reasoning ? "enabled" : "disabled" } } as Record<string, unknown>;
+  // Leave V4's reasoning policy to the model/provider unless InkOS explicitly
+  // enabled reasoning. Sending `disabled` by default breaks endpoints where
+  // reasoning is mandatory.
+  if (!model.reasoning) return payload;
+  const body = { ...payload, thinking: { type: "enabled" } } as Record<string, unknown>;
   if (body.max_completion_tokens !== undefined) {
     body.max_tokens = body.max_completion_tokens;
     delete body.max_completion_tokens;
@@ -292,7 +303,60 @@ function explicitDeepSeekThinkingMode(payload: unknown, model: Model<Api>): unkn
   return body;
 }
 
-function toOpenAIChatMessages(context: Context): Array<Record<string, unknown>> {
+/**
+ * pi-ai currently serializes an omitted reasoning preference as an explicit
+ * `none`/`disabled` setting for some OpenAI-compatible providers. That is not
+ * equivalent to an automatic policy: some model endpoints require reasoning.
+ * Preserve an explicit caller choice; use low effort for models marked as
+ * reasoning-capable, and otherwise remove the implicit disable value.
+ */
+function applyDefaultReasoningPolicy(
+  payload: unknown,
+  model: Model<Api>,
+  options: SimpleStreamOptions | undefined,
+): unknown {
+  if (options?.reasoning !== undefined) return payload;
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return payload;
+
+  const body = { ...(payload as Record<string, unknown>) };
+  if (typeof body.reasoning_effort === "string" && body.reasoning_effort.toLowerCase() === "none") {
+    if (model.reasoning) body.reasoning_effort = "low";
+    else delete body.reasoning_effort;
+  }
+  if (body.reasoning && typeof body.reasoning === "object" && !Array.isArray(body.reasoning)) {
+    const reasoning = { ...(body.reasoning as Record<string, unknown>) };
+    if (typeof reasoning.effort === "string" && reasoning.effort.toLowerCase() === "none") {
+      if (model.reasoning) {
+        reasoning.effort = "low";
+        body.reasoning = reasoning;
+      } else {
+        delete reasoning.effort;
+        if (Object.keys(reasoning).length === 0) delete body.reasoning;
+        else body.reasoning = reasoning;
+      }
+    }
+  }
+  if (body.thinking && typeof body.thinking === "object" && !Array.isArray(body.thinking)) {
+    const thinking = { ...(body.thinking as Record<string, unknown>) };
+    if (typeof thinking.type === "string" && thinking.type.toLowerCase() === "disabled") {
+      if (model.reasoning) {
+        thinking.type = "enabled";
+        body.thinking = thinking;
+      } else {
+        delete thinking.type;
+        if (Object.keys(thinking).length === 0) delete body.thinking;
+        else body.thinking = thinking;
+      }
+    }
+  }
+  if (body.enable_thinking === false) {
+    if (model.reasoning) body.enable_thinking = true;
+    else delete body.enable_thinking;
+  }
+  return body;
+}
+
+export function toOpenAIChatMessages(context: Context): Array<Record<string, unknown>> {
   const messages: Array<Record<string, unknown>> = [];
   if (context.systemPrompt?.trim()) messages.push({ role: "system", content: context.systemPrompt });
   for (const message of context.messages) {
@@ -347,7 +411,7 @@ function openAIUserContent(content: Context["messages"][number] extends infer _T
   ));
 }
 
-function populateAssistantMessage(output: AssistantMessage, json: Record<string, any>): void {
+export function populateAssistantMessage(output: AssistantMessage, json: Record<string, any>): void {
   const choice = Array.isArray(json.choices) ? json.choices[0] : undefined;
   const message = choice?.message ?? {};
   const finishReason = String(choice?.finish_reason ?? "stop");
@@ -390,7 +454,7 @@ function populateAssistantMessage(output: AssistantMessage, json: Record<string,
       : "stop";
 }
 
-function emitCompletedMessage(stream: AssistantMessageEventStream, output: AssistantMessage): void {
+export function emitCompletedMessage(stream: AssistantMessageEventStream, output: AssistantMessage): void {
   const partial = { ...output, content: [] } as AssistantMessage;
   stream.push({ type: "start", partial });
   for (const [contentIndex, part] of output.content.entries()) {
@@ -413,7 +477,7 @@ function emitCompletedMessage(stream: AssistantMessageEventStream, output: Assis
   stream.end();
 }
 
-function parseToolArguments(value: unknown): Record<string, any> {
+export function parseToolArguments(value: unknown): Record<string, any> {
   if (value && typeof value === "object" && !Array.isArray(value)) return value as Record<string, any>;
   if (typeof value !== "string" || !value.trim()) return {};
   try {
@@ -424,7 +488,7 @@ function parseToolArguments(value: unknown): Record<string, any> {
   }
 }
 
-function readOpenAIError(raw: string): string {
+export function readOpenAIError(raw: string): string {
   try {
     const parsed = JSON.parse(raw) as { error?: { message?: unknown } | string };
     if (typeof parsed.error === "string") return parsed.error;

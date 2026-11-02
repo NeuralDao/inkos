@@ -81,6 +81,14 @@ export interface WriteChapterOutput {
   readonly tokenUsage?: TokenUsage;
 }
 
+export interface WriteChapterDraftOutput {
+  readonly chapterNumber: number;
+  readonly title: string;
+  readonly content: string;
+  readonly wordCount: number;
+  readonly tokenUsage: TokenUsage;
+}
+
 export class WriterAgent extends BaseAgent {
   get name(): string {
     return "writer";
@@ -100,12 +108,57 @@ export class WriterAgent extends BaseAgent {
 
   async writeChapter(input: WriteChapterInput): Promise<WriteChapterOutput> {
     const { book, bookDir, chapterNumber } = input;
+    const runtimeSnapshot = await loadRuntimeStateSnapshot(bookDir);
+    const bookRules = (await readBookRules(bookDir)).rules;
+    const creative = await this.writeChapterDraft(input);
+    this.logInfo(book.language, {
+      zh: `阶段 2：状态结算（第${chapterNumber}章，${creative.wordCount}字）`,
+      en: `Phase 2: state settlement for chapter ${chapterNumber} (${creative.wordCount} words)`,
+    });
+    const settleResult = await this.settle({
+      book,
+      bookDir,
+      bookRules,
+      language: book.language,
+      narrativeLanguage: resolveNarrativeLanguage(book),
+      chapterNumber,
+      title: creative.title,
+      content: creative.content,
+      chapterIntent: input.chapterIntent,
+      contextPackage: input.contextPackage,
+      validationFeedback: undefined,
+      baselineSnapshot: runtimeSnapshot,
+    });
+    const settlement = settleResult.settlement;
+    const runtimeStateArtifacts = await this.buildRuntimeStateArtifactsIfPresent(
+      bookDir,
+      settlement.runtimeStateDelta,
+      book.language,
+      resolveNarrativeLanguage(book),
+      chapterNumber,
+    );
 
-    const [styleGuide, runtimeSnapshot] = await Promise.all([
-      this.readFileOrDefault(join(bookDir, "story/style_guide.md")),
-      loadRuntimeStateSnapshot(bookDir),
-    ]);
+    return {
+      ...creative,
+      postSettlement: settlement.postSettlement,
+      runtimeStateDelta: runtimeStateArtifacts?.resolvedDelta ?? settlement.runtimeStateDelta,
+      runtimeStateSnapshot: runtimeStateArtifacts.snapshot,
+      updatedState: runtimeStateArtifacts.currentStateMarkdown,
+      updatedHooks: runtimeStateArtifacts.hooksMarkdown,
+      updatedChapterSummaries: runtimeStateArtifacts.chapterSummariesMarkdown,
+      runtimeStateApplied: true,
+      tokenUsage: {
+        promptTokens: creative.tokenUsage.promptTokens + settleResult.usage.promptTokens,
+        completionTokens: creative.tokenUsage.completionTokens + settleResult.usage.completionTokens,
+        totalTokens: creative.tokenUsage.totalTokens + settleResult.usage.totalTokens,
+      },
+    };
+  }
 
+  /** Generate prose only. This method does not settle state or persist a chapter. */
+  async writeChapterDraft(input: WriteChapterInput): Promise<WriteChapterDraftOutput> {
+    const { book, bookDir, chapterNumber } = input;
+    const styleGuide = await this.readFileOrDefault(join(bookDir, "story/style_guide.md"));
     const parsedBookRules = await readBookRules(bookDir);
     const bookRules = parsedBookRules.rules;
     const bookRulesBody = parsedBookRules.body;
@@ -161,56 +214,12 @@ export class WriterAgent extends BaseAgent {
       wordCount: countChapterLength(creativeSubmission.content, resolvedLengthSpec.countingMode),
     };
 
-    // ── Phase 2: State settlement (temperature 0.3) ──
-    this.logInfo(resolvedLanguage, {
-      zh: `阶段 2：状态结算（第${chapterNumber}章，${creative.wordCount}字）`,
-      en: `Phase 2: state settlement for chapter ${chapterNumber} (${creative.wordCount} words)`,
-    });
-    const settleResult = await this.settle({
-      book,
-      bookDir,
-      bookRules,
-      language: resolvedLanguage,
-      narrativeLanguage: resolveNarrativeLanguage(book),
-      chapterNumber,
-      title: creative.title,
-      content: creative.content,
-      chapterIntent: input.chapterIntent,
-      contextPackage: input.contextPackage,
-      validationFeedback: undefined,
-      baselineSnapshot: runtimeSnapshot,
-    });
-    const settlement = settleResult.settlement;
-    const settleUsage = settleResult.usage;
-    const runtimeStateArtifacts = await this.buildRuntimeStateArtifactsIfPresent(
-      bookDir,
-      settlement.runtimeStateDelta,
-      resolvedLanguage,
-      resolveNarrativeLanguage(book),
-      chapterNumber,
-    );
-    const resolvedRuntimeStateDelta = runtimeStateArtifacts?.resolvedDelta ?? settlement.runtimeStateDelta;
-
-    // ── Merge into WriteChapterOutput ──
-    const tokenUsage: TokenUsage = {
-      promptTokens: creativeUsage.promptTokens + settleUsage.promptTokens,
-      completionTokens: creativeUsage.completionTokens + settleUsage.completionTokens,
-      totalTokens: creativeUsage.totalTokens + settleUsage.totalTokens,
-    };
-
     return {
       chapterNumber,
       title: creative.title,
       content: creative.content,
       wordCount: creative.wordCount,
-      postSettlement: settlement.postSettlement,
-      runtimeStateDelta: resolvedRuntimeStateDelta,
-      runtimeStateSnapshot: runtimeStateArtifacts.snapshot,
-      updatedState: runtimeStateArtifacts.currentStateMarkdown,
-      updatedHooks: runtimeStateArtifacts.hooksMarkdown,
-      updatedChapterSummaries: runtimeStateArtifacts.chapterSummariesMarkdown,
-      runtimeStateApplied: true,
-      tokenUsage,
+      tokenUsage: creativeUsage,
     };
   }
 

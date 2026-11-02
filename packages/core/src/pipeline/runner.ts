@@ -8,12 +8,12 @@ import { clientWithModel } from "../llm/provider.js";
 import type { Logger } from "../utils/logger.js";
 import { BookConfigSchema, type BookConfig, type FanficMode } from "../models/book.js";
 import { resolveNarrativeLanguage, type NarrativeLanguage } from "../utils/book-language.js";
-import type { ChapterMeta } from "../models/chapter.js";
+import type { AutoRevisionOutcome, ChapterMeta } from "../models/chapter.js";
 import type { NotifyChannel, LLMConfig, AgentLLMOverride } from "../models/project.js";
 import { ArchitectAgent, type ArchitectOutput } from "../agents/architect.js";
 import { PlannerAgent, type PlanChapterOutput } from "../agents/planner.js";
 import { ComposerAgent, type ComposeChapterOutput } from "../agents/composer.js";
-import { WriterAgent, type WriteChapterInput, type WriteChapterOutput } from "../agents/writer.js";
+import { WriterAgent, type WriteChapterDraftOutput, type WriteChapterInput, type WriteChapterOutput } from "../agents/writer.js";
 import { ContinuityAuditor } from "../agents/continuity.js";
 import { ReviserAgent, DEFAULT_REVISE_MODE, type ReviseMode } from "../agents/reviser.js";
 import { StateValidatorAgent, type ValidationResult } from "../agents/state-validator.js";
@@ -54,6 +54,7 @@ import { createWorkManifest, loadWorkManifest, saveWorkManifest } from "../harne
 import { WorkManifestSchema, type WorkManifest } from "../harness/contracts.js";
 import { syncWorkSourceArtifacts, captureWorkSourceState, changedWorkSourcePaths } from "../harness/source-sync.js";
 import { reviewChapterDraft } from "./chapter-review.js";
+import { actionableFindings, reviewFindings, revisionModeFor, usageFromError } from "./auto-revision-policy.js";
 import { validateChapterTruthPersistence } from "./chapter-truth-validation.js";
 import { loadPersistedPlan, relativeToBookDir, savePersistedPlan } from "./persisted-governed-plan.js";
 import { selectBookReferenceContext } from "../references/reference-context.js";
@@ -147,6 +148,7 @@ export interface ChapterPipelineResult {
   readonly lengthTelemetry?: LengthTelemetry;
   readonly tokenUsage?: TokenUsageSummary;
   readonly contextTrace?: ChapterContextTraceSummary;
+  readonly autoRevision?: AutoRevisionOutcome;
 }
 
 export interface WriteChaptersOptions {
@@ -1312,7 +1314,7 @@ export class PipelineRunner {
     // 1. Write chapter
     const writer = new WriterAgent(this.agentCtxFor("writer", bookId));
     this.logStage(stageLanguage, { zh: "撰写章节草稿", en: "writing chapter draft" });
-    const output = await writer.writeChapter({
+    const output = await writer.writeChapterDraft({
       book,
       bookDir,
       chapterNumber,
@@ -1323,9 +1325,19 @@ export class PipelineRunner {
     });
     this.throwIfOperationAborted();
     const writerCount = countChapterLength(output.content, lengthSpec.countingMode);
+    // Preserve the paid draft before any further model or validation call can fail.
+    const draftVersion = book.writing?.reviewMode !== "manual"
+      ? await archiveChapterVersion(bookDir, chapterNumber, output.content, "agent")
+      : undefined;
 
     // Token usage accumulator
     let totalUsage: TokenUsageSummary = output.tokenUsage ?? { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
+    const reviewSkill = book.writing?.reviewMode === "manual" ? undefined :
+      (await loadAvailableAgentSkills({ projectRoot: this.config.projectRoot })).skills.filter((skill) => skill.id === "inkos-story-review").at(-1);
+    const reviewAgentContext = (agent: "auditor" | "reviser"): AgentContext => {
+      const context = this.agentCtxFor(agent, bookId);
+      return { ...context, activatedSkills: mergeActivatedSkillGuidance(reviewSkill ? [{ skill: reviewSkill, resources: [] }] : [], context.activatedSkills ?? []) };
+    };
     this.logStage(stageLanguage, { zh: "生成章节审查观察", en: "collecting chapter review observations" });
     const reviewResult = await reviewChapterDraft({
       book: { genre: book.genre, language: book.language, narrativeLanguage: resolveNarrativeLanguage(book) },
@@ -1335,39 +1347,92 @@ export class PipelineRunner {
       controlInput: reducedControlInput,
       lengthSpec,
       initialUsage: totalUsage,
-      auditor: new ContinuityAuditor(this.agentCtxFor("auditor", bookId)),
+      auditor: new ContinuityAuditor(reviewAgentContext("auditor")),
       assertNotEmpty: (content) => this.assertChapterContentNotEmpty(content, chapterNumber, "draft generation"),
       addUsage: PipelineRunner.addUsage,
+      disableRetries: book.writing?.reviewMode !== "manual",
     });
     totalUsage = reviewResult.totalUsage;
     let finalContent = reviewResult.content;
     let finalWordCount = reviewResult.wordCount;
     let auditResult = reviewResult.review;
+    const findings = reviewFindings(reviewResult.review.observations);
+    const actionable = actionableFindings(reviewResult.review.observations);
+    const auditUnavailable = reviewResult.review.unavailable || reviewResult.review.observations.some((observation) => observation.assessment === "unavailable");
+    let candidateContent: string | undefined;
+    let candidateVersionId: string | undefined;
+    const preserveCandidate = async (content: string) => {
+      candidateContent = content;
+      if (content.trim() && content !== output.content && !candidateVersionId) {
+        candidateVersionId = (await archiveChapterVersion(bookDir, chapterNumber, content, "revision")).id;
+      }
+    };
+    let candidateReview: AuditResult | undefined;
+    let pendingRevisionContext: ContextPackage | undefined;
+    let autoRevision: AutoRevisionOutcome = {
+      status: "skipped",
+      reason: book.writing?.reviewMode === "manual" ? "manual-mode" : auditUnavailable ? "audit-unavailable" : "no-actionable-findings",
+      findings,
+      initialReview: { summary: reviewResult.review.summary, observations: [...reviewResult.review.observations],
+        ...(reviewResult.review.unavailable === undefined ? {} : { unavailable: reviewResult.review.unavailable }) },
+      ...(draftVersion ? { originalVersionId: draftVersion.id } : {}),
+      usage: { ...(reviewResult.review.tokenUsage ? { auditor: reviewResult.review.tokenUsage } : {}) },
+    };
+    if (book.writing?.reviewMode !== "manual" && !auditUnavailable && actionable.length > 0) {
+      this.logStage(stageLanguage, { zh: "根据审稿意见修订草稿", en: "revising draft from review findings" });
+      let activeStage: "reviser" | "postAudit" = "reviser";
+      try {
+        const [rules, storyFrame] = await Promise.all([
+          readFile(join(bookDir, "story", "book_rules.md"), "utf-8"), readStoryFrame(bookDir),
+        ]);
+        const revisionContext: ContextPackage = {
+          ...reducedControlInput.contextPackage,
+          selectedContext: [
+            ...reducedControlInput.contextPackage.selectedContext,
+            { source: "story/book_rules.md", reason: "Authoritative book rules", excerpt: rules, protection: "protected" },
+            { source: "story/outline/story_frame.md", reason: "Authoritative story foundation", excerpt: storyFrame, protection: "protected" },
+            { source: "chapter/intent", reason: "Chapter intent and memo", excerpt: JSON.stringify({ intent: writeInput.chapterIntent, memo: writeInput.chapterMemo, intentData: writeInput.chapterIntentData }), protection: "protected" },
+            ...(externalContext?.trim() ? [{ source: "chapter/user-instruction", reason: "Direct user instruction for this chapter", excerpt: externalContext, protection: "protected" as const }] : []),
+          ],
+        };
+        pendingRevisionContext = revisionContext;
+        const reviser = new ReviserAgent(reviewAgentContext("reviser"));
+        const revised = await reviser.reviseChapter(bookDir, output.content, chapterNumber, findings.map((finding) => finding.observation),
+          revisionModeFor(actionable), book.genre, {
+            language: book.language, narrativeLanguage: resolveNarrativeLanguage(book), chapterTitle: output.title,
+            contextPackage: revisionContext, lengthSpec, autoFindings: findings,
+            auditContext: { summary: reviewResult.review.summary, observations: reviewResult.review.observations.filter((observation) => observation.category === "execution" || observation.assessment === "unavailable") },
+            onCandidate: preserveCandidate,
+          });
+        this.throwIfOperationAborted();
+        await preserveCandidate(revised.revisedContent);
+        candidateContent = revised.revisedContent;
+        totalUsage = PipelineRunner.addUsage(totalUsage, revised.tokenUsage);
+        autoRevision = { ...autoRevision, status: "candidate", reason: "awaiting-state-validation", ...(revised.findingDispositions ? { dispositions: [...revised.findingDispositions] } : {}),
+          usage: { ...autoRevision.usage, ...(revised.tokenUsage ? { reviser: revised.tokenUsage } : {}) } };
+        if (candidateContent === output.content) {
+          autoRevision = { ...autoRevision, status: "unchanged", reason: "unchanged" };
+        } else {
+          // Reaching the Reviser means its complete returned version becomes the
+          // manuscript candidate. The follow-up auditor is editorial annotation,
+          // not a veto; technical truth validation remains the safety boundary.
+          finalContent = candidateContent;
+          autoRevision = { ...autoRevision, status: "applied", reason: "accepted-by-reviser; awaiting-technical-validation" };
+        }
+      } catch (error) {
+        this.throwIfOperationAborted();
+        const failedUsage = usageFromError(error);
+        totalUsage = PipelineRunner.addUsage(totalUsage, failedUsage);
+        autoRevision = { ...autoRevision, status: candidateContent?.trim() && candidateContent !== output.content ? "candidate" : "unavailable", reason: `revision-or-review-unavailable: ${String(error)}`,
+          ...(failedUsage ? { usage: { ...autoRevision.usage, [activeStage]: failedUsage } } : {}) };
+      }
+    }
 
     this.throwIfOperationAborted();
     // 4. Save the final chapter and truth files from a single persistence source
     this.logStage(stageLanguage, { zh: "落盘最终章节", en: "persisting final chapter" });
     this.logStage(stageLanguage, { zh: "生成最终真相文件", en: "rebuilding final truth files" });
     const chapterIndexBeforePersist = await this.state.loadChapterIndex(bookId);
-    let persistenceOutput = await this.buildPersistenceOutput(
-      bookId,
-      book,
-      bookDir,
-      chapterNumber,
-      output,
-      finalContent,
-      lengthSpec.countingMode,
-      reducedControlInput,
-    );
-    finalWordCount = persistenceOutput.wordCount;
-    const lengthTelemetry = this.buildLengthTelemetry({
-      lengthSpec,
-      writerCount,
-      postReviseCount: 0,
-      finalCount: finalWordCount,
-      repairApplied: false,
-    });
-
     // 4.1 Validate settler output before writing
     this.logStage(stageLanguage, { zh: "校验真相文件变更", en: "validating truth file updates" });
     const storyDir = join(bookDir, "story");
@@ -1381,30 +1446,112 @@ export class PipelineRunner {
     const oldHooks = renderHooksProjection(runtimeSnapshot.hooks, stateLanguage);
     const authorityChapterSummaries = renderChapterSummariesProjection(runtimeSnapshot.chapterSummaries, stateLanguage);
     const validator = new StateValidatorAgent(this.agentCtxFor("state-validator", bookId));
-    const truthValidation = await validateChapterTruthPersistence({
-      writer,
-      validator,
-      book,
-      bookDir,
-      chapterNumber,
-      title: persistenceOutput.title,
-      content: finalContent,
-      persistenceOutput,
-      previousTruth: {
-        oldState,
-        oldHooks,
-      },
-      authorityContext: {
-        storyFrame: authorityStoryFrame,
-        bookRules: authorityBookRules,
-        chapterSummaries: authorityChapterSummaries,
-      },
-      reducedControlInput,
-      language: pipelineLang,
-      logWarn: (message) => this.logWarn(pipelineLang, message),
-      logger: this.config.logger,
+    const prepareAndValidate = async (content: string, candidate: boolean) => {
+      const persistenceOutput = await this.buildPersistenceOutput(bookId, book, bookDir, chapterNumber, output,
+        content, lengthSpec.countingMode, reducedControlInput, candidate);
+      const draftUsage = output.tokenUsage ?? { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
+      const persistenceUsage = persistenceOutput.tokenUsage ?? draftUsage;
+      totalUsage = PipelineRunner.addUsage(totalUsage, {
+        promptTokens: Math.max(0, persistenceUsage.promptTokens - draftUsage.promptTokens),
+        completionTokens: Math.max(0, persistenceUsage.completionTokens - draftUsage.completionTokens),
+        totalTokens: Math.max(0, persistenceUsage.totalTokens - draftUsage.totalTokens),
+      });
+      const validationWriter = candidate ? new WriterAgent({ ...this.agentCtxFor("writer", bookId), disableRetries: true }) : writer;
+      const validationAgent = candidate ? new StateValidatorAgent({ ...this.agentCtxFor("state-validator", bookId), disableRetries: true }) : validator;
+      return validateChapterTruthPersistence({
+        writer: validationWriter, validator: validationAgent, book, bookDir, chapterNumber, title: persistenceOutput.title, content, persistenceOutput,
+        previousTruth: { oldState, oldHooks },
+        authorityContext: { storyFrame: authorityStoryFrame, bookRules: authorityBookRules, chapterSummaries: authorityChapterSummaries },
+        reducedControlInput, language: pipelineLang,
+        logWarn: (message) => this.logWarn(pipelineLang, message), logger: this.config.logger,
+        allowRecovery: !candidate,
+      });
+    };
+    let truthValidation: Awaited<ReturnType<typeof prepareAndValidate>>;
+    try {
+      truthValidation = await prepareAndValidate(finalContent, autoRevision.status === "applied");
+      this.throwIfOperationAborted();
+      if (autoRevision.status === "applied" && (!truthValidation.validation.consistent || truthValidation.validation.reconciliationRequired)) {
+        throw new Error("Revised chapter failed state validation");
+      }
+    } catch (error) {
+      this.throwIfOperationAborted();
+      if (autoRevision.status !== "applied") throw error;
+      autoRevision = { ...autoRevision, status: "candidate", reason: `technical-validation-failed: ${String(error)}` };
+      finalContent = output.content;
+      truthValidation = await prepareAndValidate(finalContent, false);
+      this.throwIfOperationAborted();
+    }
+    if ((autoRevision.status === "applied" || autoRevision.status === "unchanged") && pendingRevisionContext) {
+      try {
+        this.logStage(stageLanguage, { zh: "复核修订稿并保留审稿意见", en: "adding auditor notes to revised draft" });
+        const settledContext: ContextPackage = {
+          ...pendingRevisionContext,
+          selectedContext: [
+            ...pendingRevisionContext.selectedContext,
+            { source: "runtime/settled-state", reason: "Canon settled from the accepted Reviser text", excerpt: truthValidation.persistenceOutput.updatedState, protection: "protected" },
+            { source: "runtime/settled-hooks", reason: "Hooks settled from the accepted Reviser text", excerpt: truthValidation.persistenceOutput.updatedHooks, protection: "protected" },
+            { source: "runtime/chapter-summaries", reason: "Chapter summaries settled from the accepted Reviser text", excerpt: truthValidation.persistenceOutput.updatedChapterSummaries, protection: "protected" },
+          ],
+        };
+        const comparison = await new ContinuityAuditor(reviewAgentContext("auditor")).compareRevision({
+          chapterNumber, original: output.content, candidate: finalContent, findings,
+          language: book.language, narrativeLanguage: resolveNarrativeLanguage(book), contextPackage: settledContext,
+        });
+        this.throwIfOperationAborted();
+        totalUsage = PipelineRunner.addUsage(totalUsage, comparison.tokenUsage);
+        autoRevision = { ...autoRevision, assessments: [...comparison.assessments], newIssues: [...comparison.newIssues], reason: "revised-text-accepted; post-audit-notes-attached",
+          usage: { ...autoRevision.usage, postAudit: comparison.tokenUsage } };
+        const assessments = new Map(comparison.assessments.map((item) => [item.findingId, item]));
+        const retainedObservations = reviewResult.review.observations.flatMap((observation, index) => {
+          if (observation.category === "execution" || observation.assessment === "unavailable") return [observation];
+          const assessment = assessments.get(`finding-${index + 1}`);
+          if (!assessment) return [observation];
+          return [{ ...observation,
+            assessment: assessment.status === "resolved" ? "resolved" as const : observation.assessment === "issue" ? "issue" as const : "observation" as const,
+            summary: `${observation.summary} ${assessment.explanation}`,
+            evidence: [assessment.evidence],
+            sourceRefs: [{ sourceId: `chapter-${chapterNumber}`, quote: assessment.evidence }],
+          }];
+        });
+        candidateReview = {
+          ...reviewResult.review,
+          observations: [...retainedObservations, ...comparison.newIssues],
+          summary: resolveNarrativeLanguage(book) === "ru"
+            ? "Текст Ревизора принят. Ниже сохранены заметки повторного аудита для вычитки."
+            : book.language === "en" ? "Reviser text accepted. Follow-up auditor notes are retained for proofreading."
+              : "修订文本已采纳，后续审查意见已保留供校对。",
+        };
+      } catch (error) {
+        this.throwIfOperationAborted();
+        const failedUsage = usageFromError(error);
+        totalUsage = PipelineRunner.addUsage(totalUsage, failedUsage);
+        autoRevision = { ...autoRevision, reason: "revised-text-accepted; post-audit-unavailable", ...(failedUsage ? { usage: { ...autoRevision.usage, postAudit: failedUsage } } : {}) };
+        candidateReview = {
+          ...reviewResult.review,
+          observations: [...reviewResult.review.observations, {
+            code: "POST_REVISION_AUDIT_UNAVAILABLE",
+            summary: resolveNarrativeLanguage(book) === "ru" ? `Повторный аудит не завершился: ${String(error)}` : `Follow-up audit did not complete: ${String(error)}`,
+            assessment: "unavailable",
+            category: "quality",
+            evidence: [],
+          }],
+          summary: resolveNarrativeLanguage(book) === "ru" ? "Текст Ревизора принят; повторный аудит недоступен." : "Reviser text accepted; follow-up audit unavailable.",
+        };
+      }
+    }
+    if ((autoRevision.status === "applied" || autoRevision.status === "unchanged") && candidateReview) auditResult = candidateReview;
+    if (autoRevision.status === "applied" && !draftVersion) {
+      const version = await archiveChapterVersion(bookDir, chapterNumber, output.content, "agent");
+      autoRevision = { ...autoRevision, originalVersionId: version.id };
+    }
+    if (autoRevision.status !== "applied" && candidateVersionId) autoRevision = { ...autoRevision, candidateVersionId };
+    const persistenceOutput = truthValidation.persistenceOutput;
+    finalWordCount = persistenceOutput.wordCount;
+    const lengthTelemetry = this.buildLengthTelemetry({
+      lengthSpec, writerCount, postReviseCount: autoRevision.status === "applied" ? finalWordCount : 0,
+      finalCount: finalWordCount, repairApplied: autoRevision.status === "applied",
     });
-    persistenceOutput = truthValidation.persistenceOutput;
     if (!truthValidation.validation.consistent || truthValidation.validation.reconciliationRequired) {
       auditResult = {
         ...auditResult,
@@ -1424,6 +1571,7 @@ export class PipelineRunner {
       finalWordCount,
       lengthTelemetry,
       tokenUsage: totalUsage,
+      autoRevision,
       loadChapterIndex: () => this.state.loadChapterIndex(bookId),
       saveChapter: (index) => writer.saveChapter(bookDir, persistenceOutput, pipelineLang, index, resolveNarrativeLanguage(book)),
       markBookActiveIfNeeded: () => this.markBookActiveIfNeeded(bookId),
@@ -1455,6 +1603,7 @@ export class PipelineRunner {
       title: persistenceOutput.title,
       wordCount: finalWordCount,
       review: auditResult,
+      autoRevision,
       lengthTelemetry,
       ...(chapterLengthDelivery(finalWordCount,lengthSpec)?{delivery:chapterLengthDelivery(finalWordCount,lengthSpec)}:{}),
       tokenUsage: totalUsage,
@@ -1859,19 +2008,16 @@ export class PipelineRunner {
     book: BookConfig,
     bookDir: string,
     chapterNumber: number,
-    output: WriteChapterOutput,
+    output: WriteChapterDraftOutput,
     finalContent: string,
     countingMode: Parameters<typeof countChapterLength>[1],
     reducedControlInput: {
       chapterIntent: string;
       contextPackage: ContextPackage;
     },
+    disableRetries = false,
   ): Promise<WriteChapterOutput> {
-    if (finalContent === output.content) {
-      return output;
-    }
-
-    const writer = new WriterAgent(this.agentCtxFor("writer", bookId));
+    const writer = new WriterAgent({ ...this.agentCtxFor("writer", bookId), disableRetries });
     const analyzed = await writer.settleChapterState({
       book,
       bookDir,
@@ -1886,7 +2032,7 @@ export class PipelineRunner {
       ...analyzed,
       content: finalContent,
       wordCount: countChapterLength(finalContent, countingMode),
-      tokenUsage: output.tokenUsage,
+      tokenUsage: PipelineRunner.addUsage(output.tokenUsage ?? { promptTokens: 0, completionTokens: 0, totalTokens: 0 }, analyzed.tokenUsage),
     };
   }
 

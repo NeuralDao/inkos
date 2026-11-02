@@ -75,26 +75,17 @@ describe("longform creation routing", () => {
   }
   it.each(["params", "payload"] as const)("keeps Russian narrative and English operations from %s", async (source) => {
     const p = pipeline();
-    const languages = { narrativeLanguage: "ru" as const };
     const tool = createBookFoundationTool(p.runner, source === "payload"
-      ? { actionPayload: { createBook: { title: "Тихий город", ...languages } }, language: "zh" } : { language: "zh" });
-    await tool.execute("create", { instruction: "Create a book", title: "Тихий город", ...(source === "params" ? languages : {}) });
+      ? { actionPayload: { createBook: { title: "Тихий город" } }, language: "zh" } : { language: "zh" });
+    await tool.execute("create", { instruction: "Create a book", title: "Тихий город" });
     expect(p.initBook).toHaveBeenCalledWith(expect.objectContaining({ language: "en", narrativeLanguage: "ru" }), expect.anything());
   });
-  it("rejects an explicit zh + ru action before starting the pipeline", async () => {
+  it("keeps the fixed language contract even when the project UI language is Chinese", async () => {
     const p = pipeline();
-    await expect(createBookFoundationTool(p.runner).execute("create", {
-      instruction: "Create", title: "City", language: "zh", narrativeLanguage: "ru",
-    })).rejects.toThrow("Russian narrativeLanguage");
-    expect(p.runWithAgentContext).not.toHaveBeenCalled();
-    expect(p.initBook).not.toHaveBeenCalled();
-  });
-  it("rejects conflicting operational language across payload and params", async () => {
-    const p = pipeline();
-    await expect(createBookFoundationTool(p.runner, {
-      actionPayload: { createBook: { title: "City", narrativeLanguage: "ru" } },
-    }).execute("create", { instruction: "Create", language: "zh" })).rejects.toThrow("Russian narrativeLanguage");
-    expect(p.initBook).not.toHaveBeenCalled();
+    await createBookFoundationTool(p.runner, { language: "zh" }).execute("create", {
+      instruction: "Create", title: "City",
+    });
+    expect(p.initBook).toHaveBeenCalledWith(expect.objectContaining({ language: "en", narrativeLanguage: "ru" }), expect.anything());
   });
   it("stores the Work contract and transfers it into the initialized book", async () => {
     const root = await project();
@@ -108,6 +99,15 @@ describe("longform creation routing", () => {
     await createBookFoundationTool(p.runner, { activeWork: { work, projectRoot: root } })
       .execute("initialize", { instruction: "Initialize the Work" });
     expect(p.initBook).toHaveBeenCalledWith(expect.objectContaining({ language: "en", narrativeLanguage: "ru" }), expect.anything());
+  });
+  it("reports a missing derivation source clearly instead of leaking a filesystem ENOENT", async () => {
+    const root = await project();
+    const registry = { forProfile: vi.fn() } as unknown as CapabilityRegistry;
+    const create = createProfileWorkTools(root, registry).find(tool => tool.name === "create_work")!;
+    await expect(create.execute("work", {
+      workId: "city-derived", profileId: "longform-novel", title: "Derived city", intent: "Continue a source",
+      source: { workId: "source-id", artifactId: "source-artifact" },
+    })).rejects.toMatchObject({ code: "SOURCE_WORK_NOT_FOUND" });
   });
   it.each([
     { language: "zh", narrativeLanguage: "ru" }, { language: "ru" }, { narrativeLanguage: "invalid" },

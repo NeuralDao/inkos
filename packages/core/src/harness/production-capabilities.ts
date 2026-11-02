@@ -238,7 +238,7 @@ export function createProductionCapabilityRegistry(
           language: lang, activeSkills: environment.activeSkills, workerSkills: environment.workerSkills,
         })),
         writeAction(createWriteChaptersTool(environment.pipeline, environment.work.id, {
-          language: lang, activeSkills: environment.activeSkills, workerSkills: environment.workerSkills,
+          language: lang, maxChapterCount: 1, activeSkills: environment.activeSkills, workerSkills: environment.workerSkills,
         })),
         committedAction(createReviewChapterTool(environment.pipeline, environment.work.id, {
           language: lang, activeSkills: environment.activeSkills, workerSkills: environment.workerSkills,
@@ -290,7 +290,7 @@ export function createProductionCapabilityRegistry(
         activeSkills: environment.activeSkills,
         workerSkills: environment.workerSkills,
       })), writeAction(createWriteChaptersTool(environment.pipeline, null, {
-        language: lang, activeSkills: environment.activeSkills, workerSkills: environment.workerSkills,
+        language: lang, maxChapterCount: 1, activeSkills: environment.activeSkills, workerSkills: environment.workerSkills,
       }))];
   registerToolCapability(registry, "longform", "Long-form creation", longformTools);
 
