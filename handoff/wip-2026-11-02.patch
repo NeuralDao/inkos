@@ -1,0 +1,2139 @@
+From abe80919b757c12baca4ef5b046a34f950cd31ba Mon Sep 17 00:00:00 2001
+From: NeuralDao <01071267728c@gmail.com>
+Date: Mon, 2 Nov 2026 19:07:28 +0100
+Subject: [PATCH] wip: handoff before Codex limit
+
+---
+ HANDOFF-HERMES.md                             |  54 +++
+ fork-docs/CURRENT_STATE.md                    |   2 +
+ fork-docs/G4_CHAPTER_RESUME.md                |  46 +++
+ handoff/status-before-commit.txt              |  17 +
+ packages/cli/src/commands/write.ts            |  49 ++-
+ .../src/__tests__/chapter-checkpoint.test.ts  |  83 +++++
+ .../src/__tests__/unicode-length.flow.test.ts | 166 ++++++++-
+ .../core/src/agent/chapter-stage-context.ts   |  26 ++
+ packages/core/src/agent/worker-agent.ts       |  86 ++++-
+ .../core/src/agent/worker-response-archive.ts |  51 ++-
+ packages/core/src/agents/continuity.ts        |  60 +++-
+ packages/core/src/agents/reviser.ts           |   2 +-
+ packages/core/src/models/chapter.ts           |   1 +
+ .../core/src/pipeline/chapter-checkpoint.ts   | 287 +++++++++++++++
+ .../src/pipeline/chapter-legacy-evidence.ts   | 180 ++++++++++
+ packages/core/src/pipeline/chapter-review.ts  |   2 +
+ .../src/pipeline/chapter-state-recovery.ts    |   2 +
+ .../src/pipeline/chapter-truth-validation.ts  |   2 +
+ packages/core/src/pipeline/runner.ts          | 340 +++++++++++++++---
+ 19 files changed, 1356 insertions(+), 100 deletions(-)
+ create mode 100644 HANDOFF-HERMES.md
+ create mode 100644 fork-docs/G4_CHAPTER_RESUME.md
+ create mode 100644 handoff/status-before-commit.txt
+ create mode 100644 packages/core/src/__tests__/chapter-checkpoint.test.ts
+ create mode 100644 packages/core/src/agent/chapter-stage-context.ts
+ create mode 100644 packages/core/src/pipeline/chapter-checkpoint.ts
+ create mode 100644 packages/core/src/pipeline/chapter-legacy-evidence.ts
+
+diff --git a/HANDOFF-HERMES.md b/HANDOFF-HERMES.md
+new file mode 100644
+index 00000000..8064264f
+--- /dev/null
++++ b/HANDOFF-HERMES.md
+@@ -0,0 +1,54 @@
++# HANDOFF-HERMES
++
++## Идентичность
++- Checkout передачи: `C:\Projects\inkos-merge-custom-main` (последние команды разработки выполнялись здесь).
++- Checkout, из которого реально запущен Studio/Core/CLI: `UNKNOWN` — на момент проверки процесса InkOS не обнаружено.
++- Исходная ветка: `custom/main`; исходный HEAD: `26ac2076`.
++- WIP-ветка: `wip/handoff-2026-11-02`; коммит: заполнить после фиксации.
++- Последний файл в `packages/core/dist`: 2026-11-02 19:03:09 +01:00.
++- Последний файл в `packages/cli/dist`: 2026-11-02 19:03:20 +01:00.
++- Последний файл в `packages/studio/dist`: 2026-11-02 19:02:30 +01:00.
++- Полный `git status --porcelain` до handoff-артефактов: [handoff/status-before-commit.txt](handoff/status-before-commit.txt).
++
++## Как запускается
++- Сборка: из корня checkout `pnpm build`.
++- Studio (известная команда): `pnpm --filter @actalk/inkos-studio dev`; переменная `INKOS_STUDIO_PORT` (значение не фиксировать).
++- CLI запускается Node через `packages/cli/dist/index.js`.
++- Последний использованный project root: `C:\Projects\inkos-g4-workspace`.
++- Остальные переменные окружения для запуска: `UNKNOWN`.
++
++## Сделано и проверено
++- Пользователь сообщил: целевые тесты и сборка прошли `PASS` до последних изменений advisory post-audit; точные команды/вывод этих успешных запусков в текущей передаче не приложены.
++- Ручной `write resume dogbook01 3` запускался пользователем; выполнение дошло до сохранения главы, обновления truth-файлов и post-audit.
++- Ручная проверка `scripts/check-pipeline.ps1 -BookId dogbook01 -Chapter 3` после успешного восстановления показала все этапы `✓`; поздний повтор снова показал `Повторный аудит ✗`.
++- В этом handoff-тёрне тесты, сборки, генерация/API не запускались.
++
++## Сделано, но НЕ проверено
++- Изменения по сохранению неполных/сомнительных заметок post-audit как advisory, без блокировки выпуска: `NOT RUN` после этих изменений.
++- Новые тестовые ожидания для advisory post-audit: `NOT RUN` после этих изменений.
++- Финальная сборка текущего WIP: `NOT RUN`.
++- Запуск Studio из любого checkout: `NOT RUN`.
++
++## В работе или сломано
++- Post-audit всё ещё может повторно вызвать дорогую модель при `write resume`; сохранённый ответ пока не гарантированно переиспользуется: `packages/core/src/pipeline/runner.ts:1703-1738`.
++- Некорректные доказательства повторного аудита должны становиться пометками для вычитки, но проверка и отображение предупреждений не завершены: `packages/core/src/agents/continuity.ts:30-95`, `packages/core/src/models/chapter.ts:13`.
++- Текущий скрипт статуса может помечать advisory post-audit как блокирующий; его путь/строки в checkout передачи: `UNKNOWN`.
++- Последний ручной запуск `write resume` завершился `CHAPTER_RESUME_REQUIRED`; затем таблица показывала `Повторный аудит ✗` при остальном `✓`.
++
++## Решения, ожидающие владельца
++- Неверифицированные заметки post-audit: A) сохранить как advisory с явной пометкой; B) отклонить весь отчёт. Рекомендация: A, без автоматического изменения статуса исходных замечаний.
++- Реальный Studio checkout: A) подтвердить текущую папку процесса при следующем запуске; B) считать checkout передачи авторитетным. Рекомендация: A; сейчас runtime `UNKNOWN`.
++- Модели/провайдеры активного стека и free-only routing: `UNKNOWN` без чтения текущего `inkos.json`.
++
++## Следующая задача
++- Цель: завершить advisory-поведение повторного аудита: сохранять ответ и сомнительные заметки для человека/LLM, не блокировать завершение главы и не запускать повторную платную генерацию при resume.
++- Файлы: `packages/core/src/agents/continuity.ts`, `packages/core/src/models/chapter.ts`, `packages/core/src/pipeline/runner.ts`, тесты в `packages/core/src/__tests__/unicode-length.flow.test.ts`; локальный `scripts/check-pipeline.ps1` — если путь подтверждён.
++- Приёмка: глава остаётся завершённой при недоступном/частично невалидном post-audit; замечания и причины сохранены, нерешённые исходные находки не объявлены устранёнными; повторный resume не вызывает модель без необходимости.
++- Запрещено: тесты/сборки/платные API без отдельного запуска владельцем; менять `inkos.json`; переписывать `fork-docs/`; push/merge и изменение `custom/main`.
++
++## Ловушки
++- Есть несколько checkout’ов: `inkos-merge-custom-main` (`custom/main` на момент проверки), `inkos-auto-revision` (`feat/longform-auto-revision`), `inkos-auto-revision-test` (`test/auto-revision-pipeline`). Не путать их.
++- Studio процесса сейчас нет; наличие свежих dist-файлов не доказывает, какой checkout был источником последнего запуска.
++- Project root для книги отдельный: `C:\Projects\inkos-g4-workspace`; команды CLI надо выполнять из него.
++- Текущий полный стек моделей и наличие free-only флага не проверялись и неизвестны; старые скриншоты и назначения могли устареть.
++- `fork-docs/` имел изменения до handoff; они включаются в WIP-коммит как часть уже имеющейся незакоммиченной работы, но в этом handoff не редактировались.
+diff --git a/fork-docs/CURRENT_STATE.md b/fork-docs/CURRENT_STATE.md
+index e5cfa784..232f7e25 100644
+--- a/fork-docs/CURRENT_STATE.md
++++ b/fork-docs/CURRENT_STATE.md
+@@ -1,5 +1,7 @@
+ # Текущее состояние форка
+ 
++**02.11.2026 — Восстановление конвейера главы:** изучены индексы тестовых глав и реализация long-form pipeline. Чаще всего фиксируется недоступный аудит; встречаются ошибки структурированного результата ревизии/состояния и недоступный валидатор. Добавлены контрольные точки в `.inkos/chapter-runs/`, вход `write resume`, проверка базы и повторное использование этапов. Запросы получают устойчивый идентификатор и хеш входа; при прерывании добавлена повторная локальная обработка соответствующего архивного ответа без сетевого вызова, а при отсутствии или неоднозначности архива продолжение останавливается. Добавлено ограниченное восстановление ранее сохранённой главы с недоступным аудитом по журналу и артефактам; при нехватке доказательств продолжение останавливается. Сборка **PASS по сообщению пользователя**; результаты тестов отсутствуют, проверка сценариев восстановления и учёта расходов остаётся открытой. Контракт и ограничения описаны в `G4_CHAPTER_RESUME.md`; платные вызовы **NOT RUN**.
++
+ **02.11.2026 — Русский язык планов глав:** общий `PlannerAgent` получает усиленный явный контракт: весь естественно-языковой текст `goal` и `body`, включая Markdown-заголовки, должен быть на русском независимо от языка исходных материалов; имена, необходимые дословные цитаты, термины и идентификаторы сохраняются. Long-writing Skill теперь прямо включает Planner в круг ролей и уточняет, что язык читательского плана определяется контрактом Work. После структурной проверки добавлено только предупреждение о вероятном существенном английском/CJK-фрагменте; ответ не отклоняется и не переписывается, а остаётся сохранённым для разбора. Изменены `planner-prompts.ts`, `planner.ts`, Skill и регрессионный тест, проверяющий предупреждение и сохранение смешанного ответа. Тесты/build **NOT RUN**; полный авторский цикл **NOT RUN**. Сохранённый план может быть переиспользован без повторного вызова Planner, поэтому для применения правки к уже существующей главе план потребуется явно перегенерировать до запуска Автора.
+ 
+ **02.11.2026 — Живой smoke-тест архива ответа:** пользователь выполнил только `agent run planner` для `dogbook01`, chapter 2; основной pipeline не запускался. Фактический маршрут — `qwen/qwen3.7-flash:floor`; ответ завершился `toolUse`, usage: 20,527 input / 6,042 output. Архив `.inkos/agent-runs/dogbook01/worker-responses/2026-11-02T12-56-28-972Z-planner-b79c9654-0293-4443-aa93-21edac6fab7c.json` создан до обработки и содержит полный structured response (thinking + `submit_chapter_memo`), а schema и domain validation отмечены `passed`. Production archive smoke **PASS**. Содержимое плана смешивает русский с отдельными китайскими и английскими фрагментами; это не ошибка архива или схемы и требует отдельной языковой/литературной оценки до запуска Автора. `check-pipeline.ps1` перечисляет только главы, уже присутствующие в chapter index: глава 2 в таблице не появилась, глава 1 по-прежнему без подтверждения Аудитора и Ревизора. Биллинг/cost для этого вызова не предоставлен; полный pipeline **NOT RUN**.
+diff --git a/fork-docs/G4_CHAPTER_RESUME.md b/fork-docs/G4_CHAPTER_RESUME.md
+new file mode 100644
+index 00000000..8909e9ae
+--- /dev/null
++++ b/fork-docs/G4_CHAPTER_RESUME.md
+@@ -0,0 +1,46 @@
++# Продолжение прерванной главы
++
++## Цель
++
++`inkos write resume [book-id] [chapter]` продолжает последнюю незавершённую главу с первого незавершённого этапа и выполняет оставшиеся этапы до сохранения главы и состояния. Завершённые платные вызовы повторно не выполняются. Команда не пишет следующую главу.
++
++## Наблюдения
++
++В текущих индексах тестовых рабочих пространств найдено 26 записей глав: у пяти отмечен недоступный аудит, у трёх — ошибки структурированного результата или технической проверки редакции, у одной — недоступная проверка состояния. Это снимок индексов, а не статистика независимых запусков: незаписанные главы и исторические повторы в него не входят.
++
++`check-pipeline.ps1` выводит состояние по наличию файлов, индексу и снимкам. Он не сохраняет результаты каждого этапа и не управляет конвейером. Архив worker-ответов сохраняет сырые ответы, но сам по себе не содержит полного состояния выполнения главы.
++
++Для ранее созданной тестовой главы с недоступным аудитом сохранены версия черновика, план, фактически собранный `context.json` и события эпизода в `harness.sqlite`, включая исходное указание и путь к ответу Автора. Соседний `context-package.json` может относиться к более ранней операции. Для восстановления старой главы нужно сначала доказать соответствие эпизода, черновика, плана, контекста и текущего состояния; использовать последний файл пакета по одному имени недостаточно.
++
++Для новых операций запросы снабжаются идентификаторами этапа и отпечатком входа. При прерывании ответ с совпадающей идентичностью повторно проходит локальную проверку схемы и предметных правил; если архив не найден или вход изменился, сетевой вызов не выполняется. Данные нескольких запросов одного этапа сопоставляются по отпечаткам, в том числе при изменении порядка параллельных вызовов. Реализация ещё не подтверждена проверками.
++
++## Необходимый контракт
++
++- Сохранять контрольную точку операции после подготовки плана и контекста, черновика, аудита, ревизии, построения и проверки состояния, повторного аудита и итогового сохранения.
++- Для каждого этапа сохранять состояние, идентификаторы входных и выходных артефактов, учёт токенов и причину ошибки. Проверять принадлежность артефактов книге и главе, а также неизменность их входных данных.
++- Сохранять ответ модели до обработки; при наличии полного сохранённого ответа сначала повторять локальную обработку. Обрезанный или пустой ответ требует нового вызова только соответствующего этапа.
++- При сбое аудитора сохранить черновик и продолжить с аудитора. При сбое ревизора сохранить его кандидат и исходные замечания. При сбое построения или проверки состояния повторять соответствующий шаг с принятой версией текста. При сбое повторного аудита сохранять принятую редакцию и продолжать с повторного аудита.
++- Результат ревизора принимается согласно действующей политике; замечания повторного аудита прикладываются для вычитки. Состояние и канон строятся из принятой версии главы.
++- Повторный запуск после успешного завершения не вызывает модели и не меняет книгу. При неоднозначном состоянии или изменённых входных артефактах команда останавливается с указанием причины.
++- Для существующих глав без контрольной точки использовать только подтверждённые артефакты; не объявлять этап успешным по одному наличию снимка канона или расхода токенов. Если восстановить границу безопасно нельзя, сообщить об этом.
++- Не включать автоматические повторные платные запросы после частичного, пустого или обрезанного ответа. Явный запуск `resume` разрешает повторить провалившийся этап один раз.
++
++## Состояние реализации
++
++Реализованы контрольные точки long-form операции в `.inkos/chapter-runs/<book-id>/` и команда `write resume [book-id] [chapter]`. Сохраняются исходное состояние, стабильные источники, входы и результаты этапов, кандидаты и границы запросов. Восстановление повторно использует подтверждённые результаты и проверяет неизменность исходных данных; незавершённый конвейер блокирует `write next` и сообщает о необходимости продолжения. При неизвестном исходе запроса повторный платный вызов блокируется. Для некоторых старых глав с недоступным аудитом предусмотрено восстановление только при достаточности согласованных артефактов и трассы; наличие файла главы само по себе не подтверждает этап.
++
++Добавлены локальные тесты контрольных точек, в том числе для неоднозначного запроса, сбоев редакторских этапов, блокировки перехода к следующей главе и ручной правки главы. Не все расходы на неуспешные вызовы и вызовы Валидатора гарантированно отражены в итоговой статистике. Сценарий восстановления старой главы и сквозная работа с моделями требуют отдельной проверки. `write sync` перестраивает состояние и запускает аудит, но не продолжает редакторскую цепочку; `write rewrite` повторно генерирует главу.
++
++Первый пользовательский прогон: сборка **PASS**, тесты — **31 PASS / 1 FAIL**. Ошибка выявила, что полная редакция не сохранялась кандидатом, если у ответа ревизора отсутствовал отчёт по замечаниям. Порядок обработки изменён: законченный текст допустимого объёма сохраняется кандидатом до проверки отчёта, но не принимается при ошибке отчёта.
++
++Повторный пользовательский прогон после исправления: оба набора тестов **PASS (32/32)**, `pnpm build` **PASS**. Это подтверждает проверенные сценарии на локальных заглушках; полный платный сквозной прогон остаётся **NOT RUN**.
++
++При реальной попытке продолжения `dogbook01`, глава 3, контрольная точка восстановилась, но DeepSeek V4.1 Flash 1017 исчерпал 96 000 выходных токенов; аудит остался недоступен, исходная глава сохранена, автоматического повтора не было. Сумма `totalTokens` в восстановленном учёте уже не совпадала с суммой входа и выхода в исходном `chapters/index.json` (185 252 против 145 828); текущая попытка добавила к каждому полю значение из ответа модели без изменения этой разницы. Причина исходной исторической неточности не установлена; нормализовать её задним числом без данных провайдера нельзя. Биллинг OpenRouter остаётся источником фактической стоимости.
++
++Последующая попытка с Qwen прошла начальный аудит, ревизию, settlement и проверку состояния, но повторный аудит не прошёл предметную проверку. Обнаружено, что `resume` останавливался до записи проверенной редакции. Убран преждевременный выход: при сбое повторного аудита редакция и состояние сохраняются, а глава остаётся незавершённой для последующего повторного аудита. Добавлен сценарный тест; новая правка и тест **NOT RUN** до пользовательской проверки.
++
++Пользователь подтвердил успешные тесты и сборку этой правки. Следующая попытка сохранила редакцию и канон, но Qwen повторно не прошёл предметную проверку: вернул четыре оценки при восьми исходных наблюдениях и использовал сокращённые цитаты с многоточиями. Уточнён запрос: перечислены обязательные ID, включая положительные наблюдения, и задана короткая непрерывная дословная цитата. Проверка не ослаблена; новые изменения требуют пользовательских тестов и сборки.
++
++После уточнения Qwen вернул все восемь оценок, но семь цитат отличались от оригинала. Проверка показала, что шесть из семи отличаются только пробельными символами; оставшаяся требует отдельного разбора. Добавлено восстановление точного фрагмента из главы при однозначном совпадении только после нормализации пробельных символов; неоднозначные и изменённые по содержанию цитаты отклоняются. Новая логика и тест пока **NOT RUN**. Уже полученный отчёт автоматически не считается принятым.
++
++Оставшееся доказательство `finding-8` не найдено ни в черновике, ни в редакции после нормализации пробелов. Локально подменять его или считать проверенным нельзя; перед принятием отчёта требуется достоверное новое доказательство либо иное явно подтверждённое разрешение. Прочие сохранённые данные не требуют повторной генерации.
+diff --git a/handoff/status-before-commit.txt b/handoff/status-before-commit.txt
+new file mode 100644
+index 00000000..69e5d805
+--- /dev/null
++++ b/handoff/status-before-commit.txt
+@@ -0,0 +1,17 @@
++ M fork-docs/CURRENT_STATE.md
++ M packages/cli/src/commands/write.ts
++ M packages/core/src/__tests__/unicode-length.flow.test.ts
++ M packages/core/src/agent/worker-agent.ts
++ M packages/core/src/agent/worker-response-archive.ts
++ M packages/core/src/agents/continuity.ts
++ M packages/core/src/agents/reviser.ts
++ M packages/core/src/models/chapter.ts
++ M packages/core/src/pipeline/chapter-review.ts
++ M packages/core/src/pipeline/chapter-state-recovery.ts
++ M packages/core/src/pipeline/chapter-truth-validation.ts
++ M packages/core/src/pipeline/runner.ts
++?? fork-docs/G4_CHAPTER_RESUME.md
++?? packages/core/src/__tests__/chapter-checkpoint.test.ts
++?? packages/core/src/agent/chapter-stage-context.ts
++?? packages/core/src/pipeline/chapter-checkpoint.ts
++?? packages/core/src/pipeline/chapter-legacy-evidence.ts
+diff --git a/packages/cli/src/commands/write.ts b/packages/cli/src/commands/write.ts
+index 6d4b3f16..ac8fd446 100644
+--- a/packages/cli/src/commands/write.ts
++++ b/packages/cli/src/commands/write.ts
+@@ -126,7 +126,11 @@ writeCommand
+         });
+       }
+       if (opts.json) {
+-        log(JSON.stringify({ error: String(e) }));
++        const failure = e as { code?: unknown; chapterNumber?: unknown; incompleteStages?: unknown };
++        log(JSON.stringify({ error: String(e),
++          ...(typeof failure?.code === "string" ? { code: failure.code } : {}),
++          ...(typeof failure?.chapterNumber === "number" ? { chapterNumber: failure.chapterNumber } : {}),
++          ...(Array.isArray(failure?.incompleteStages) ? { incompleteStages: failure.incompleteStages } : {}) }));
+       } else {
+         logError(`Failed to write chapter: ${e}`);
+       }
+@@ -134,6 +138,45 @@ writeCommand
+     }
+   });
+ 
++writeCommand
++  .command("resume")
++  .description("Continue a saved chapter operation from its first incomplete stage")
++  .argument("[args...]", "Book ID and optional chapter number")
++  .option("--json", "Output JSON")
++  .action(async (args: ReadonlyArray<string>, opts) => {
++    try {
++      if (args.length > 2) throw new Error("Usage: inkos write resume [book-id] [chapter]");
++      const root = findProjectRoot();
++      const bookArg = args.length === 1 && /^\d+$/.test(args[0]!) ? undefined : args[0];
++      const chapterArg = args.length === 2 ? args[1] : bookArg === undefined ? args[0] : undefined;
++      const chapter = chapterArg === undefined ? undefined : Number(chapterArg);
++      if (chapter !== undefined && (!Number.isInteger(chapter) || chapter < 1)) throw new Error("Chapter number must be a positive integer");
++      const bookId = await resolveBookId(bookArg, root);
++      const config = await loadConfig({ projectRoot: root });
++      const pipeline = new PipelineRunner(buildPipelineConfig(config, root));
++      const [skills, reviewSkills] = await Promise.all([
++        resolveCliProfileSkills(root, "longform-novel"),
++        resolveCliProfileSkills(root, "longform-novel", { includeRecommended: true }),
++      ]);
++      const result = await pipeline.runWithAgentContext({ workerSkills: worker =>
++        worker === "auditor" || worker === "reviser" ? reviewSkills : skills },
++      () => pipeline.resumeChapter(bookId, chapter));
++      if (opts.json) log(JSON.stringify(result, null, 2));
++      else {
++        const state = new StateManager(root);
++        const book = await state.loadBookConfig(bookId);
++        for (const line of formatWriteNextResultLines(resolveCliLanguage(book.language), {
++          chapterNumber: result.chapterNumber, title: result.title, wordCount: result.wordCount,
++          observations: result.review.observations,
++        })) log(line);
++      }
++    } catch (error) {
++      if (opts.json) log(JSON.stringify({ error: String(error), code: (error as { code?: string })?.code }));
++      else logError(`Failed to resume chapter: ${error}`);
++      process.exitCode = 1;
++    }
++  });
++
+ writeCommand
+   .command("rewrite")
+   .description("Re-generate a specific chapter: rewrite [book-id] <chapter>")
+@@ -228,9 +271,9 @@ writeCommand
+       const wordCount = opts.words ? parseInt(opts.words, 10) : undefined;
+ 
+       const config = await loadConfig();
+-      const pipeline = new PipelineRunner(buildPipelineConfig(config, root, {
++      const pipeline = new PipelineRunner({ ...buildPipelineConfig(config, root, {
+         externalContext: opts.brief,
+-      }));
++      }), allowIncompleteRewrite: true });
+       const activatedSkills = await resolveCliProfileSkills(root, "longform-novel");
+ 
+       const action = await executeExplicitCapabilityTool({
+diff --git a/packages/core/src/__tests__/chapter-checkpoint.test.ts b/packages/core/src/__tests__/chapter-checkpoint.test.ts
+new file mode 100644
+index 00000000..af81919d
+--- /dev/null
++++ b/packages/core/src/__tests__/chapter-checkpoint.test.ts
+@@ -0,0 +1,83 @@
++import { mkdtemp, rm } from "node:fs/promises";
++import { tmpdir } from "node:os";
++import { join } from "node:path";
++import { describe, expect, it } from "vitest";
++import { currentChapterStage } from "../agent/chapter-stage-context.js";
++import { ChapterCheckpoint } from "../pipeline/chapter-checkpoint.js";
++
++describe("chapter checkpoints", () => {
++  it("reuses request identities after an interruption and refuses changed inputs", async () => {
++    const root = await mkdtemp(join(tmpdir(), "inkos-checkpoint-"));
++    try {
++      const initial = new ChapterCheckpoint(root, "book", 1);
++      await initial.record("started", "completed", {});
++      const fingerprint = "a".repeat(64);
++      // Simulate an interrupted process: persist the request marker without recording a stage result.
++      await initial.runStage("audit", async () => {
++        expect(await currentChapterStage()!.beginRequest(fingerprint)).toEqual({ sequence: 1, replay: false });
++      });
++      const restored = await ChapterCheckpoint.latest(root, "book", 1);
++      expect(restored?.hasStartedStage()).toBe(true);
++      await restored!.runStage("audit", async () => {
++        expect(await currentChapterStage()!.beginRequest(fingerprint)).toEqual({ sequence: 1, replay: true });
++      }, true);
++      await expect(restored!.runStage("audit", async () => {
++        await currentChapterStage()!.beginRequest("b".repeat(64));
++      }, true)).rejects.toMatchObject({ code: "CHAPTER_RESUME_INPUT_CHANGED" });
++    } finally {
++      await rm(root, { recursive: true, force: true });
++    }
++  });
++
++  it("does not mistake a failed or malformed stage for a successful one", async () => {
++    const root = await mkdtemp(join(tmpdir(), "inkos-checkpoint-"));
++    try {
++      const checkpoint = new ChapterCheckpoint(root, "book", 1);
++      await checkpoint.record("audit", "failed", { message: "unavailable" });
++      const { z } = await import("zod");
++      expect(checkpoint.completed("audit", z.object({ content: z.string() }))).toBeUndefined();
++      await checkpoint.record("audit", "completed", { content: 42 });
++      expect(() => checkpoint.completed("audit", z.object({ content: z.string() }))).toThrow();
++    } finally {
++      await rm(root, { recursive: true, force: true });
++    }
++  });
++
++  it("keeps an ambiguous request in the same attempt instead of permitting another paid request", async () => {
++    const root = await mkdtemp(join(tmpdir(), "inkos-checkpoint-"));
++    try {
++      const checkpoint = new ChapterCheckpoint(root, "book", 2);
++      const fingerprint = "c".repeat(64);
++      await checkpoint.runStage("audit", async () => {
++        await currentChapterStage()!.beginRequest(fingerprint);
++      });
++      for (let attempt = 0; attempt < 2; attempt += 1) {
++        await expect(checkpoint.runStage("audit", async () => {
++          expect(await currentChapterStage()!.beginRequest(fingerprint)).toEqual({ sequence: 1, replay: true });
++          throw Object.assign(new Error("Missing archived response"), { code: "CHAPTER_RESUME_AMBIGUOUS_STAGE" });
++        }, true)).rejects.toMatchObject({ code: "CHAPTER_RESUME_AMBIGUOUS_STAGE" });
++        expect(checkpoint.latestRecord("audit-error")).toBeUndefined();
++      }
++    } finally {
++      await rm(root, { recursive: true, force: true });
++    }
++  });
++
++  it("permits one fresh attempt after a recorded stage failure", async () => {
++    const root = await mkdtemp(join(tmpdir(), "inkos-checkpoint-"));
++    try {
++      const checkpoint = new ChapterCheckpoint(root, "book", 2);
++      const fingerprint = "d".repeat(64);
++      await expect(checkpoint.runStage("audit", async () => {
++        await currentChapterStage()!.beginRequest(fingerprint);
++        throw new Error("model failed");
++      })).rejects.toThrow("model failed");
++      expect(checkpoint.latestRecord("audit-error")?.status).toBe("failed");
++      await checkpoint.runStage("audit", async () => {
++        expect(await currentChapterStage()!.beginRequest(fingerprint)).toEqual({ sequence: 1, replay: false });
++      }, true);
++    } finally {
++      await rm(root, { recursive: true, force: true });
++    }
++  });
++});
+diff --git a/packages/core/src/__tests__/unicode-length.flow.test.ts b/packages/core/src/__tests__/unicode-length.flow.test.ts
+index 883ee5dd..30ffa7c3 100644
+--- a/packages/core/src/__tests__/unicode-length.flow.test.ts
++++ b/packages/core/src/__tests__/unicode-length.flow.test.ts
+@@ -183,11 +183,11 @@ describe("automatic longform revision", () => {
+     vi.mocked(StateValidatorAgent.prototype.validate)
+       .mockResolvedValueOnce({ consistent: false, reconciliationRequired: true, observations: [] })
+       .mockResolvedValueOnce({ consistent: true, reconciliationRequired: false, observations: [] });
+-    const result = await runner.writeNextChapter(book.id);
++    await expect(runner.writeNextChapter(book.id)).rejects.toMatchObject({ code: "CHAPTER_RESUME_REQUIRED" });
+     expect(save).toHaveBeenCalledTimes(1);
+     expect(save.mock.calls[0]?.[1].content).toBe(prose);
+-    expect(result.autoRevision).toMatchObject({ status: "candidate", reason: expect.stringContaining("technical-validation-failed") });
+     const saved = (await state.loadChapterIndex(book.id))[0]!;
++    expect(saved.autoRevision).toMatchObject({ status: "candidate", reason: expect.stringContaining("technical-validation-failed") });
+     expect(await readChapterVersion(bookDir, 1, saved.autoRevision!.candidateVersionId!)).toBe(revised);
+     const file = (await readdir(join(bookDir, "chapters"))).find(name => name.endsWith(".md"))!;
+     expect(await readFile(join(bookDir, "chapters", file), "utf8")).toContain(prose);
+@@ -209,16 +209,134 @@ describe("automatic longform revision", () => {
+   it("keeps the accepted revision and records an unavailable post-audit without retrying", async () => {
+     const { runner, state, book, bookDir } = await fixture();
+     vi.mocked(ContinuityAuditor.prototype.auditChapter).mockResolvedValue({ observations: [finding], summary: "Issue" });
+-    vi.spyOn(ReviserAgent.prototype, "reviseChapter").mockResolvedValue({ revisedContent: revised, wordCount: 9, findingDispositions: [disposition] });
+-    const compare = vi.spyOn(ContinuityAuditor.prototype, "compareRevision").mockRejectedValue(Object.assign(new Error("offline"), { tokenUsage: usage }));
+-    const result = await runner.writeNextChapter(book.id);
++    const revise = vi.spyOn(ReviserAgent.prototype, "reviseChapter").mockResolvedValue({ revisedContent: revised, wordCount: 9, findingDispositions: [disposition] });
++    const compare = vi.spyOn(ContinuityAuditor.prototype, "compareRevision")
++      .mockRejectedValueOnce(Object.assign(new Error("offline"), { tokenUsage: usage }))
++      .mockResolvedValueOnce({ assessments: [assessment], newIssues: [], tokenUsage: usage });
++    const written = await runner.writeNextChapter(book.id);
++    expect(written.autoRevision?.reason).toBe("revised-text-accepted; post-audit-unavailable");
+     expect(compare).toHaveBeenCalledTimes(1);
+-    expect(result.autoRevision).toMatchObject({ status: "applied", reason: "revised-text-accepted; post-audit-unavailable", usage: { postAudit: usage } });
+-    expect(result.tokenUsage?.totalTokens).toBeGreaterThanOrEqual(usage.totalTokens);
+     const saved = (await state.loadChapterIndex(book.id))[0]!;
++    expect(saved.autoRevision).toMatchObject({ status: "applied", reason: "revised-text-accepted; post-audit-unavailable", usage: { postAudit: usage } });
+     expect(saved.observations).toContainEqual(expect.objectContaining({ code: "POST_REVISION_AUDIT_UNAVAILABLE", assessment: "unavailable" }));
+     const file = (await readdir(join(bookDir, "chapters"))).find(name => name.endsWith(".md"))!;
+     expect(await readFile(join(bookDir, "chapters", file), "utf8")).toContain(revised);
++    const draftCalls = calls.filter(call => call.name === "submit_chapter_draft").length;
++    const result = await runner.resumeChapter(book.id, 1);
++    expect(result.autoRevision).toMatchObject({ status: "applied", reason: "revised-text-accepted; post-audit-unavailable" });
++    expect(compare).toHaveBeenCalledTimes(1);
++    expect(revise).toHaveBeenCalledTimes(1);
++    expect(calls.filter(call => call.name === "submit_chapter_draft")).toHaveLength(draftCalls);
++    await runner.resumeChapter(book.id, 1);
++    expect(compare).toHaveBeenCalledTimes(1);
++  }, 30000);
++
++  it("continues from a failed initial audit without regenerating the draft", async () => {
++    const { runner, state, book, bookDir } = await fixture();
++    const audit = vi.mocked(ContinuityAuditor.prototype.auditChapter)
++      .mockRejectedValueOnce(new Error("offline"))
++      .mockResolvedValueOnce({ observations: [finding], summary: "Issue", tokenUsage: usage });
++    const revise = vi.spyOn(ReviserAgent.prototype, "reviseChapter")
++      .mockResolvedValue({ revisedContent: revised, wordCount: 9, findingDispositions: [disposition], tokenUsage: usage });
++    const compare = vi.spyOn(ContinuityAuditor.prototype, "compareRevision")
++      .mockResolvedValue({ assessments: [assessment], newIssues: [], tokenUsage: usage });
++    await expect(runner.writeNextChapter(book.id)).rejects.toMatchObject({ code: "CHAPTER_RESUME_REQUIRED" });
++    expect((await state.loadChapterIndex(book.id))[0]?.autoRevision?.reason).toBe("audit-unavailable");
++    expect(revise).not.toHaveBeenCalled();
++    const draftCalls = calls.filter(call => call.name === "submit_chapter_draft").length;
++    await expect(runner.writeNextChapter(book.id)).rejects.toMatchObject({ code: "CHAPTER_RESUME_REQUIRED", chapterNumber: 1 });
++    expect(calls.filter(call => call.name === "submit_chapter_draft")).toHaveLength(draftCalls);
++    expect(audit).toHaveBeenCalledTimes(1);
++
++    const result = await runner.resumeChapter(book.id, 1);
++    expect(result.autoRevision).toMatchObject({ status: "applied", reason: "revised-text-accepted; post-audit-notes-attached" });
++    expect(audit).toHaveBeenCalledTimes(2);
++    expect(revise).toHaveBeenCalledTimes(1);
++    expect(compare).toHaveBeenCalledTimes(1);
++    expect(calls.filter(call => call.name === "submit_chapter_draft")).toHaveLength(draftCalls);
++    const file = (await readdir(join(bookDir, "chapters"))).find(name => name.endsWith(".md"))!;
++    expect(await readFile(join(bookDir, "chapters", file), "utf8")).toContain(revised);
++  }, 30000);
++
++  it("saves the revision and canon when post-audit fails during resume", async () => {
++    const { runner, state, book, bookDir } = await fixture();
++    vi.mocked(ContinuityAuditor.prototype.auditChapter)
++      .mockRejectedValueOnce(new Error("initial audit unavailable"))
++      .mockResolvedValueOnce({ observations: [finding], summary: "Issue", tokenUsage: usage });
++    const revise = vi.spyOn(ReviserAgent.prototype, "reviseChapter")
++      .mockResolvedValue({ revisedContent: revised, wordCount: 9, findingDispositions: [disposition], tokenUsage: usage });
++    const compare = vi.spyOn(ContinuityAuditor.prototype, "compareRevision")
++      .mockRejectedValueOnce(new Error("post audit unavailable"))
++      .mockResolvedValueOnce({ assessments: [assessment], newIssues: [], tokenUsage: usage });
++    await expect(runner.writeNextChapter(book.id)).rejects.toMatchObject({ code: "CHAPTER_RESUME_REQUIRED" });
++    const result = await runner.resumeChapter(book.id, 1);
++    expect(result.autoRevision?.reason).toBe("revised-text-accepted; post-audit-unavailable");
++    const saved = (await state.loadChapterIndex(book.id))[0]!;
++    expect(saved.autoRevision).toMatchObject({ status: "applied", reason: "revised-text-accepted; post-audit-unavailable" });
++    const file = (await readdir(join(bookDir, "chapters"))).find(name => name.endsWith(".md"))!;
++    expect(await readFile(join(bookDir, "chapters", file), "utf8")).toContain(revised);
++    const snapshot = await loadRuntimeStateSnapshot(bookDir);
++    expect(snapshot.manifest.lastAppliedChapter).toBe(1);
++    await runner.resumeChapter(book.id, 1);
++    expect(revise).toHaveBeenCalledTimes(1);
++    expect(compare).toHaveBeenCalledTimes(1);
++  }, 30000);
++
++  it("retries a failed revision using the saved audit findings", async () => {
++    const { runner, state, book } = await fixture();
++    const audit = vi.mocked(ContinuityAuditor.prototype.auditChapter)
++      .mockResolvedValue({ observations: [finding], summary: "Issue", tokenUsage: usage });
++    const revise = vi.spyOn(ReviserAgent.prototype, "reviseChapter")
++      .mockRejectedValueOnce(new Error("reviser unavailable"))
++      .mockResolvedValueOnce({ revisedContent: revised, wordCount: 9, findingDispositions: [disposition], tokenUsage: usage });
++    const compare = vi.spyOn(ContinuityAuditor.prototype, "compareRevision")
++      .mockResolvedValue({ assessments: [assessment], newIssues: [], tokenUsage: usage });
++    await expect(runner.writeNextChapter(book.id)).rejects.toMatchObject({ code: "CHAPTER_RESUME_REQUIRED" });
++    expect((await state.loadChapterIndex(book.id))[0]?.autoRevision?.status).toBe("unavailable");
++    const draftCalls = calls.filter(call => call.name === "submit_chapter_draft").length;
++
++    const result = await runner.resumeChapter(book.id, 1);
++    expect(result.autoRevision?.status).toBe("applied");
++    expect(audit).toHaveBeenCalledTimes(1);
++    expect(revise).toHaveBeenCalledTimes(2);
++    expect(revise.mock.calls[1]?.[3]).toEqual([finding]);
++    expect(compare).toHaveBeenCalledTimes(1);
++    expect(calls.filter(call => call.name === "submit_chapter_draft")).toHaveLength(draftCalls);
++  }, 30000);
++
++  it("refuses to resume after the saved chapter was edited by the user", async () => {
++    const { runner, book, bookDir } = await fixture();
++    const audit = vi.mocked(ContinuityAuditor.prototype.auditChapter).mockRejectedValue(new Error("offline"));
++    await expect(runner.writeNextChapter(book.id)).rejects.toMatchObject({ code: "CHAPTER_RESUME_REQUIRED" });
++    const file = (await readdir(join(bookDir, "chapters"))).find(name => name.endsWith(".md"))!;
++    const path = join(bookDir, "chapters", file);
++    const edited = `${await readFile(path, "utf8")}\nРучная правка.\n`;
++    await writeFile(path, edited, "utf8");
++    await expect(runner.resumeChapter(book.id, 1)).rejects.toMatchObject({ code: "CHAPTER_RESUME_CHAPTER_CHANGED" });
++    expect(await readFile(path, "utf8")).toBe(edited);
++    expect(audit).toHaveBeenCalledTimes(1);
++  }, 30000);
++
++  it("reuses the revision when settlement of that revision fails", async () => {
++    const { runner, state, book } = await fixture();
++    const audit = vi.mocked(ContinuityAuditor.prototype.auditChapter)
++      .mockResolvedValue({ observations: [finding], summary: "Issue", tokenUsage: usage });
++    const revise = vi.spyOn(ReviserAgent.prototype, "reviseChapter")
++      .mockResolvedValue({ revisedContent: revised, wordCount: 9, findingDispositions: [disposition], tokenUsage: usage });
++    const settleOriginal = WriterAgent.prototype.settleChapterState;
++    const settle = vi.spyOn(WriterAgent.prototype, "settleChapterState")
++      .mockRejectedValueOnce(new Error("settlement unavailable"))
++      .mockImplementation(function (this: WriterAgent, ...args) { return settleOriginal.apply(this, args); });
++    const compare = vi.spyOn(ContinuityAuditor.prototype, "compareRevision")
++      .mockResolvedValue({ assessments: [assessment], newIssues: [], tokenUsage: usage });
++    await expect(runner.writeNextChapter(book.id)).rejects.toMatchObject({ code: "CHAPTER_RESUME_REQUIRED" });
++    expect((await state.loadChapterIndex(book.id))[0]?.autoRevision?.status).toBe("candidate");
++    const result = await runner.resumeChapter(book.id, 1);
++    expect(result.autoRevision?.status).toBe("applied");
++    expect(audit).toHaveBeenCalledTimes(1);
++    expect(revise).toHaveBeenCalledTimes(1);
++    expect(settle).toHaveBeenCalledTimes(3);
++    expect(compare).toHaveBeenCalledTimes(1);
+   }, 30000);
+ 
+   it("accepts the Reviser's text even when the Auditor reports a remaining issue", async () => {
+@@ -309,6 +427,8 @@ describe("automatic longform revision", () => {
+       expect(Value.Check(tool.parameters, payload)).toBe(true);
+       expect(options?.disableRetries).toBe(true);
+       expect(messages.map(message => message.content).join("\n")).toContain('"finding-1"');
++      expect(messages.map(message => message.content).join("\n")).toContain('"expectedFindingIds":["finding-1"]');
++      expect(messages.map(message => message.content).join("\n")).toContain('Do not paraphrase, join separate passages, add ellipses');
+       options?.onUsage?.(usage);
+       return (tool.validate ? await tool.validate(payload as never) : payload) as never;
+     });
+@@ -320,8 +440,28 @@ describe("automatic longform revision", () => {
+       const payload = { assessments: [], newIssues: [] };
+       return (tool.validate ? await tool.validate(payload as never) : payload) as never;
+     });
+-    await expect(auditor.compareRevision({ chapterNumber: 1, original: prose, candidate: revised,
+-      findings: [{ id: "finding-1", observation: finding }], language: "en", narrativeLanguage: "ru", contextPackage: { chapter: 1, selectedContext: [] } })).rejects.toThrow(/Incomplete comparison/);
++    const missing = await auditor.compareRevision({ chapterNumber: 1, original: prose, candidate: revised,
++      findings: [{ id: "finding-1", observation: finding }], language: "en", narrativeLanguage: "ru", contextPackage: { chapter: 1, selectedContext: [] } });
++    expect(missing.warnings).toContainEqual(expect.objectContaining({ code: "POST_AUDIT_FINDING_MISSING", findingId: "finding-1" }));
++  });
++
++  it("restores exact evidence after whitespace-only changes but rejects ambiguous matches", async () => {
++    const { root, book } = await fixture();
++    const auditor = new ContinuityAuditor({ projectRoot: root, client, model: "unused", bookId: book.id });
++    const candidate = "Начало.\n\nЁж увидел пристань.\nКонец.";
++    const payload = { assessments: [{ ...assessment, evidence: "Начало. Ёж увидел пристань." }], newIssues: [] };
++    vi.mocked(runWorkerAgentTool).mockImplementationOnce(async (_client, _model, _messages, tool) =>
++      (tool.validate ? await tool.validate(payload as never) : payload) as never);
++    const input = { chapterNumber: 1, original: prose, candidate, findings: [{ id: "finding-1", observation: finding }],
++      language: "en" as const, narrativeLanguage: "ru" as const, contextPackage: { chapter: 1, selectedContext: [] } };
++    const result = await auditor.compareRevision(input);
++    expect(result.assessments[0]?.evidence).toBe("Начало.\n\nЁж увидел пристань.");
++
++    vi.mocked(runWorkerAgentTool).mockImplementationOnce(async (_client, _model, _messages, tool) =>
++      (tool.validate ? await tool.validate(payload as never) : payload) as never);
++    const ambiguous = await auditor.compareRevision({ ...input, candidate: `${candidate}\n${candidate}` });
++    expect(ambiguous.assessments).toEqual([]);
++    expect(ambiguous.warnings).toContainEqual(expect.objectContaining({ code: "POST_AUDIT_FINDING_UNVERIFIED", findingId: "finding-1" }));
+   });
+ 
+   it.each(["manual", "unavailable", "partial", "execution"] as const)("does not revise for %s", async mode => {
+@@ -333,9 +473,13 @@ describe("automatic longform revision", () => {
+       ...(mode === "partial" ? [{ code: "missing-source", summary: "Source unavailable", assessment: "unavailable" as const, evidence: [] }] : []),
+     ], summary: "Issue" });
+     const revise = vi.spyOn(ReviserAgent.prototype, "reviseChapter");
+-    const result = await runner.writeNextChapter(book.id);
++    if (mode === "unavailable" || mode === "partial") {
++      await expect(runner.writeNextChapter(book.id)).rejects.toMatchObject({ code: "CHAPTER_RESUME_REQUIRED" });
++    } else {
++      const result = await runner.writeNextChapter(book.id);
++      expect(result.autoRevision?.status).toBe("skipped");
++    }
+     expect(revise).not.toHaveBeenCalled();
+-    expect(result.autoRevision?.status).toBe("skipped");
+   }, 30000);
+ });
+ 
+diff --git a/packages/core/src/agent/chapter-stage-context.ts b/packages/core/src/agent/chapter-stage-context.ts
+new file mode 100644
+index 00000000..a69e465d
+--- /dev/null
++++ b/packages/core/src/agent/chapter-stage-context.ts
+@@ -0,0 +1,26 @@
++import { AsyncLocalStorage } from "node:async_hooks";
++
++export interface ChapterStageContext {
++  readonly operationId: string;
++  readonly bookId: string;
++  readonly chapterNumber: number;
++  readonly stage: string;
++  readonly attemptId: string;
++  readonly beginRequest: (fingerprint: string) => Promise<{ readonly sequence: number; readonly replay: boolean }>;
++}
++
++const storage = new AsyncLocalStorage<ChapterStageContext>();
++
++export function withChapterStage<T>(context: ChapterStageContext, task: () => Promise<T>): Promise<T> {
++  return storage.run(context, task);
++}
++
++export function currentChapterStage(): ChapterStageContext | undefined {
++  return storage.getStore();
++}
++
++/** These errors mean the host cannot safely decide whether a request may be repeated. */
++export function isChapterResumeSafetyError(error: unknown): boolean {
++  const code = (error as { code?: unknown } | null)?.code;
++  return typeof code === "string" && (code.startsWith("CHAPTER_RESUME_") || code === "CHAPTER_RESPONSE_ARCHIVE_REQUIRED");
++}
+diff --git a/packages/core/src/agent/worker-agent.ts b/packages/core/src/agent/worker-agent.ts
+index e476b73a..533c18ff 100644
+--- a/packages/core/src/agent/worker-agent.ts
++++ b/packages/core/src/agent/worker-agent.ts
+@@ -1,4 +1,5 @@
+ import { Agent } from "@mariozechner/pi-agent-core";
++import { createHash } from "node:crypto";
+ import type { AgentTool, AgentToolResult } from "@mariozechner/pi-agent-core";
+ import {
+   createAssistantMessageEventStream,
+@@ -30,7 +31,8 @@ import { toPiApi } from "../llm/api-format.js";
+ import { recordExecutionEvidence } from "../harness/execution-evidence.js";
+ import {decodeStructuredFields} from './structured-arguments.js';
+ import { preserveToolArgumentTypes, toolArgumentIssues } from "./tool-arguments.js";
+-import { archiveWorkerResponse, markWorkerResponseArchive, type WorkerResponseArchiveContext } from "./worker-response-archive.js";
++import { archiveWorkerResponse, findArchivedWorkerResponse, markWorkerResponseArchive, type WorkerResponseArchiveContext } from "./worker-response-archive.js";
++import { currentChapterStage } from "./chapter-stage-context.js";
+ import { MAX_MODEL_OUTPUT_TOKENS } from "../llm/token-limits.js";
+ 
+ export interface WorkerAgentOptions {
+@@ -130,6 +132,44 @@ function localStopStream(model: Model<Api>) {
+   return stream;
+ }
+ 
++function replayStream(message: AssistantMessage): AssistantMessageEventStream {
++  const stream = createAssistantMessageEventStream();
++  queueMicrotask(() => {
++    if (message.stopReason === "error" || message.stopReason === "aborted") {
++      stream.push({ type: "error", reason: message.stopReason, error: message });
++    } else {
++      stream.push({ type: "done", reason: message.stopReason, message });
++    }
++    stream.end(message);
++  });
++  return stream;
++}
++
++function failedLocalStream(model: Model<Api>, error: unknown): AssistantMessageEventStream {
++  return replayStream(assistantMessage(model, "", undefined, "error", String(error)));
++}
++
++async function chapterRequest(context: Context, archive: WorkerResponseArchiveContext | undefined, resultTool?: string): Promise<{
++  archive?: WorkerResponseArchiveContext; replay?: { path: string; response: AssistantMessage };
++}> {
++  const stage = currentChapterStage();
++  if (!stage) return { archive };
++  if (!archive || archive.workId !== stage.bookId) throw Object.assign(new Error("Chapter worker response archive is required"), { code: "CHAPTER_RESPONSE_ARCHIVE_REQUIRED" });
++  const messages = context.messages.map(message => ({ role: message.role, content: message.content,
++    ...(message.role === "toolResult" ? { toolCallId: message.toolCallId, toolName: message.toolName, isError: message.isError } : {}) }));
++  const fingerprint = createHash("sha256").update(JSON.stringify({ systemPrompt: context.systemPrompt, messages, tools: context.tools, resultTool })).digest("hex");
++  const request = await stage.beginRequest(fingerprint);
++  const requestArchive = { ...archive, requestFingerprint: fingerprint, requestSequence: request.sequence, ...(resultTool ? { resultTool } : {}) };
++  if (!request.replay) return { archive: requestArchive };
++  const replay = await findArchivedWorkerResponse({ context: requestArchive, operationId: stage.operationId,
++    chapterNumber: stage.chapterNumber, stage: stage.stage, attemptId: stage.attemptId,
++    requestSequence: request.sequence, requestFingerprint: fingerprint });
++  if (!replay) throw Object.assign(new Error(`The prior ${stage.stage} request has no complete archived response`), {
++    code: "CHAPTER_RESUME_AMBIGUOUS_STAGE", stage: stage.stage, chapterNumber: stage.chapterNumber,
++  });
++  return { archive: requestArchive, replay };
++}
++
+ /** Archive a structured worker's complete response before Pi validates tool arguments. */
+ function archiveResponseStream(
+   source: AssistantMessageEventStream,
+@@ -314,29 +354,34 @@ export async function runWorkerAgent(
+   }
+ 
+   let streamFailure: unknown;
++  let chapterReplayFailure: unknown;
++  let responseArchive = options.responseArchive;
++  let replayedResponse = false;
+   const agent = new Agent({
+     initialState: { model, systemPrompt, tools: [], messages: [] },
+     toolExecution: "sequential",
+-    streamFn: (streamModel, context, streamOptions) => providerWorkerStream(
+-      client,
+-      streamModel,
+-      context,
+-      streamOptions,
+-      options,
+-      (error) => { streamFailure = error; },
+-    ),
++    streamFn: async (streamModel, context, streamOptions) => {
++      let request: Awaited<ReturnType<typeof chapterRequest>>;
++      try { request = await chapterRequest(context, options.responseArchive); }
++      catch (error) { chapterReplayFailure = error; return failedLocalStream(streamModel, error); }
++      responseArchive = request.archive;
++      if (request.replay) { replayedResponse = true; return replayStream(request.replay.response); }
++      return providerWorkerStream(client, streamModel, context, streamOptions, options,
++        (error) => { streamFailure = error; });
++    },
+   });
+   const abortAgent = () => agent.abort();
+   options.signal?.addEventListener("abort", abortAgent, { once: true });
+ 
+   try {
+     await agent.prompt(promptMessages);
++    if (chapterReplayFailure !== undefined) throw chapterReplayFailure;
+     const final = [...agent.state.messages].reverse().find(
+       (message): message is AssistantMessage => message.role === "assistant",
+     );
+-    if (final && options.responseArchive) {
+-      const artifactPath = await archiveWorkerResponse({ context: options.responseArchive, model, response: final, attempt: 1 });
+-      recordExecutionEvidence("worker-response-archived", { artifactPath, role: options.responseArchive.role, model: model.id });
++    if (final && responseArchive && !replayedResponse) {
++      const artifactPath = await archiveWorkerResponse({ context: responseArchive, model, response: final, attempt: 1 });
++      recordExecutionEvidence("worker-response-archived", { artifactPath, role: responseArchive.role, model: model.id });
+     }
+     options.signal?.throwIfAborted();
+     if (streamFailure !== undefined) throw streamFailure;
+@@ -397,6 +442,7 @@ export async function runWorkerAgentTool<TParameters extends TSchema>(
+   let lastValidationError: (Error & {code?:string}) | undefined;
+   let activeResponseArtifactPath: string | undefined;
+   let responseArchiveFailure: unknown;
++  let chapterReplayFailure: unknown;
+   const responseArtifactPaths: string[] = [];
+   const resultArtifactByToolCall = new Map<string, string>();
+   const maxResultTurns = options.disableRetries ? 1 : 3;
+@@ -460,13 +506,23 @@ export async function runWorkerAgentTool<TParameters extends TSchema>(
+       return undefined;
+     },
+     toolExecution: "sequential",
+-    streamFn: (streamModel, context, streamOptions) => {
++    streamFn: async (streamModel, context, streamOptions) => {
+       if (submitted) return localStopStream(streamModel);
+       if (modelTurns >= maxResultTurns) {
+         resultAttemptsExhausted = true;
+         return localStopStream(streamModel);
+       }
+       modelTurns++;
++      let request: Awaited<ReturnType<typeof chapterRequest>>;
++      try { request = await chapterRequest(context, options.responseArchive, resultTool.name); }
++      catch (error) { chapterReplayFailure = error; return failedLocalStream(streamModel, error); }
++      if (request.replay) {
++        const { response, path } = request.replay;
++        responseArtifactPaths.push(path);
++        for (const part of response.content) if (part.type === "toolCall") resultArtifactByToolCall.set(part.id, path);
++        activeResponseArtifactPath = path;
++        return replayStream(response);
++      }
+       const resultOptions = {
+           ...streamOptions,
+           ...(options.temperature !== undefined ? { temperature: client.service === "custom" ? options.temperature
+@@ -483,7 +539,7 @@ export async function runWorkerAgentTool<TParameters extends TSchema>(
+         : client.stream === false
+         ? guardedPiNonStreaming(streamModel, context, resultOptions, client.proxyUrl)
+         : guardedPiStream(streamModel, context, resultOptions, 0, {firstEventTimeoutMs:900_000,idleTimeoutMs:1_000_000}, false);
+-      return options.responseArchive ? archiveResponseStream(rawStream, streamModel, options.responseArchive, modelTurns,
++      return request.archive ? archiveResponseStream(rawStream, streamModel, request.archive, modelTurns,
+         (response, artifactPath) => {
+           responseArtifactPaths.push(artifactPath);
+           for (const part of response.content) if (part.type === "toolCall") resultArtifactByToolCall.set(part.id, artifactPath);
+@@ -515,6 +571,7 @@ export async function runWorkerAgentTool<TParameters extends TSchema>(
+ 
+   try {
+     await agent.prompt(promptMessages);
++    if (chapterReplayFailure !== undefined) throw chapterReplayFailure;
+     if (responseArchiveFailure !== undefined) throw Object.assign(new Error("Could not preserve the raw worker response before processing."), {
+       code: "WORKER_RESPONSE_ARCHIVE_FAILED", cause: responseArchiveFailure,
+     });
+@@ -538,6 +595,7 @@ export async function runWorkerAgentTool<TParameters extends TSchema>(
+     }
+     if (!submitted) {
+       await agent.prompt(`You did not call ${resultTool.name}. Call it now with the complete result.`);
++      if (chapterReplayFailure !== undefined) throw chapterReplayFailure;
+       if (responseArchiveFailure !== undefined) throw Object.assign(new Error("Could not preserve the raw worker response before processing."), {
+         code: "WORKER_RESPONSE_ARCHIVE_FAILED", cause: responseArchiveFailure,
+       });
+diff --git a/packages/core/src/agent/worker-response-archive.ts b/packages/core/src/agent/worker-response-archive.ts
+index 3c96fa81..7e50556e 100644
+--- a/packages/core/src/agent/worker-response-archive.ts
++++ b/packages/core/src/agent/worker-response-archive.ts
+@@ -1,12 +1,17 @@
+-import { mkdir, readFile, writeFile } from "node:fs/promises";
++import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
+ import { randomUUID } from "node:crypto";
+-import { join } from "node:path";
++import { basename, dirname, join } from "node:path";
+ import type { Api, AssistantMessage, Model } from "@mariozechner/pi-ai";
++import { currentChapterStage } from "./chapter-stage-context.js";
++import { commitAtomicFileSet } from "../utils/atomic-file-set.js";
+ 
+ export interface WorkerResponseArchiveContext {
+   readonly projectRoot: string;
+   readonly workId?: string;
+   readonly role: string;
++  readonly requestFingerprint?: string;
++  readonly requestSequence?: number;
++  readonly resultTool?: string;
+ }
+ 
+ export interface WorkerResponseArchiveOutcome {
+@@ -36,11 +41,16 @@ export async function archiveWorkerResponse(input: {
+   await mkdir(directory, { recursive: true });
+   const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+   const filePath = join(directory, `${timestamp}-${rolePart(input.context.role)}-${randomUUID()}.json`);
++  const chapterStage = currentChapterStage();
+   const envelope = {
+     schemaVersion: 1,
+     receivedAt: new Date().toISOString(),
+     workId: input.context.workId ?? null,
+     agentRole: input.context.role,
++    ...(chapterStage ? { chapterOperation: { operationId: chapterStage.operationId, bookId: chapterStage.bookId,
++      chapterNumber: chapterStage.chapterNumber, stage: chapterStage.stage, attemptId: chapterStage.attemptId,
++      requestSequence: input.context.requestSequence, requestFingerprint: input.context.requestFingerprint,
++      resultTool: input.context.resultTool } } : {}),
+     attempt: input.attempt,
+     model: { id: input.model.id, provider: input.model.provider, api: input.model.api },
+     validation: { status: "received_before_processing", stages: [] },
+@@ -50,11 +60,46 @@ export async function archiveWorkerResponse(input: {
+   return filePath;
+ }
+ 
++/** Find a response for one previously started request without making a provider call. */
++export async function findArchivedWorkerResponse(input: {
++  readonly context: WorkerResponseArchiveContext;
++  readonly operationId: string; readonly chapterNumber: number; readonly stage: string;
++  readonly attemptId: string; readonly requestSequence: number; readonly requestFingerprint: string;
++}): Promise<{ readonly path: string; readonly response: AssistantMessage } | undefined> {
++  const directory = join(input.context.projectRoot, ".inkos", "agent-runs", pathPart(input.context.workId ?? "unbound-work"), "worker-responses");
++  let files: string[];
++  try { files = await readdir(directory); }
++  catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined; throw error; }
++  const matches: Array<{ path: string; response: AssistantMessage }> = [];
++  for (const file of files.filter(name => name.endsWith(".json"))) {
++    const path = join(directory, file);
++    let document: { schemaVersion?: unknown; workId?: unknown; agentRole?: unknown; chapterOperation?: Record<string, unknown>; response?: unknown };
++    try { document = JSON.parse(await readFile(path, "utf8")); } catch { continue; }
++    const operation = document.chapterOperation;
++    if (!operation || document.schemaVersion !== 1 || document.workId !== input.context.workId || document.agentRole !== input.context.role
++      || operation.bookId !== input.context.workId
++      || operation.operationId !== input.operationId || operation.chapterNumber !== input.chapterNumber
++      || operation.stage !== input.stage || operation.attemptId !== input.attemptId
++      || operation.requestSequence !== input.requestSequence || operation.requestFingerprint !== input.requestFingerprint
++      || operation.resultTool !== input.context.resultTool) continue;
++    const response = document.response as Partial<AssistantMessage> | undefined;
++    if (!response || response.role !== "assistant" || !Array.isArray(response.content) || !response.usage
++      || typeof response.api !== "string" || typeof response.provider !== "string" || typeof response.model !== "string"
++      || typeof response.timestamp !== "number" || !["stop", "length", "toolUse", "error", "aborted"].includes(response.stopReason ?? "")
++      || ![response.usage.input, response.usage.output, response.usage.totalTokens].every(value => typeof value === "number" && Number.isFinite(value) && value >= 0)) {
++      throw Object.assign(new Error("Archived chapter response is incomplete"), { code: "CHAPTER_RESUME_ARCHIVE_INVALID" });
++    }
++    matches.push({ path, response: response as AssistantMessage });
++  }
++  if (matches.length > 1) throw Object.assign(new Error("Multiple archived responses match the same chapter request"), { code: "CHAPTER_RESUME_ARCHIVE_AMBIGUOUS" });
++  return matches[0];
++}
++
+ /** Attach the host's validation result after the original response is durable. */
+ export async function markWorkerResponseArchive(path: string, outcome: WorkerResponseArchiveOutcome): Promise<void> {
+   const document = JSON.parse(await readFile(path, "utf8")) as {
+     validation?: { status?: string; stages?: WorkerResponseArchiveOutcome[] };
+   };
+   document.validation = { status: "checked", stages: [...(document.validation?.stages ?? []), outcome] };
+-  await writeFile(path, `${JSON.stringify(document, null, 2)}\n`, "utf8");
++  await commitAtomicFileSet({ rootDir: dirname(path), writes: [{ relativePath: basename(path), content: `${JSON.stringify(document, null, 2)}\n` }] });
+ }
+diff --git a/packages/core/src/agents/continuity.ts b/packages/core/src/agents/continuity.ts
+index d0fc9d84..8696a178 100644
+--- a/packages/core/src/agents/continuity.ts
++++ b/packages/core/src/agents/continuity.ts
+@@ -26,6 +26,16 @@ const RevisionComparisonSchema = Type.Object({
+   }, { additionalProperties: false })),
+ }, { additionalProperties: false });
+ 
++/** Recover an exact source excerpt only when differences are whitespace and the match is unique. */
++function exactRevisionEvidence(candidate: string, evidence: string): string | undefined {
++  if (candidate.includes(evidence)) return evidence;
++  const parts = evidence.trim().split(/\s+/u);
++  if (!parts.length || parts.some(part => !part)) return undefined;
++  const escaped = parts.map(part => part.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
++  const matches = candidate.match(new RegExp(escaped.join("\\s+"), "gu"));
++  return matches?.length === 1 ? matches[0] : undefined;
++}
++
+ export interface AuditResult {
+   readonly observations: ReadonlyArray<Observation>;
+   readonly summary: string;
+@@ -52,35 +62,47 @@ export class ContinuityAuditor extends BaseAgent {
+     readonly narrativeLanguage?: NarrativeLanguage;
+     readonly contextPackage: ContextPackage;
+   }): Promise<{ readonly assessments: ReadonlyArray<FindingAssessment & { explanation: string; evidence: string }>;
+-    readonly newIssues: ReadonlyArray<Observation>; readonly tokenUsage: NonNullable<AuditResult["tokenUsage"]> }> {
++    readonly newIssues: ReadonlyArray<Observation>; readonly warnings?: ReadonlyArray<{ code: string; message: string; findingId?: string; evidence?: string }>;
++    readonly tokenUsage: NonNullable<AuditResult["tokenUsage"]> }> {
+     const context = renderNarrativeSelectedContext(input.contextPackage.selectedContext, input.language);
+     const sourceId = `chapter-${input.chapterNumber}`;
+     const messages = [
+-      { role: "system" as const, content: `Compare the original chapter and revision under the activated review Skill and governed context. Assess each supplied finding ID exactly once as resolved or remaining. Report newly introduced defects and any worsening of an existing finding separately as new issues, including conflicts with the author's instructions, canon or narrative voice. Evidence must be an exact nonempty quote from the revised chapter. Preserve the author's instructions and canon. ${input.narrativeLanguage === "ru" ? "Write explanations and summaries in Russian; retain IDs and schema values." : ""}` },
+-      { role: "user" as const, content: JSON.stringify({ chapterNumber: input.chapterNumber, governedContext: context, original: input.original, candidate: input.candidate, findings: input.findings }) },
++      { role: "system" as const, content: `Compare the original chapter and revision under the activated review Skill and governed context. Return exactly one assessment for every ID in expectedFindingIds, including neutral and positive observations, not only defects. Use each ID exactly once and mark it resolved or remaining. Report newly introduced defects and any worsening of an existing finding separately as new issues, including conflicts with the author's instructions, canon or narrative voice. For every assessment and new issue, evidence must be one short, contiguous, verbatim excerpt copied from the revised chapter. Do not paraphrase, join separate passages, add ellipses, or alter punctuation or whitespace in evidence. Preserve the author's instructions and canon. ${input.narrativeLanguage === "ru" ? "Write explanations and summaries in Russian; retain IDs and schema values." : ""}` },
++      { role: "user" as const, content: JSON.stringify({ chapterNumber: input.chapterNumber, expectedFindingIds: input.findings.map(finding => finding.id), governedContext: context, original: input.original, candidate: input.candidate, findings: input.findings }) },
+     ];
+     const { result, usage } = await this.submitStructured(messages, {
+       name: "submit_revision_comparison", label: "Compare chapter revision",
+       description: "Assess every original finding and identify newly introduced issues with exact revised-chapter evidence.",
+       parameters: RevisionComparisonSchema,
+-      validate: (value) => {
+-        const expected = new Set(input.findings.map((finding) => finding.id));
+-        const seen = new Set<string>();
+-        for (const assessment of value.assessments) {
+-          if (!expected.has(assessment.findingId) || seen.has(assessment.findingId) || !input.candidate.includes(assessment.evidence)) throw new Error("Invalid finding assessment or evidence");
+-          seen.add(assessment.findingId);
+-        }
+-        if (seen.size !== expected.size || value.newIssues.some((issue) => !input.candidate.includes(issue.evidence))) throw new Error("Incomplete comparison or invalid evidence");
+-        return value;
+-      },
+     }, { temperature: 0, maxTokens: this.ctx.client.defaults.maxTokens, disableRetries: true });
+-    return {
+-      assessments: result.assessments,
+-      newIssues: result.newIssues.map((issue) => ({
++    const expected = new Set(input.findings.map(item => item.id));
++    const confirmed = new Set<string>();
++    const warnings: Array<{ code: string; message: string; findingId?: string; evidence?: string }> = [];
++    const assessments = result.assessments.flatMap(item => {
++      const evidence = exactRevisionEvidence(input.candidate, item.evidence);
++      if (!expected.has(item.findingId) || confirmed.has(item.findingId) || !evidence) {
++        warnings.push({ code: "POST_AUDIT_FINDING_UNVERIFIED", findingId: item.findingId,
++          message: item.explanation, evidence: item.evidence });
++        return [];
++      }
++      confirmed.add(item.findingId);
++      return [{ ...item, evidence }];
++    });
++    for (const item of input.findings) if (!confirmed.has(item.id) && !warnings.some(warning => warning.findingId === item.id)) {
++      warnings.push({ code: "POST_AUDIT_FINDING_MISSING", findingId: item.id, message: "Оценка не предоставлена." });
++    }
++    const newIssues = result.newIssues.map((issue) => {
++      const evidence = exactRevisionEvidence(input.candidate, issue.evidence);
++      if (!evidence) warnings.push({ code: "POST_AUDIT_EVIDENCE_UNVERIFIED", message: issue.summary, evidence: issue.evidence });
++      return {
+         code: issue.code, summary: issue.summary, scope: issue.scope,
+-        assessment: "issue" as const, category: "quality" as const,
+-        evidence: [issue.evidence], sourceRefs: [{ sourceId, quote: issue.evidence }],
+-      })),
++        assessment: evidence ? "issue" as const : "unavailable" as const, category: "quality" as const,
++        evidence: evidence ? [evidence] : [], sourceRefs: evidence ? [{ sourceId, quote: evidence }] : [],
++      };
++    });
++    return {
++      assessments,
++      newIssues, warnings,
+       tokenUsage: usage,
+     };
+   }
+diff --git a/packages/core/src/agents/reviser.ts b/packages/core/src/agents/reviser.ts
+index b76ef304..f6c0044c 100644
+--- a/packages/core/src/agents/reviser.ts
++++ b/packages/core/src/agents/reviser.ts
+@@ -215,8 +215,8 @@ export class ReviserAgent extends BaseAgent {
+           { code: "PARTIAL_CHAPTER_OUTPUT" },
+         );
+         assertChapterLength(revisedContent,lengthSpec);
+-        if (autoFindings) validateDispositions((result as unknown as {findingDispositions:unknown}).findingDispositions, autoFindings);
+         await onCandidate?.(revisedContent);
++        if (autoFindings) validateDispositions((result as unknown as {findingDispositions:unknown}).findingDispositions, autoFindings);
+         return{...result,revisedContent};
+       },
+     }, { temperature: 0.3, maxTokens, disableRetries: !!autoFindings });
+diff --git a/packages/core/src/models/chapter.ts b/packages/core/src/models/chapter.ts
+index bbbd8ac4..cb542edc 100644
+--- a/packages/core/src/models/chapter.ts
++++ b/packages/core/src/models/chapter.ts
+@@ -10,6 +10,7 @@ export const AutoRevisionOutcomeSchema = z.object({
+   initialReview: z.object({ summary: z.string(), observations: z.array(ObservationSchema), unavailable: z.boolean().optional() }).strict().optional(),
+   dispositions: z.array(z.object({ findingId: z.string(), status: z.enum(["addressed", "not_addressed", "rejected"]), explanation: z.string() }).strict()).optional(),
+   assessments: z.array(z.object({ findingId: z.string(), status: z.enum(["resolved", "remaining"]), explanation: z.string(), evidence: z.string() }).strict()).optional(),
++  postAuditWarnings: z.array(z.object({ code: z.string(), message: z.string(), findingId: z.string().optional(), evidence: z.string().optional() }).strict()).optional(),
+   newIssues: z.array(ObservationSchema).optional(),
+   candidateVersionId: z.string().optional(),
+   originalVersionId: z.string().optional(),
+diff --git a/packages/core/src/pipeline/chapter-checkpoint.ts b/packages/core/src/pipeline/chapter-checkpoint.ts
+new file mode 100644
+index 00000000..9b4465f7
+--- /dev/null
++++ b/packages/core/src/pipeline/chapter-checkpoint.ts
+@@ -0,0 +1,287 @@
++import { randomUUID } from "node:crypto";
++import { readFile, readdir, stat } from "node:fs/promises";
++import { join } from "node:path";
++import { isDeepStrictEqual } from "node:util";
++import { z } from "zod";
++import type { BookConfig } from "../models/book.js";
++import { commitAtomicFileSet } from "../utils/atomic-file-set.js";
++import { withChapterStage, isChapterResumeSafetyError } from "../agent/chapter-stage-context.js";
++
++const RecordSchema = z.object({
++  stage: z.string().min(1),
++  status: z.enum(["completed", "failed", "skipped", "candidate", "incomplete", "running"]),
++  at: z.string().datetime(),
++  data: z.unknown().optional(),
++}).strict();
++const CheckpointSchema = z.object({
++  version: z.literal(1), operationId: z.string().uuid(), bookId: z.string().min(1),
++  chapterNumber: z.number().int().positive(), records: z.array(RecordSchema),
++}).strict();
++const UsageSchema = z.object({ promptTokens: z.number().int().nonnegative(), completionTokens: z.number().int().nonnegative(),
++  totalTokens: z.number().int().nonnegative() });
++export type ChapterCheckpointRecord = z.infer<typeof RecordSchema>;
++type CheckpointStatus = ChapterCheckpointRecord["status"];
++
++function checkpointDirectory(bookId: string): string {
++  return join(".inkos", "chapter-runs", encodeURIComponent(bookId).replace(/\./g, "%2E"));
++}
++
++/** Stable book sources used to detect edits made after an operation began. */
++export function chapterAuthorityHashes(sourceState: ReadonlyMap<string, string>, chapterNumber: number): Record<string, string> {
++  const volatile = /^(?:source\/book\.json$|source\/chapters\/|source\/story\/(?:runtime|state|snapshots)\/|source\/story\/(?:current_state|pending_hooks|chapter_summaries|volume_summaries)\.md$|source\/story\/memory\.db(?:-shm|-wal)?$)/;
++  return Object.fromEntries([...sourceState.entries()].filter(([path]) => {
++    const chapter = /^source\/chapters\/(\d+)_.*\.md$/i.exec(path);
++    return chapter ? Number(chapter[1]) < chapterNumber : !volatile.test(path);
++  }).sort(([a], [b]) => a.localeCompare(b)));
++}
++
++export function chapterBookIdentity(book: BookConfig): Omit<BookConfig, "status" | "updatedAt"> {
++  const { status: _status, updatedAt: _updatedAt, ...identity } = book;
++  return identity;
++}
++
++/** Verify that a saved operation still refers to the same canon baseline and book sources. */
++export function assertChapterCheckpointBaseline(
++  record: ChapterCheckpointRecord | undefined,
++  sourceState: ReadonlyMap<string, string>,
++  runtimeSnapshot: unknown,
++  book: BookConfig,
++  chapterNumber: number,
++): void {
++  if (!record || record.stage !== "baseline" || record.status !== "completed") {
++    throw Object.assign(new Error("Chapter checkpoint has no completed baseline"), { code: "CHAPTER_CHECKPOINT_BASELINE_MISSING" });
++  }
++  const baseline = z.object({ runtimeSnapshot: z.unknown(), authorityHashes: z.record(z.string()), bookIdentity: z.unknown() }).strict().parse(record.data);
++  if (!isDeepStrictEqual(baseline.bookIdentity, chapterBookIdentity(book))) {
++    throw Object.assign(new Error("Book configuration changed since the chapter operation began"), { code: "CHAPTER_CHECKPOINT_BOOK_CHANGED" });
++  }
++  if (!isDeepStrictEqual(baseline.authorityHashes, chapterAuthorityHashes(sourceState, chapterNumber))) {
++    throw Object.assign(new Error("Book sources changed since the chapter operation began"), { code: "CHAPTER_CHECKPOINT_AUTHORITY_CHANGED" });
++  }
++  if (!isDeepStrictEqual(baseline.runtimeSnapshot, runtimeSnapshot)) {
++    throw Object.assign(new Error("Chapter baseline state changed since the operation began"), { code: "CHAPTER_CHECKPOINT_BASELINE_CHANGED" });
++  }
++}
++
++/** Persist chapter stage outputs locally before a later stage can fail. */
++export class ChapterCheckpoint {
++  private readonly operationId: string;
++  private records: ChapterCheckpointRecord[];
++  private writeQueue: Promise<void> = Promise.resolve();
++  private readonly relativePath: string;
++
++  constructor(private readonly projectRoot: string, private readonly bookId: string, private readonly chapterNumber: number,
++    restored?: { readonly operationId: string; readonly records: ChapterCheckpointRecord[] }) {
++    this.operationId = restored?.operationId ?? randomUUID();
++    this.records = restored?.records ?? [];
++    this.relativePath = join(checkpointDirectory(bookId),
++      `chapter-${String(chapterNumber).padStart(4, "0")}-${this.operationId}.json`);
++  }
++
++  /** Import verified legacy evidence as one atomic checkpoint, never a half-built operation. */
++  static async createFromRecords(projectRoot: string, bookId: string, chapterNumber: number,
++    entries: ReadonlyArray<{ stage: string; status: CheckpointStatus; data: unknown }>): Promise<ChapterCheckpoint> {
++    const checkpoint = new ChapterCheckpoint(projectRoot, bookId, chapterNumber);
++    const records = z.array(RecordSchema).parse(entries.map(entry => ({ ...entry, at: new Date().toISOString() })));
++    await checkpoint.save(records);
++    return checkpoint;
++  }
++
++  /** Load the newest operation for a chapter. A corrupt newest record is an error, not permission to use an older run. */
++  static async latest(projectRoot: string, bookId: string, chapterNumber: number): Promise<ChapterCheckpoint | undefined> {
++    if (!Number.isInteger(chapterNumber) || chapterNumber < 1) throw new Error("Invalid checkpoint chapter number");
++    const directory = join(projectRoot, checkpointDirectory(bookId));
++    let files: string[];
++    try { files = await readdir(directory); }
++    catch (error) {
++      if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
++      throw error;
++    }
++    const prefix = `chapter-${String(chapterNumber).padStart(4, "0")}-`;
++    const candidates = await Promise.all(files.filter(file => file.startsWith(prefix) && file.endsWith(".json"))
++      .map(async file => ({ file, modified: (await stat(join(directory, file))).mtimeMs })));
++    candidates.sort((a, b) => b.modified - a.modified || b.file.localeCompare(a.file));
++    if (!candidates.length) return undefined;
++    if (candidates.length > 1 && candidates[0]!.modified === candidates[1]!.modified) {
++      throw Object.assign(new Error("Cannot determine the newest chapter operation"), { code: "CHAPTER_CHECKPOINT_ORDER_AMBIGUOUS" });
++    }
++    const file = candidates[0]!.file;
++    const saved = CheckpointSchema.parse(JSON.parse(await readFile(join(directory, file), "utf8")));
++    if (saved.bookId !== bookId || saved.chapterNumber !== chapterNumber || file !== `${prefix}${saved.operationId}.json`) {
++      throw new Error("Chapter checkpoint identity does not match its path");
++    }
++    return new ChapterCheckpoint(projectRoot, bookId, chapterNumber, { operationId: saved.operationId, records: saved.records });
++  }
++
++  /** Select the most recently updated operation, including a rewrite of an earlier chapter. */
++  static async latestForBook(projectRoot: string, bookId: string): Promise<ChapterCheckpoint | undefined> {
++    const directory = join(projectRoot, checkpointDirectory(bookId));
++    let files: string[];
++    try { files = await readdir(directory); }
++    catch (error) {
++      if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
++      throw error;
++    }
++    const chapters = files.flatMap(file => {
++      const match = /^chapter-(\d+)-[0-9a-f-]+\.json$/i.exec(file);
++      return match ? [{ file, chapter: Number(match[1]) }] : [];
++    }).filter(item => Number.isSafeInteger(item.chapter) && item.chapter > 0);
++    if (!chapters.length) return undefined;
++    const candidates = await Promise.all(chapters.map(async item => ({ ...item, modified: (await stat(join(directory, item.file))).mtimeMs })));
++    candidates.sort((a, b) => b.modified - a.modified || b.file.localeCompare(a.file));
++    if (candidates.length > 1 && candidates[0]!.modified === candidates[1]!.modified) {
++      throw Object.assign(new Error("Cannot determine the newest book operation"), { code: "CHAPTER_CHECKPOINT_ORDER_AMBIGUOUS" });
++    }
++    return ChapterCheckpoint.latest(projectRoot, bookId, candidates[0]!.chapter);
++  }
++
++  get chapter(): number { return this.chapterNumber; }
++
++  /** A missing baseline can only be reconstructed before any stage has started. */
++  hasStartedStage(): boolean {
++    return this.records.some(record => record.stage.endsWith("-started") && record.stage !== "started");
++  }
++
++  /** Record request boundaries and tag raw worker responses with this operation and stage. */
++  async runStage<T>(stage: string, task: () => Promise<T>, recovering = false): Promise<T> {
++    const started = this.records.map(record => record.stage).lastIndexOf(`${stage}-started`);
++    const finished = Math.max(this.records.map(record => record.stage).lastIndexOf(stage),
++      this.records.map(record => record.stage).lastIndexOf(`${stage}-error`));
++    const interrupted = recovering && started > finished;
++    let attemptId: string;
++    if (interrupted) {
++      const previous = z.object({ attemptId: z.string().uuid() }).safeParse(this.records[started]!.data);
++      if (!previous.success) throw Object.assign(new Error(`The interrupted ${stage} operation has no request identity`), {
++        code: "CHAPTER_RESUME_AMBIGUOUS_STAGE", chapterNumber: this.chapterNumber, stage,
++      });
++      attemptId = previous.data.attemptId;
++    } else {
++      attemptId = randomUUID();
++      await this.record(`${stage}-started`, "running", { attemptId });
++    }
++    const requestSchema = z.object({ attemptId: z.string().uuid(), sequence: z.number().int().positive(), fingerprint: z.string().regex(/^[a-f0-9]{64}$/) }).strict();
++    const previousRequests = this.records.flatMap(record => {
++      if (record.stage !== `${stage}-request-started` || !record.data || typeof record.data !== "object"
++        || (record.data as { attemptId?: unknown }).attemptId !== attemptId) return [];
++      return [requestSchema.parse(record.data)];
++    });
++    if (new Set(previousRequests.map(request => request.sequence)).size !== previousRequests.length) {
++      throw Object.assign(new Error(`Duplicate request identity in ${stage} checkpoint`), { code: "CHAPTER_RESUME_INPUT_CHANGED" });
++    }
++    const usedRequests = new Set<number>();
++    let sequence = previousRequests.reduce((max, request) => Math.max(max, request.sequence), 0);
++    const beginRequest = async (fingerprint: string) => {
++      const request = previousRequests.find(item => !usedRequests.has(item.sequence) && item.fingerprint === fingerprint);
++      if (request) {
++        usedRequests.add(request.sequence);
++        return { sequence: request.sequence, replay: true };
++      }
++      if (usedRequests.size < previousRequests.length) throw Object.assign(new Error(`The ${stage} request changed since interruption`), {
++        code: "CHAPTER_RESUME_INPUT_CHANGED", chapterNumber: this.chapterNumber, stage,
++      });
++      sequence += 1;
++      await this.record(`${stage}-request-started`, "running", { attemptId, sequence, fingerprint });
++      return { sequence, replay: false };
++    };
++    try {
++      return await withChapterStage({ operationId: this.operationId, bookId: this.bookId,
++        chapterNumber: this.chapterNumber, stage, attemptId, beginRequest }, task);
++    } catch (error) {
++      if (isChapterResumeSafetyError(error)) throw error;
++      await this.record(`${stage}-error`, "failed", { message: String(error), code: (error as { code?: string })?.code });
++      throw error;
++    }
++  }
++
++  /** Return a stage only if it was recorded after the specified prerequisite. */
++  latestRecordAfter(stage: string, prerequisite: string): ChapterCheckpointRecord | undefined {
++    let prerequisiteIndex = -1;
++    for (let index = this.records.length - 1; index >= 0; index -= 1) {
++      if (this.records[index]!.stage === prerequisite) { prerequisiteIndex = index; break; }
++    }
++    if (prerequisiteIndex < 0) return undefined;
++    return this.records.slice(prerequisiteIndex + 1).reverse().find(record => record.stage === stage);
++  }
++
++  latestRecord(stage: string): ChapterCheckpointRecord | undefined {
++    return [...this.records].reverse().find(record => record.stage === stage);
++  }
++
++  /** Preserve the accumulated usage of earlier attempts when continuing an operation. */
++  latestCumulativeUsage(): z.infer<typeof UsageSchema> | undefined {
++    for (let index = this.records.length - 1; index >= 0; index -= 1) {
++      const record = this.records[index]!;
++      if (!record.data || typeof record.data !== "object") continue;
++      const data = record.data as { totalUsage?: unknown; output?: { tokenUsage?: unknown } };
++      if (data.totalUsage !== undefined) return UsageSchema.parse(data.totalUsage);
++      if (record.stage === "draft" && data.output?.tokenUsage !== undefined) return UsageSchema.parse(data.output.tokenUsage);
++    }
++    return undefined;
++  }
++
++  /** A completed but malformed stage is never treated as absent. */
++  completed<T extends z.ZodTypeAny>(stage: string, schema: T): z.infer<T> | undefined {
++    const record = this.latestRecord(stage);
++    if (!record || record.status !== "completed") return undefined;
++    return schema.parse(record.data);
++  }
++
++  completedAfter<T extends z.ZodTypeAny>(stage: string, prerequisite: string, schema: T): z.infer<T> | undefined {
++    const record = this.latestRecordAfter(stage, prerequisite);
++    if (!record || record.status !== "completed") return undefined;
++    return schema.parse(record.data);
++  }
++
++  completedAfterAll<T extends z.ZodTypeAny>(stage: string, prerequisites: ReadonlyArray<string>, schema: T): z.infer<T> | undefined {
++    let lastPrerequisite = -1;
++    for (const prerequisite of prerequisites) {
++      let found = -1;
++      for (let index = this.records.length - 1; index >= 0; index -= 1) {
++        if (this.records[index]!.stage === prerequisite) { found = index; break; }
++      }
++      if (found < 0) return undefined;
++      lastPrerequisite = Math.max(lastPrerequisite, found);
++    }
++    const record = this.records.slice(lastPrerequisite + 1).reverse().find(item => item.stage === stage);
++    if (!record || record.status !== "completed") return undefined;
++    return schema.parse(record.data);
++  }
++
++  completedMatching<T extends z.ZodTypeAny>(stage: string, schema: T, predicate: (value: z.infer<T>) => boolean): z.infer<T> | undefined {
++    for (let index = this.records.length - 1; index >= 0; index -= 1) {
++      const record = this.records[index]!;
++      if (record.stage !== stage || record.status !== "completed") continue;
++      const value = schema.parse(record.data);
++      if (predicate(value)) return value;
++    }
++    return undefined;
++  }
++
++  matching<T extends z.ZodTypeAny>(stage: string, schema: T, predicate: (value: z.infer<T>) => boolean): z.infer<T> | undefined {
++    for (let index = this.records.length - 1; index >= 0; index -= 1) {
++      const record = this.records[index]!;
++      if (record.stage !== stage) continue;
++      const value = schema.parse(record.data);
++      if (predicate(value)) return value;
++    }
++    return undefined;
++  }
++
++  async record(stage: string, status: CheckpointStatus, data: unknown): Promise<void> {
++    const write = this.writeQueue.then(async () => {
++      const records = [...this.records, { stage, status, at: new Date().toISOString(), data }];
++      await this.save(records);
++    });
++    this.writeQueue = write.catch(() => undefined);
++    await write;
++  }
++
++  private async save(records: ChapterCheckpointRecord[]): Promise<void> {
++    await commitAtomicFileSet({ rootDir: this.projectRoot, writes: [{
++      relativePath: this.relativePath,
++      content: `${JSON.stringify({ version: 1, operationId: this.operationId, bookId: this.bookId,
++        chapterNumber: this.chapterNumber, records }, null, 2)}\n`,
++    }] });
++    this.records = records;
++  }
++}
+diff --git a/packages/core/src/pipeline/chapter-legacy-evidence.ts b/packages/core/src/pipeline/chapter-legacy-evidence.ts
+new file mode 100644
+index 00000000..97d89d20
+--- /dev/null
++++ b/packages/core/src/pipeline/chapter-legacy-evidence.ts
+@@ -0,0 +1,180 @@
++import { readFile, lstat, stat } from "node:fs/promises";
++import { DatabaseSync } from "node:sqlite";
++import { basename, isAbsolute, join, relative, resolve } from "node:path";
++import { isDeepStrictEqual } from "node:util";
++import { z } from "zod";
++import type { BookConfig } from "../models/book.js";
++import type { ChapterMeta } from "../models/chapter.js";
++import { ContextPackageSchema } from "../models/input-governance.js";
++import { RuntimeStateDeltaSchema } from "../models/runtime-state.js";
++import { resolveNarrativeLanguage } from "../utils/book-language.js";
++import { readChapterVersion } from "../state/chapter-workspace.js";
++import { buildRuntimeStateArtifactsFromSnapshot, loadRuntimeStateSnapshot, loadRuntimeStateSnapshotAtChapter } from "../state/runtime-state-store.js";
++import { loadPersistedPlan } from "./persisted-governed-plan.js";
++import { ChapterCheckpoint, chapterAuthorityHashes, chapterBookIdentity } from "./chapter-checkpoint.js";
++
++const ArchiveSchema = z.object({ workId: z.string(), agentRole: z.string(),
++  validation: z.object({ stages: z.array(z.object({ stage: z.string(), status: z.string() }).passthrough()) }).passthrough(),
++  response: z.object({ stopReason: z.string(), content: z.array(z.unknown()),
++    usage: z.object({ input: z.number(), output: z.number(), totalTokens: z.number() }).passthrough() }).passthrough(),
++}).passthrough();
++const EventPayloadSchema = z.object({ artifactPath: z.string(), role: z.string(), resultTool: z.string() }).passthrough();
++const ActionSchema = z.object({ parameters: z.object({ bookId: z.string(), startChapterNumber: z.number().int(),
++  chapterCount: z.number().int(), chapterWordCount: z.number().int().positive().optional(), instruction: z.string() }).passthrough() }).passthrough();
++
++type EpisodeEvent = { seq: number; timestamp: string; type: string; payload_json: string };
++
++function fail(message: string): never {
++  throw Object.assign(new Error(`Cannot recover legacy chapter safely: ${message}`), { code: "CHAPTER_LEGACY_EVIDENCE_INSUFFICIENT" });
++}
++
++function passedArchive(archive: z.infer<typeof ArchiveSchema>, bookId: string, role: string, tool: string): Record<string, unknown> {
++  if (archive.workId !== bookId || archive.agentRole !== role || archive.response.stopReason !== "toolUse") fail(`invalid ${tool} response identity`);
++  const stages = archive.validation.stages;
++  if (!stages.some(item => item.stage === "schema" && item.status === "passed")
++    || !stages.some(item => item.stage === "domain" && item.status === "passed")
++    || stages.some(item => item.status === "failed")) fail(`${tool} response was not fully validated`);
++  const calls = archive.response.content.filter(item => item && typeof item === "object"
++    && (item as { type?: unknown }).type === "toolCall" && (item as { name?: unknown }).name === tool);
++  if (calls.length !== 1) fail(`ambiguous ${tool} response`);
++  return z.record(z.unknown()).parse((calls[0] as { arguments?: unknown }).arguments);
++}
++
++async function readEpisodeArchive(projectRoot: string, bookId: string, event: EpisodeEvent): Promise<z.infer<typeof ArchiveSchema>> {
++  const payload = EventPayloadSchema.parse(JSON.parse(event.payload_json));
++  const directory = resolve(projectRoot, ".inkos", "agent-runs", encodeURIComponent(bookId).replace(/\./g, "%2E"), "worker-responses");
++  const path = resolve(payload.artifactPath);
++  const within = relative(directory, path);
++  if (!within || within !== basename(within) || isAbsolute(within) || within === "..") fail("response archive path is outside this work");
++  const file = await lstat(path);
++  if (!file.isFile() || file.isSymbolicLink()) fail("response archive is not a regular file");
++  return ArchiveSchema.parse(JSON.parse(await readFile(path, "utf8")));
++}
++
++/** Recover only a persisted draft whose complete production episode can be independently matched. */
++export async function bootstrapLegacyAuditCheckpoint(input: {
++  projectRoot: string; bookId: string; bookDir: string; book: BookConfig; chapter: ChapterMeta;
++  sourceState: ReadonlyMap<string, string>; currentContent: string;
++}): Promise<ChapterCheckpoint> {
++  const { projectRoot, bookId, bookDir, book, chapter, sourceState, currentContent } = input;
++  const revision = chapter.autoRevision;
++  if (revision?.status !== "skipped" || revision.reason !== "audit-unavailable" || !revision.originalVersionId
++    || !chapter.observations.some(item => item.code === "review-unavailable") || !chapter.tokenUsage || !revision.initialReview) {
++    fail("the latest chapter is not a saved draft with an unavailable initial audit");
++  }
++  const match = /^(\d{13})_agent_[0-9a-f-]{36}$/.exec(revision.originalVersionId);
++  if (!match) fail("draft version identity is invalid");
++  const draftTime = Number(match[1]);
++  const archivedDraft = await readChapterVersion(bookDir, chapter.number, revision.originalVersionId);
++  if (archivedDraft !== currentContent) fail("the saved chapter differs from the original draft");
++  const dbPath = join(projectRoot, ".inkos", "harness.sqlite");
++  try { await stat(dbPath); } catch { fail("production episode journal is missing"); }
++  const db = new DatabaseSync(dbPath, { readOnly: true });
++  let selected: { action: z.infer<typeof ActionSchema>; startedAt: string; events: EpisodeEvent[];
++    draft: z.infer<typeof ArchiveSchema>; draftArgs: Record<string, unknown>; draftSeq: number } | undefined;
++  try {
++    const actions = db.prepare("SELECT episode_id, timestamp, payload_json FROM creative_episode_events WHERE work_id = ? AND type = 'action-started' AND action_id = 'write_chapters' AND timestamp <= ? ORDER BY timestamp DESC LIMIT 100")
++      .all(bookId, new Date(draftTime + 1000).toISOString()) as unknown as Array<{ episode_id: string; timestamp: string; payload_json: string }>;
++    for (const row of actions) {
++      const parsed = ActionSchema.safeParse(JSON.parse(row.payload_json));
++      if (!parsed.success || parsed.data.parameters.bookId !== bookId || parsed.data.parameters.startChapterNumber !== chapter.number
++        || parsed.data.parameters.chapterCount !== 1) continue;
++      const events = db.prepare("SELECT seq, timestamp, type, payload_json FROM creative_episode_events WHERE episode_id = ? ORDER BY seq")
++        .all(row.episode_id) as unknown as EpisodeEvent[];
++      for (const event of events.filter(item => item.type === "worker-response-archived")) {
++        const payload = EventPayloadSchema.safeParse(JSON.parse(event.payload_json));
++        const eventTime = Date.parse(event.timestamp);
++        if (!payload.success || payload.data.role !== "writer" || payload.data.resultTool !== "submit_chapter_draft"
++          || !Number.isFinite(eventTime) || Math.abs(eventTime - draftTime) > 30_000) continue;
++        const archive = await readEpisodeArchive(projectRoot, bookId, event);
++        const args = passedArchive(archive, bookId, "writer", "submit_chapter_draft");
++        if (typeof args.content === "string" && args.content.trim() === archivedDraft
++          && typeof args.title === "string" && args.title.trim() === chapter.title) {
++          selected = { action: parsed.data, startedAt: row.timestamp, events, draft: archive, draftArgs: args, draftSeq: event.seq };
++          break;
++        }
++      }
++      if (selected) break;
++    }
++  } finally { db.close(); }
++  if (!selected) fail("no production episode matches the saved draft");
++
++  const startedTime = Date.parse(selected.startedAt);
++  if (!Number.isFinite(startedTime)) fail("episode timestamp is invalid");
++  const stableSources = chapterAuthorityHashes(sourceState, chapter.number);
++  for (const path of [...Object.keys(stableSources), "source/book.json"]) {
++    const file = await stat(join(bookDir, path.slice("source/".length)));
++    if (file.mtimeMs > startedTime + 1000) fail(`book source changed after the episode began: ${path}`);
++  }
++  const plan = await loadPersistedPlan(bookDir, chapter.number);
++  if (!plan) fail("saved chapter plan is missing");
++  const contextPath = join(bookDir, "story", "runtime", `chapter-${String(chapter.number).padStart(4, "0")}.context.json`);
++  const contextPackage = ContextPackageSchema.parse(JSON.parse(await readFile(contextPath, "utf8")));
++  if (contextPackage.chapter !== chapter.number || (await stat(contextPath)).mtimeMs > draftTime + 1000) fail("saved context does not belong to the draft");
++  const promptEvent = [...selected.events].reverse().find(event => event.seq < selected!.draftSeq && event.type === "model-call-started"
++    && JSON.stringify(JSON.parse(event.payload_json).context?.tools ?? []).includes("submit_chapter_draft"));
++  if (!promptEvent) fail("author request is missing from the episode");
++  const prompt = JSON.stringify(JSON.parse(promptEvent.payload_json).context);
++  const contains = (value: string) => prompt.includes(JSON.stringify(value).slice(1, -1));
++  if (!contains(plan.memo.goal) || !contains(plan.memo.body)
++    || contextPackage.selectedContext.some(source => source.excerpt && !contains(source.excerpt))) fail("saved plan or context differs from the author request");
++  const instruction = selected.action.parameters.instruction.trim();
++  const generic = instruction === "Write the requested consecutive chapters for the active Work."
++    || instruction === `Rewrite chapter ${chapter.number}.`;
++  const externalContext = generic ? undefined : instruction;
++  if (externalContext && !contains(externalContext)) fail("original chapter instruction is absent from the author request");
++
++  const baseline = await loadRuntimeStateSnapshotAtChapter({ bookDir, chapterNumber: chapter.number - 1, language: book.language });
++  const live = await loadRuntimeStateSnapshot(bookDir);
++  const savedSnapshot = await loadRuntimeStateSnapshotAtChapter({ bookDir, chapterNumber: chapter.number, language: book.language });
++  if (!isDeepStrictEqual(live, savedSnapshot) || live.manifest.lastAppliedChapter !== chapter.number) fail("current canon does not match the chapter snapshot");
++  const archiveEvents = selected.events.filter(event => event.type === "worker-response-archived" && event.seq > selected!.draftSeq);
++  const byTool = (tool: string) => archiveEvents.filter(event => {
++    const payload = EventPayloadSchema.safeParse(JSON.parse(event.payload_json));
++    return payload.success && payload.data.resultTool === tool;
++  });
++  const validatorEvents = byTool("submit_state_validation");
++  const validatorEvent = validatorEvents.at(-1);
++  if (!validatorEvent) fail("state validation response is missing");
++  const validationArchive = await readEpisodeArchive(projectRoot, bookId, validatorEvent);
++  const validationArgs = passedArchive(validationArchive, bookId, "state-validator", "submit_state_validation");
++  if (validationArgs.reconciliationRequired !== false || typeof validationArgs.reportMarkdown !== "string") fail("state validation was not successful");
++  const settlementEvents = byTool("submit_runtime_state_delta").filter(event => event.seq < validatorEvent.seq);
++  const settlementEvent = settlementEvents.at(-1);
++  if (!settlementEvent) fail("settlement response is missing");
++  const settlementArchive = await readEpisodeArchive(projectRoot, bookId, settlementEvent);
++  const settlement = passedArchive(settlementArchive, bookId, "writer", "submit_runtime_state_delta");
++  if (typeof settlement.postSettlement !== "string" || !settlement.chapterSummary || typeof settlement.chapterSummary !== "object") fail("settlement response is incomplete");
++  const delta = RuntimeStateDeltaSchema.parse({ chapter: chapter.number, factOps: settlement.factOps, hookOps: settlement.hookOps,
++    newHookCandidates: settlement.newHookCandidates, chapterSummary: { ...(settlement.chapterSummary as object), chapter: chapter.number } });
++  const rebuilt = buildRuntimeStateArtifactsFromSnapshot({ snapshot: baseline, delta, language: book.language,
++    projectionLanguage: resolveNarrativeLanguage(book) });
++  if (!isDeepStrictEqual(rebuilt.snapshot, live)) fail("archived settlement does not reproduce current canon");
++  const draftUsage = { promptTokens: selected.draft.response.usage.input, completionTokens: selected.draft.response.usage.output,
++    totalTokens: selected.draft.response.usage.totalTokens };
++  const settlementUsage = { promptTokens: settlementArchive.response.usage.input, completionTokens: settlementArchive.response.usage.output,
++    totalTokens: settlementArchive.response.usage.totalTokens };
++  const output = { chapterNumber: chapter.number, title: chapter.title, content: currentContent, wordCount: chapter.wordCount, tokenUsage: draftUsage };
++  const persistenceOutput = { ...output, postSettlement: settlement.postSettlement, runtimeStateDelta: rebuilt.resolvedDelta,
++    runtimeStateSnapshot: rebuilt.snapshot, updatedState: rebuilt.currentStateMarkdown, updatedHooks: rebuilt.hooksMarkdown,
++    updatedChapterSummaries: rebuilt.chapterSummariesMarkdown, runtimeStateApplied: true,
++    tokenUsage: { promptTokens: draftUsage.promptTokens + settlementUsage.promptTokens,
++      completionTokens: draftUsage.completionTokens + settlementUsage.completionTokens, totalTokens: draftUsage.totalTokens + settlementUsage.totalTokens } };
++  const observations = validationArgs.reportMarkdown.trim() ? [{ code: "state-projection-review", summary: validationArgs.reportMarkdown.trim(), evidence: [] }] : [];
++  const truth = { validation: { consistent: true, reconciliationRequired: false, observations }, persistenceOutput };
++  const totalUsage = chapter.tokenUsage;
++  const initialReview = revision.initialReview;
++  return ChapterCheckpoint.createFromRecords(projectRoot, bookId, chapter.number, [
++    { stage: "started", status: "completed", data: { wordCount: selected.action.parameters.chapterWordCount ?? chapter.lengthTelemetry?.target ?? book.chapterWordCount, externalContext } },
++    { stage: "baseline", status: "completed", data: { runtimeSnapshot: baseline, authorityHashes: stableSources, bookIdentity: chapterBookIdentity(book) } },
++    { stage: "prepared", status: "completed", data: { externalContext, chapterIntent: plan.intentMarkdown, chapterMemo: plan.memo, chapterIntentData: plan.intent, contextPackage } },
++    { stage: "draft", status: "completed", data: { output, draftVersion: { id: revision.originalVersionId } } },
++    { stage: "audit", status: "failed", data: { content: currentContent, wordCount: chapter.wordCount, review: initialReview, totalUsage } },
++    { stage: "revision", status: "skipped", data: { autoRevision: revision, finalContent: currentContent, totalUsage } },
++    { stage: "settlement", status: "completed", data: { candidate: false, content: currentContent, persistenceOutput, totalUsage } },
++    { stage: "state-validation", status: "completed", data: truth },
++    { stage: "post-audit", status: "skipped", data: { autoRevision: revision, auditResult: initialReview, totalUsage, content: currentContent } },
++    { stage: "persisted", status: "incomplete", data: { chapterNumber: chapter.number, title: chapter.title, content: currentContent,
++      autoRevision: revision, auditResult: initialReview, finalWordCount: chapter.wordCount, lengthTelemetry: chapter.lengthTelemetry, totalUsage } },
++  ]);
++}
+diff --git a/packages/core/src/pipeline/chapter-review.ts b/packages/core/src/pipeline/chapter-review.ts
+index 534adacc..26e4b9ea 100644
+--- a/packages/core/src/pipeline/chapter-review.ts
++++ b/packages/core/src/pipeline/chapter-review.ts
+@@ -5,6 +5,7 @@ import type { LengthSpec } from "../models/length-governance.js";
+ import { countChapterLength } from "../utils/length-metrics.js";
+ import { resolveNarrativeLanguage, type NarrativeLanguage } from "../utils/book-language.js";
+ import { usageFromError } from "./auto-revision-policy.js";
++import { isChapterResumeSafetyError } from "../agent/chapter-stage-context.js";
+ 
+ export interface ChapterReviewUsage {
+   readonly promptTokens: number;
+@@ -70,6 +71,7 @@ export async function reviewChapterDraft(params: {
+       },
+     );
+   } catch (error) {
++    if (isChapterResumeSafetyError(error)) throw error;
+     const isEnglish = narrativeLanguage === "en";
+     const isRussian = narrativeLanguage === "ru";
+     const failedUsage = usageFromError(error);
+diff --git a/packages/core/src/pipeline/chapter-state-recovery.ts b/packages/core/src/pipeline/chapter-state-recovery.ts
+index 8ab7bccf..a8c81383 100644
+--- a/packages/core/src/pipeline/chapter-state-recovery.ts
++++ b/packages/core/src/pipeline/chapter-state-recovery.ts
+@@ -11,6 +11,7 @@ import type { BookConfig } from "../models/book.js";
+ import type { ContextPackage } from "../models/input-governance.js";
+ import type { LengthLanguage } from "../utils/length-metrics.js";
+ import { resolveNarrativeLanguage } from "../utils/book-language.js";
++import { isChapterResumeSafetyError } from "../agent/chapter-stage-context.js";
+ 
+ export interface SettlementRetryParams {
+   readonly writer: Pick<WriterAgent, "settleChapterState">;
+@@ -87,6 +88,7 @@ export async function reconcileChapterStateAfterReview(
+       resolveNarrativeLanguage(params.book),
+     );
+   } catch (error) {
++    if (isChapterResumeSafetyError(error)) throw error;
+     const validation: ValidationResult = {
+       consistent: false,
+       reconciliationRequired: true,
+diff --git a/packages/core/src/pipeline/chapter-truth-validation.ts b/packages/core/src/pipeline/chapter-truth-validation.ts
+index 6266ad03..137ede9e 100644
+--- a/packages/core/src/pipeline/chapter-truth-validation.ts
++++ b/packages/core/src/pipeline/chapter-truth-validation.ts
+@@ -12,6 +12,7 @@ import {
+   renderHooksProjection,
+ } from "../state/state-projections.js";
+ import { resolveNarrativeLanguage } from "../utils/book-language.js";
++import { isChapterResumeSafetyError } from "../agent/chapter-stage-context.js";
+ 
+ export async function validateChapterTruthPersistence(params: {
+   readonly writer: Pick<WriterAgent, "settleChapterState">;
+@@ -55,6 +56,7 @@ export async function validateChapterTruthPersistence(params: {
+       resolveNarrativeLanguage(params.book),
+     );
+   } catch (error) {
++    if (isChapterResumeSafetyError(error)) throw error;
+     params.logger?.warn(`State validation error for chapter ${params.chapterNumber}: ${String(error)}`);
+     return {
+       validation: {
+diff --git a/packages/core/src/pipeline/runner.ts b/packages/core/src/pipeline/runner.ts
+index d0aeb95d..a722a424 100644
+--- a/packages/core/src/pipeline/runner.ts
++++ b/packages/core/src/pipeline/runner.ts
+@@ -1,4 +1,5 @@
+ import { AsyncLocalStorage } from "node:async_hooks";
++import { z } from "zod";
+ import {readPinnedParentCanon} from "../harness/parent-canon.js";
+ import {renderChapterDocument,chapterDocumentBody} from '../utils/chapter-document.js';
+ import {changedSourceRegion} from '../utils/source-text.js';
+@@ -7,8 +8,9 @@ import type { LLMClient, OnStreamProgress } from "../llm/provider.js";
+ import { clientWithModel } from "../llm/provider.js";
+ import type { Logger } from "../utils/logger.js";
+ import { BookConfigSchema, type BookConfig, type FanficMode } from "../models/book.js";
++import { StateManifestSchema, CurrentStateStateSchema, HooksStateSchema, ChapterSummariesStateSchema, RuntimeStateDeltaSchema } from "../models/runtime-state.js";
+ import { resolveNarrativeLanguage, type NarrativeLanguage } from "../utils/book-language.js";
+-import type { AutoRevisionOutcome, ChapterMeta } from "../models/chapter.js";
++import { AutoRevisionOutcomeSchema, type AutoRevisionOutcome, type ChapterMeta } from "../models/chapter.js";
+ import type { NotifyChannel, LLMConfig, AgentLLMOverride } from "../models/project.js";
+ import { ArchitectAgent, type ArchitectOutput } from "../agents/architect.js";
+ import { PlannerAgent, type PlanChapterOutput } from "../agents/planner.js";
+@@ -20,15 +22,15 @@ import { StateValidatorAgent, type ValidationResult } from "../agents/state-vali
+ import { RadarAgent } from "../agents/radar.js";
+ import type { RadarSource } from "../agents/radar-source.js";
+ import { StateManager } from "../state/manager.js";
+-import { archiveChapterVersion, readChapterUserBrief } from "../state/chapter-workspace.js";
++import { archiveChapterVersion, readChapterUserBrief, readChapterVersion } from "../state/chapter-workspace.js";
+ import { dispatchNotification, dispatchWebhookEvent } from "../notify/dispatcher.js";
+ import type { WebhookEvent } from "../notify/webhook.js";
+ import type { AgentContext } from "../agents/base.js";
+ import type { AuditResult } from "../agents/continuity.js";
+-import type { Observation } from "../models/observation.js";
++import { ObservationSchema, type Observation } from "../models/observation.js";
+ import type { RadarResult } from "../agents/radar.js";
+ import type { LengthSpec, LengthTelemetry } from "../models/length-governance.js";
+-import type { ChapterMemo, ChapterTrace, ContextPackage } from "../models/input-governance.js";
++import { ChapterMemoSchema, ChapterIntentSchema, ChapterTraceSchema, ContextPackageSchema, type ChapterMemo, type ChapterTrace, type ContextPackage } from "../models/input-governance.js";
+ import type { ContextCompressionCallback } from "../models/context-compression.js";
+ import { buildLengthSpec, chapterLengthDelivery, countChapterLength, formatLengthCount, resolveLengthCountingMode, type LengthLanguage } from "../utils/length-metrics.js";
+ import {
+@@ -54,6 +56,10 @@ import { createWorkManifest, loadWorkManifest, saveWorkManifest } from "../harne
+ import { WorkManifestSchema, type WorkManifest } from "../harness/contracts.js";
+ import { syncWorkSourceArtifacts, captureWorkSourceState, changedWorkSourcePaths } from "../harness/source-sync.js";
+ import { reviewChapterDraft } from "./chapter-review.js";
++import { ChapterCheckpoint, chapterAuthorityHashes, chapterBookIdentity, assertChapterCheckpointBaseline } from "./chapter-checkpoint.js";
++import { bootstrapLegacyAuditCheckpoint } from "./chapter-legacy-evidence.js";
++import { isDeepStrictEqual } from "node:util";
++import { isChapterResumeSafetyError } from "../agent/chapter-stage-context.js";
+ import { actionableFindings, reviewFindings, revisionModeFor, usageFromError } from "./auto-revision-policy.js";
+ import { validateChapterTruthPersistence } from "./chapter-truth-validation.js";
+ import { loadPersistedPlan, relativeToBookDir, savePersistedPlan } from "./persisted-governed-plan.js";
+@@ -64,6 +70,51 @@ import { commitAtomicFileSet } from "../utils/atomic-file-set.js";
+ import { compileStyleGuide } from "../agents/style-guide.js";
+ import { compileImportSource, renderCompleteImportSource } from "../agents/import-context.js";
+ 
++const CheckpointUsageSchema = z.object({ promptTokens: z.number().int().nonnegative(),
++  completionTokens: z.number().int().nonnegative(), totalTokens: z.number().int().nonnegative() });
++const PreparedCheckpointSchema = z.object({
++  externalContext: z.string().optional(), chapterIntent: z.string(), chapterMemo: ChapterMemoSchema,
++  chapterIntentData: ChapterIntentSchema.optional(), contextPackage: ContextPackageSchema,
++}).passthrough();
++const PlanCheckpointSchema = z.object({ intent: ChapterIntentSchema, memo: ChapterMemoSchema, intentMarkdown: z.string(),
++  plannerInputs: z.array(z.string()), runtimePath: z.string() });
++const ContextCheckpointSchema = z.object({ contextPackage: ContextPackageSchema, trace: ChapterTraceSchema,
++  contextPath: z.string(), tracePath: z.string() });
++const DraftCheckpointSchema = z.object({
++  output: z.object({ chapterNumber: z.number().int().positive(), title: z.string().min(1), content: z.string().min(1),
++    wordCount: z.number().int().nonnegative(), tokenUsage: CheckpointUsageSchema }),
++  draftVersion: z.object({ id: z.string().min(1) }).passthrough().optional(),
++});
++const AuditCheckpointSchema = z.object({
++  content: z.string().min(1), wordCount: z.number().int().nonnegative(), totalUsage: CheckpointUsageSchema,
++  review: z.object({ summary: z.string(), observations: z.array(ObservationSchema), unavailable: z.boolean().optional(),
++    tokenUsage: CheckpointUsageSchema.optional(),
++    reviewedArtifact: z.object({ workId: z.string(), artifactId: z.string(), revisionId: z.string() }).optional() }),
++});
++const RevisionCheckpointSchema = z.object({
++  autoRevision: AutoRevisionOutcomeSchema, finalContent: z.string().min(1), candidateContent: z.string().optional(),
++  candidateVersionId: z.string().optional(), pendingRevisionContext: ContextPackageSchema.optional(), totalUsage: CheckpointUsageSchema,
++});
++const RevisionCandidateCheckpointSchema = z.object({ content: z.string().min(1), candidateVersionId: z.string().min(1) });
++const RuntimeSnapshotCheckpointSchema = z.object({ manifest: StateManifestSchema, currentState: CurrentStateStateSchema,
++  hooks: HooksStateSchema, chapterSummaries: ChapterSummariesStateSchema });
++const BaselineCheckpointSchema = z.object({ runtimeSnapshot: RuntimeSnapshotCheckpointSchema, authorityHashes: z.record(z.string()), bookIdentity: z.unknown() });
++const StartedCheckpointSchema = z.object({ wordCount: z.number().int().positive().optional(), temperatureOverride: z.number().optional(), externalContext: z.string().optional() });
++const PersistedCheckpointSchema = z.object({ chapterNumber: z.number().int().positive(), title: z.string(), content: z.string(),
++  autoRevision: AutoRevisionOutcomeSchema, auditResult: AuditCheckpointSchema.shape.review,
++  finalWordCount: z.number().int().nonnegative(), lengthTelemetry: z.unknown().optional(), totalUsage: CheckpointUsageSchema });
++const PersistenceOutputCheckpointSchema = z.object({ chapterNumber: z.number().int().positive(), title: z.string(), content: z.string(),
++  wordCount: z.number().int().nonnegative(), postSettlement: z.string(), runtimeStateDelta: RuntimeStateDeltaSchema,
++  runtimeStateSnapshot: RuntimeSnapshotCheckpointSchema, updatedState: z.string(), updatedHooks: z.string(),
++  updatedChapterSummaries: z.string(), runtimeStateApplied: z.boolean(), tokenUsage: CheckpointUsageSchema.optional() });
++const SettlementCheckpointSchema = z.object({ candidate: z.boolean(), content: z.string(), persistenceOutput: PersistenceOutputCheckpointSchema,
++  totalUsage: CheckpointUsageSchema });
++const TruthCheckpointSchema = z.object({ validation: z.object({ consistent: z.boolean(), reconciliationRequired: z.boolean(),
++  observations: z.array(ObservationSchema) }), persistenceOutput: PersistenceOutputCheckpointSchema });
++const PostAuditCheckpointSchema = z.object({ autoRevision: AutoRevisionOutcomeSchema,
++  candidateReview: AuditCheckpointSchema.shape.review.optional(), auditResult: AuditCheckpointSchema.shape.review,
++  totalUsage: CheckpointUsageSchema, content: z.string() });
++
+ function mergeChapterRevisionInstructions(
+   persistedBrief: string,
+   currentInstruction?: string,
+@@ -117,6 +168,8 @@ export interface PipelineConfig {
+   readonly notifyChannels?: ReadonlyArray<NotifyChannel>;
+   readonly radarSources?: ReadonlyArray<RadarSource>;
+   readonly externalContext?: string;
++  /** Explicit chapter rewrite replaces the interrupted operation after confirmation. */
++  readonly allowIncompleteRewrite?: boolean;
+   readonly modelOverrides?: Record<string, string | AgentLLMOverride>;
+   readonly logger?: Logger;
+   readonly onStreamProgress?: OnStreamProgress;
+@@ -1179,6 +1232,72 @@ export class PipelineRunner {
+     }
+   }
+ 
++  /** Continue the latest saved chapter operation without re-running completed model stages. */
++  async resumeChapter(bookId: string, requestedChapter?: number): Promise<ChapterPipelineResult> {
++    const releaseLock = await this.state.acquireBookLock(bookId);
++    try {
++      const book = await this.state.loadBookConfig(bookId);
++      const bookDir = this.state.bookDir(bookId);
++      const index = await this.state.loadChapterIndex(bookId);
++      const sourceBefore = await captureWorkSourceState(this.config.projectRoot, bookId);
++      let checkpoint = requestedChapter === undefined
++        ? await ChapterCheckpoint.latestForBook(this.config.projectRoot, bookId)
++        : await ChapterCheckpoint.latest(this.config.projectRoot, bookId, requestedChapter);
++      const latestChapter = index.reduce((latest, item) => Math.max(latest, item.number), 0);
++      const legacyChapter = requestedChapter ?? latestChapter;
++      if ((!checkpoint || (requestedChapter === undefined && checkpoint.chapter < latestChapter)) && legacyChapter > 0) {
++        const chapter = index.find(item => item.number === legacyChapter);
++        if (chapter && chapter.number === latestChapter) checkpoint = await bootstrapLegacyAuditCheckpoint({
++          projectRoot: this.config.projectRoot, bookId, bookDir, book, chapter, sourceState: sourceBefore,
++          currentContent: await this.readChapterContent(bookDir, chapter.number),
++        });
++      }
++      if (!checkpoint) throw Object.assign(new Error("No chapter checkpoint found for this book"), { code: "CHAPTER_CHECKPOINT_NOT_FOUND" });
++      const chapterNumber = checkpoint.chapter;
++      if (index.some(chapter => chapter.number > chapterNumber)) {
++        throw Object.assign(new Error("Cannot resume a chapter after later chapters have been saved"), { code: "CHAPTER_RESUME_NOT_LATEST" });
++      }
++      const chapterPersisted = index.some(chapter => chapter.number === chapterNumber);
++      if (!chapterPersisted && await this.state.getNextChapterNumber(bookId) !== chapterNumber) {
++        throw Object.assign(new Error("Checkpoint does not refer to the next chapter"), { code: "CHAPTER_RESUME_NUMBER_CONFLICT" });
++      }
++      const started = checkpoint.completed("started", StartedCheckpointSchema);
++      if (!started) throw new Error("Chapter checkpoint has no operation settings");
++      const liveSnapshot = await loadRuntimeStateSnapshot(bookDir);
++      if (!checkpoint.latestRecord("baseline") && !chapterPersisted
++        && !checkpoint.hasStartedStage()
++        && !checkpoint.latestRecord("plan") && !checkpoint.latestRecord("context") && !checkpoint.latestRecord("draft")) {
++        await checkpoint.record("baseline", "completed", { runtimeSnapshot: liveSnapshot,
++          authorityHashes: chapterAuthorityHashes(sourceBefore, chapterNumber), bookIdentity: chapterBookIdentity(book) });
++      }
++      const baselineSnapshot = chapterPersisted
++        ? await loadRuntimeStateSnapshotAtChapter({ bookDir, chapterNumber: chapterNumber - 1, language: book.language })
++        : liveSnapshot;
++      assertChapterCheckpointBaseline(checkpoint.latestRecord("baseline"), sourceBefore, baselineSnapshot, book, chapterNumber);
++
++      if (chapterPersisted) {
++        const currentContent = await this.readChapterContent(bookDir, chapterNumber);
++        const savedTruth = checkpoint.matching("state-validation", TruthCheckpointSchema, item =>
++          item.persistenceOutput.content === currentContent && isDeepStrictEqual(item.persistenceOutput.runtimeStateSnapshot, liveSnapshot));
++        if (!savedTruth) {
++          throw Object.assign(new Error("Saved chapter or state changed since the checkpoint"), { code: "CHAPTER_RESUME_CHAPTER_CHANGED" });
++        }
++      }
++      const completed = checkpoint.completed("persisted", PersistedCheckpointSchema);
++      if (completed) return { chapterNumber, title: completed.title, wordCount: completed.finalWordCount,
++        review: completed.auditResult, autoRevision: completed.autoRevision, tokenUsage: completed.totalUsage };
++
++      const result = await this._executeNextChapterLocked(bookId, started.wordCount, started.temperatureOverride,
++        started.externalContext, { checkpoint, chapterNumber, chapterPersisted }, async () => {
++          await syncWorkSourceArtifacts({ projectRoot: this.config.projectRoot, workId: bookId, accept: true,
++            acceptPaths: await changedWorkSourcePaths(this.config.projectRoot, bookId, sourceBefore) });
++        });
++      return result;
++    } finally {
++      await releaseLock();
++    }
++  }
++
+   async writeChapters(
+     bookId: string,
+     chapterCount: number,
+@@ -1254,6 +1373,12 @@ export class PipelineRunner {
+     externalContext?: string,
+   ): Promise<ChapterPipelineResult> {
+     const bookDir = this.state.bookDir(bookId);
++    const previousRun = await ChapterCheckpoint.latestForBook(this.config.projectRoot, bookId);
++    if (!this.config.allowIncompleteRewrite && previousRun && previousRun.latestRecord("persisted")?.status !== "completed") {
++      throw Object.assign(new Error(`Chapter ${previousRun.chapter} has an incomplete operation; use write resume first`), {
++        code: "CHAPTER_RESUME_REQUIRED", chapterNumber: previousRun.chapter,
++      });
++    }
+     if (!await this.state.isCompleteBookDirectory(bookDir)) {
+       throw Object.assign(new Error(`Work "${bookId}" is not ready for chapter writing. Complete or recover its foundation first.`), {
+         code: "WORK_NOT_READY", workId: bookId, recoveryAction: "revise_foundation",
+@@ -1267,16 +1392,15 @@ export class PipelineRunner {
+       wordCount,
+       temperatureOverride,
+       externalContext,
++      undefined,
++      async () => {
++        const chapterFile = (await readdir(join(bookDir, "chapters")))
++          .find((file) => file.startsWith(`${paddedChapter}_`) && file.endsWith(".md"));
++        if (!chapterFile) throw new Error(`Chapter ${chapterNumber} completed without a persisted chapter artifact.`);
++        await syncWorkSourceArtifacts({projectRoot:this.config.projectRoot,workId:bookId,accept:true,
++          acceptPaths:await changedWorkSourcePaths(this.config.projectRoot,bookId,sourceBefore)});
++      },
+     );
+-    const chapterFile = (await readdir(join(bookDir, "chapters")))
+-      .find((file) => file.startsWith(`${paddedChapter}_`) && file.endsWith(".md"));
+-    if (!chapterFile) {
+-      throw new Error(`Chapter ${chapterNumber} completed without a persisted chapter artifact.`);
+-    }
+-    // Publish at the same chapter boundary as native progress. A later model
+-    // failure in this batch must not hide already completed chapters from Work readers.
+-    await syncWorkSourceArtifacts({projectRoot:this.config.projectRoot,workId:bookId,accept:true,
+-      acceptPaths:await changedWorkSourcePaths(this.config.projectRoot,bookId,sourceBefore)});
+     return result;
+   }
+ 
+@@ -1285,20 +1409,33 @@ export class PipelineRunner {
+     wordCount?: number,
+     temperatureOverride?: number,
+     externalContext?: string,
++    recovery?: { readonly checkpoint: ChapterCheckpoint; readonly chapterNumber: number; readonly chapterPersisted: boolean },
++    finalize?: () => Promise<void>,
+   ): Promise<ChapterPipelineResult> {
+     this.throwIfOperationAborted();
+     await this.state.ensureControlDocuments(bookId);
+     const book = await this.state.loadBookConfig(bookId);
+     const bookDir = this.state.bookDir(bookId);
+-    const chapterNumber = await this.state.getNextChapterNumber(bookId);
++    const chapterNumber = recovery?.chapterNumber ?? await this.state.getNextChapterNumber(bookId);
++    const checkpoint = recovery?.checkpoint ?? new ChapterCheckpoint(this.config.projectRoot, bookId, chapterNumber);
++    if (!recovery) {
++      await checkpoint.record("started", "completed", { wordCount, temperatureOverride, externalContext });
++      await checkpoint.record("baseline", "completed", {
++        runtimeSnapshot: await loadRuntimeStateSnapshot(bookDir),
++        authorityHashes: chapterAuthorityHashes(await captureWorkSourceState(this.config.projectRoot, bookId), chapterNumber),
++        bookIdentity: chapterBookIdentity(book),
++      });
++    }
+     const stageLanguage = await this.resolveBookLanguage(book);
+     this.logStage(stageLanguage, { zh: "准备章节输入", en: "preparing chapter inputs" });
+-    const writeInput = await this.prepareWriteInput(
+-      book,
+-      bookDir,
+-      chapterNumber,
+-      externalContext,
++    const savedInput = recovery ? checkpoint.completed("prepared", PreparedCheckpointSchema) : undefined;
++    if (savedInput && (savedInput.chapterMemo.chapter !== chapterNumber || savedInput.contextPackage.chapter !== chapterNumber)) {
++      throw new Error("Prepared checkpoint belongs to a different chapter");
++    }
++    const writeInput = savedInput ? { ...savedInput, contextTrace: undefined } : await this.prepareWriteInput(
++      book, bookDir, chapterNumber, externalContext, checkpoint, Boolean(recovery),
+     );
++    if (!savedInput) await checkpoint.record("prepared", "completed", writeInput);
+     const reducedControlInput = {
+       chapterIntent: writeInput.chapterIntent,
+       chapterMemo: writeInput.chapterMemo,
+@@ -1314,7 +1451,9 @@ export class PipelineRunner {
+     // 1. Write chapter
+     const writer = new WriterAgent(this.agentCtxFor("writer", bookId));
+     this.logStage(stageLanguage, { zh: "撰写章节草稿", en: "writing chapter draft" });
+-    const output = await writer.writeChapterDraft({
++    const savedDraft = recovery ? checkpoint.completed("draft", DraftCheckpointSchema) : undefined;
++    if (savedDraft && savedDraft.output.chapterNumber !== chapterNumber) throw new Error("Draft checkpoint belongs to a different chapter");
++    const output = savedDraft?.output ?? await checkpoint.runStage("draft", () => writer.writeChapterDraft({
+       book,
+       bookDir,
+       chapterNumber,
+@@ -1322,16 +1461,17 @@ export class PipelineRunner {
+       lengthSpec,
+       ...(wordCount ? { wordCountOverride: wordCount } : {}),
+       ...(temperatureOverride ? { temperatureOverride } : {}),
+-    });
++    }), Boolean(recovery));
+     this.throwIfOperationAborted();
+     const writerCount = countChapterLength(output.content, lengthSpec.countingMode);
+     // Preserve the paid draft before any further model or validation call can fail.
+-    const draftVersion = book.writing?.reviewMode !== "manual"
+-      ? await archiveChapterVersion(bookDir, chapterNumber, output.content, "agent")
+-      : undefined;
++    const draftVersion = savedDraft ? savedDraft.draftVersion : book.writing?.reviewMode !== "manual"
++      ? await archiveChapterVersion(bookDir, chapterNumber, output.content, "agent") : undefined;
++    if (!savedDraft) await checkpoint.record("draft", "completed", { output, draftVersion });
+ 
+     // Token usage accumulator
+-    let totalUsage: TokenUsageSummary = output.tokenUsage ?? { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
++    const previousUsage = recovery ? checkpoint.latestCumulativeUsage() : undefined;
++    let totalUsage: TokenUsageSummary = previousUsage ?? output.tokenUsage ?? { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
+     const reviewSkill = book.writing?.reviewMode === "manual" ? undefined :
+       (await loadAvailableAgentSkills({ projectRoot: this.config.projectRoot })).skills.filter((skill) => skill.id === "inkos-story-review").at(-1);
+     const reviewAgentContext = (agent: "auditor" | "reviser"): AgentContext => {
+@@ -1339,7 +1479,9 @@ export class PipelineRunner {
+       return { ...context, activatedSkills: mergeActivatedSkillGuidance(reviewSkill ? [{ skill: reviewSkill, resources: [] }] : [], context.activatedSkills ?? []) };
+     };
+     this.logStage(stageLanguage, { zh: "生成章节审查观察", en: "collecting chapter review observations" });
+-    const reviewResult = await reviewChapterDraft({
++    const savedReview = recovery ? checkpoint.completed("audit", AuditCheckpointSchema) : undefined;
++    if (savedReview && savedReview.content !== output.content) throw new Error("Audit checkpoint does not match the saved draft");
++    const reviewResult = savedReview ?? await checkpoint.runStage("audit", () => reviewChapterDraft({
+       book: { genre: book.genre, language: book.language, narrativeLanguage: resolveNarrativeLanguage(book) },
+       bookDir,
+       chapterNumber,
+@@ -1351,20 +1493,32 @@ export class PipelineRunner {
+       assertNotEmpty: (content) => this.assertChapterContentNotEmpty(content, chapterNumber, "draft generation"),
+       addUsage: PipelineRunner.addUsage,
+       disableRetries: book.writing?.reviewMode !== "manual",
+-    });
+-    totalUsage = reviewResult.totalUsage;
++    }), Boolean(recovery));
++    if (!savedReview) await checkpoint.record("audit", reviewResult.review.unavailable || reviewResult.review.observations.some(item => item.assessment === "unavailable")
++      ? "failed" : "completed", reviewResult);
++    if (recovery && (reviewResult.review.unavailable || reviewResult.review.observations.some(item => item.assessment === "unavailable"))) {
++      throw Object.assign(new Error("Chapter audit remains unavailable; run resume again after addressing the cause"), { code: "CHAPTER_RESUME_AUDIT_UNAVAILABLE" });
++    }
++    if (!savedReview || !previousUsage) totalUsage = reviewResult.totalUsage;
+     let finalContent = reviewResult.content;
+     let finalWordCount = reviewResult.wordCount;
+     let auditResult = reviewResult.review;
+     const findings = reviewFindings(reviewResult.review.observations);
+     const actionable = actionableFindings(reviewResult.review.observations);
+     const auditUnavailable = reviewResult.review.unavailable || reviewResult.review.observations.some((observation) => observation.assessment === "unavailable");
+-    let candidateContent: string | undefined;
+-    let candidateVersionId: string | undefined;
++    const savedCandidateRecord = recovery ? checkpoint.latestRecordAfter("revision-candidate", "revision-started") : undefined;
++    const savedCandidate = savedCandidateRecord?.status === "candidate" ? RevisionCandidateCheckpointSchema.parse(savedCandidateRecord.data) : undefined;
++    if (savedCandidate && await readChapterVersion(bookDir, chapterNumber, savedCandidate.candidateVersionId) !== savedCandidate.content) {
++      throw new Error("Revision candidate differs from its saved version");
++    }
++    let candidateContent: string | undefined = savedCandidate?.content;
++    let candidateVersionId: string | undefined = savedCandidate?.candidateVersionId;
+     const preserveCandidate = async (content: string) => {
++      const previousCandidate = candidateContent;
+       candidateContent = content;
+-      if (content.trim() && content !== output.content && !candidateVersionId) {
++      if (content.trim() && content !== output.content && (!candidateVersionId || previousCandidate !== content)) {
+         candidateVersionId = (await archiveChapterVersion(bookDir, chapterNumber, content, "revision")).id;
++        await checkpoint.record("revision-candidate", "candidate", { content, candidateVersionId });
+       }
+     };
+     let candidateReview: AuditResult | undefined;
+@@ -1378,7 +1532,17 @@ export class PipelineRunner {
+       ...(draftVersion ? { originalVersionId: draftVersion.id } : {}),
+       usage: { ...(reviewResult.review.tokenUsage ? { auditor: reviewResult.review.tokenUsage } : {}) },
+     };
+-    if (book.writing?.reviewMode !== "manual" && !auditUnavailable && actionable.length > 0) {
++    const savedRevision = recovery ? checkpoint.completedAfter("revision", "audit", RevisionCheckpointSchema) : undefined;
++    if (savedRevision) {
++      if (savedRevision.autoRevision.status === "applied" && (!savedRevision.pendingRevisionContext
++        || savedRevision.candidateContent !== savedRevision.finalContent)) throw new Error("Revision checkpoint is incomplete");
++      autoRevision = savedRevision.autoRevision;
++      finalContent = savedRevision.finalContent;
++      candidateContent = savedRevision.candidateContent;
++      candidateVersionId = savedRevision.candidateVersionId;
++      pendingRevisionContext = savedRevision.pendingRevisionContext;
++      if (!previousUsage) totalUsage = savedRevision.totalUsage;
++    } else if (book.writing?.reviewMode !== "manual" && !auditUnavailable && actionable.length > 0) {
+       this.logStage(stageLanguage, { zh: "根据审稿意见修订草稿", en: "revising draft from review findings" });
+       let activeStage: "reviser" | "postAudit" = "reviser";
+       try {
+@@ -1397,13 +1561,13 @@ export class PipelineRunner {
+         };
+         pendingRevisionContext = revisionContext;
+         const reviser = new ReviserAgent(reviewAgentContext("reviser"));
+-        const revised = await reviser.reviseChapter(bookDir, output.content, chapterNumber, findings.map((finding) => finding.observation),
++        const revised = await checkpoint.runStage("revision", () => reviser.reviseChapter(bookDir, output.content, chapterNumber, findings.map((finding) => finding.observation),
+           revisionModeFor(actionable), book.genre, {
+             language: book.language, narrativeLanguage: resolveNarrativeLanguage(book), chapterTitle: output.title,
+             contextPackage: revisionContext, lengthSpec, autoFindings: findings,
+             auditContext: { summary: reviewResult.review.summary, observations: reviewResult.review.observations.filter((observation) => observation.category === "execution" || observation.assessment === "unavailable") },
+             onCandidate: preserveCandidate,
+-          });
++          }), Boolean(recovery));
+         this.throwIfOperationAborted();
+         await preserveCandidate(revised.revisedContent);
+         candidateContent = revised.revisedContent;
+@@ -1421,6 +1585,7 @@ export class PipelineRunner {
+         }
+       } catch (error) {
+         this.throwIfOperationAborted();
++        if (isChapterResumeSafetyError(error)) throw error;
+         const failedUsage = usageFromError(error);
+         totalUsage = PipelineRunner.addUsage(totalUsage, failedUsage);
+         autoRevision = { ...autoRevision, status: candidateContent?.trim() && candidateContent !== output.content ? "candidate" : "unavailable", reason: `revision-or-review-unavailable: ${String(error)}`,
+@@ -1428,6 +1593,12 @@ export class PipelineRunner {
+       }
+     }
+ 
++    if (!savedRevision) await checkpoint.record("revision", autoRevision.status === "unavailable" || autoRevision.status === "candidate"
++      ? "failed" : autoRevision.status === "skipped" ? "skipped" : "completed",
++    { autoRevision, finalContent, candidateContent, candidateVersionId, pendingRevisionContext, totalUsage });
++    if (recovery && (autoRevision.status === "unavailable" || autoRevision.status === "candidate")) {
++      throw Object.assign(new Error("Chapter revision remains incomplete; the candidate and findings were preserved"), { code: "CHAPTER_RESUME_REVISION_UNAVAILABLE" });
++    }
+     this.throwIfOperationAborted();
+     // 4. Save the final chapter and truth files from a single persistence source
+     this.logStage(stageLanguage, { zh: "落盘最终章节", en: "persisting final chapter" });
+@@ -1436,8 +1607,10 @@ export class PipelineRunner {
+     // 4.1 Validate settler output before writing
+     this.logStage(stageLanguage, { zh: "校验真相文件变更", en: "validating truth file updates" });
+     const storyDir = join(bookDir, "story");
++    const savedBaseline = recovery ? checkpoint.completed("baseline", BaselineCheckpointSchema) : undefined;
++    if (recovery && !savedBaseline) throw new Error("Chapter checkpoint has no baseline");
+     const [runtimeSnapshot, authorityStoryFrame, authorityBookRules] = await Promise.all([
+-      loadRuntimeStateSnapshot(bookDir),
++      savedBaseline ? Promise.resolve(savedBaseline.runtimeSnapshot) : loadRuntimeStateSnapshot(bookDir),
+       readStoryFrame(bookDir),
+       readFile(join(storyDir, "book_rules.md"), "utf-8"),
+     ]);
+@@ -1447,42 +1620,68 @@ export class PipelineRunner {
+     const authorityChapterSummaries = renderChapterSummariesProjection(runtimeSnapshot.chapterSummaries, stateLanguage);
+     const validator = new StateValidatorAgent(this.agentCtxFor("state-validator", bookId));
+     const prepareAndValidate = async (content: string, candidate: boolean) => {
+-      const persistenceOutput = await this.buildPersistenceOutput(bookId, book, bookDir, chapterNumber, output,
+-        content, lengthSpec.countingMode, reducedControlInput, candidate);
++      const savedSettlement = recovery ? checkpoint.completedMatching("settlement", SettlementCheckpointSchema,
++        item => item.content === content && item.candidate === candidate && item.persistenceOutput.content === content
++          && item.persistenceOutput.chapterNumber === chapterNumber) : undefined;
++      const persistenceOutput = savedSettlement?.persistenceOutput ?? await checkpoint.runStage("settlement", () =>
++        this.buildPersistenceOutput(bookId, book, bookDir, chapterNumber, output,
++          content, lengthSpec.countingMode, reducedControlInput, candidate, recovery?.chapterPersisted ? chapterNumber - 1 : undefined), Boolean(recovery));
+       const draftUsage = output.tokenUsage ?? { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
+       const persistenceUsage = persistenceOutput.tokenUsage ?? draftUsage;
+-      totalUsage = PipelineRunner.addUsage(totalUsage, {
++      if (!savedSettlement) totalUsage = PipelineRunner.addUsage(totalUsage, {
+         promptTokens: Math.max(0, persistenceUsage.promptTokens - draftUsage.promptTokens),
+         completionTokens: Math.max(0, persistenceUsage.completionTokens - draftUsage.completionTokens),
+         totalTokens: Math.max(0, persistenceUsage.totalTokens - draftUsage.totalTokens),
+       });
++      if (!savedSettlement) await checkpoint.record("settlement", "completed", { candidate, content, persistenceOutput, totalUsage });
+       const validationWriter = candidate ? new WriterAgent({ ...this.agentCtxFor("writer", bookId), disableRetries: true }) : writer;
+       const validationAgent = candidate ? new StateValidatorAgent({ ...this.agentCtxFor("state-validator", bookId), disableRetries: true }) : validator;
+-      return validateChapterTruthPersistence({
++      const result = await checkpoint.runStage("state-validation", () => validateChapterTruthPersistence({
+         writer: validationWriter, validator: validationAgent, book, bookDir, chapterNumber, title: persistenceOutput.title, content, persistenceOutput,
+         previousTruth: { oldState, oldHooks },
+         authorityContext: { storyFrame: authorityStoryFrame, bookRules: authorityBookRules, chapterSummaries: authorityChapterSummaries },
+         reducedControlInput, language: pipelineLang,
+         logWarn: (message) => this.logWarn(pipelineLang, message), logger: this.config.logger,
+         allowRecovery: !candidate,
+-      });
++      }), Boolean(recovery));
++      await checkpoint.record("state-validation", result.validation.consistent && !result.validation.reconciliationRequired
++        ? "completed" : "failed", result);
++      return result;
+     };
+     let truthValidation: Awaited<ReturnType<typeof prepareAndValidate>>;
++    const savedTruth = recovery ? checkpoint.completedMatching("state-validation", TruthCheckpointSchema,
++      item => item.persistenceOutput.chapterNumber === chapterNumber && item.persistenceOutput.content === finalContent
++        && item.persistenceOutput.runtimeStateApplied && item.validation.consistent && !item.validation.reconciliationRequired) : undefined;
+     try {
+-      truthValidation = await prepareAndValidate(finalContent, autoRevision.status === "applied");
++      if (savedTruth) {
++        truthValidation = savedTruth;
++      } else truthValidation = await prepareAndValidate(finalContent, autoRevision.status === "applied");
+       this.throwIfOperationAborted();
+       if (autoRevision.status === "applied" && (!truthValidation.validation.consistent || truthValidation.validation.reconciliationRequired)) {
+         throw new Error("Revised chapter failed state validation");
+       }
+     } catch (error) {
+       this.throwIfOperationAborted();
++      if (isChapterResumeSafetyError(error)) throw error;
++      if (recovery) throw error;
+       if (autoRevision.status !== "applied") throw error;
+       autoRevision = { ...autoRevision, status: "candidate", reason: `technical-validation-failed: ${String(error)}` };
+       finalContent = output.content;
+       truthValidation = await prepareAndValidate(finalContent, false);
+       this.throwIfOperationAborted();
+     }
+-    if ((autoRevision.status === "applied" || autoRevision.status === "unchanged") && pendingRevisionContext) {
++    if (recovery && (!truthValidation.validation.consistent || truthValidation.validation.reconciliationRequired)) {
++      throw Object.assign(new Error("Chapter state validation remains incomplete"), { code: "CHAPTER_RESUME_STATE_UNAVAILABLE" });
++    }
++    const savedPostAudit = recovery && savedTruth
++      ? checkpoint.completedAfterAll("post-audit", ["audit", "revision", "state-validation"], PostAuditCheckpointSchema) : undefined;
++    if (savedPostAudit && savedPostAudit.content !== finalContent) throw new Error("Post-audit checkpoint does not match the revision");
++    if (savedPostAudit) {
++      autoRevision = savedPostAudit.autoRevision;
++      candidateReview = savedPostAudit.candidateReview;
++      auditResult = savedPostAudit.auditResult;
++      if (!previousUsage) totalUsage = savedPostAudit.totalUsage;
++    } else if ((autoRevision.status === "applied" || autoRevision.status === "unchanged") && pendingRevisionContext) {
+       try {
+         this.logStage(stageLanguage, { zh: "复核修订稿并保留审稿意见", en: "adding auditor notes to revised draft" });
+         const settledContext: ContextPackage = {
+@@ -1494,13 +1693,15 @@ export class PipelineRunner {
+             { source: "runtime/chapter-summaries", reason: "Chapter summaries settled from the accepted Reviser text", excerpt: truthValidation.persistenceOutput.updatedChapterSummaries, protection: "protected" },
+           ],
+         };
+-        const comparison = await new ContinuityAuditor(reviewAgentContext("auditor")).compareRevision({
++        const comparison = await checkpoint.runStage("post-audit", () => new ContinuityAuditor(reviewAgentContext("auditor")).compareRevision({
+           chapterNumber, original: output.content, candidate: finalContent, findings,
+           language: book.language, narrativeLanguage: resolveNarrativeLanguage(book), contextPackage: settledContext,
+-        });
++        }), Boolean(recovery));
+         this.throwIfOperationAborted();
+         totalUsage = PipelineRunner.addUsage(totalUsage, comparison.tokenUsage);
+-        autoRevision = { ...autoRevision, assessments: [...comparison.assessments], newIssues: [...comparison.newIssues], reason: "revised-text-accepted; post-audit-notes-attached",
++        autoRevision = { ...autoRevision, assessments: [...comparison.assessments], newIssues: [...comparison.newIssues],
++          ...(comparison.warnings?.length ? { postAuditWarnings: [...comparison.warnings] } : {}),
++          reason: comparison.warnings?.length ? "revised-text-accepted; post-audit-needs-review" : "revised-text-accepted; post-audit-notes-attached",
+           usage: { ...autoRevision.usage, postAudit: comparison.tokenUsage } };
+         const assessments = new Map(comparison.assessments.map((item) => [item.findingId, item]));
+         const retainedObservations = reviewResult.review.observations.flatMap((observation, index) => {
+@@ -1516,7 +1717,10 @@ export class PipelineRunner {
+         });
+         candidateReview = {
+           ...reviewResult.review,
+-          observations: [...retainedObservations, ...comparison.newIssues],
++          observations: [...retainedObservations, ...comparison.newIssues, ...(comparison.warnings ?? []).map(warning => ({
++            code: warning.code, summary: `Неподтверждённое замечание повторного аудита${warning.findingId ? ` (${warning.findingId})` : ""}: ${warning.message}`,
++            assessment: "unavailable" as const, category: "quality" as const, evidence: [],
++          }))],
+           summary: resolveNarrativeLanguage(book) === "ru"
+             ? "Текст Ревизора принят. Ниже сохранены заметки повторного аудита для вычитки."
+             : book.language === "en" ? "Reviser text accepted. Follow-up auditor notes are retained for proofreading."
+@@ -1524,6 +1728,7 @@ export class PipelineRunner {
+         };
+       } catch (error) {
+         this.throwIfOperationAborted();
++        if (isChapterResumeSafetyError(error)) throw error;
+         const failedUsage = usageFromError(error);
+         totalUsage = PipelineRunner.addUsage(totalUsage, failedUsage);
+         autoRevision = { ...autoRevision, reason: "revised-text-accepted; post-audit-unavailable", ...(failedUsage ? { usage: { ...autoRevision.usage, postAudit: failedUsage } } : {}) };
+@@ -1541,6 +1746,7 @@ export class PipelineRunner {
+       }
+     }
+     if ((autoRevision.status === "applied" || autoRevision.status === "unchanged") && candidateReview) auditResult = candidateReview;
++    if (!savedPostAudit) await checkpoint.record("post-audit", candidateReview ? "completed" : "skipped", { autoRevision, candidateReview, auditResult, totalUsage, content: finalContent });
+     if (autoRevision.status === "applied" && !draftVersion) {
+       const version = await archiveChapterVersion(bookDir, chapterNumber, output.content, "agent");
+       autoRevision = { ...autoRevision, originalVersionId: version.id };
+@@ -1576,6 +1782,26 @@ export class PipelineRunner {
+       saveChapter: (index) => writer.saveChapter(bookDir, persistenceOutput, pipelineLang, index, resolveNarrativeLanguage(book)),
+       markBookActiveIfNeeded: () => this.markBookActiveIfNeeded(bookId),
+     });
++    const pipelineIncomplete = auditUnavailable || autoRevision.status === "unavailable"
++      || autoRevision.status === "candidate"
++      || !truthValidation.validation.consistent || truthValidation.validation.reconciliationRequired;
++    const persistedCheckpoint = { chapterNumber, title: persistenceOutput.title, content: persistenceOutput.content,
++      autoRevision, auditResult, finalWordCount, lengthTelemetry, totalUsage };
++    // A saved chapter is not complete until its Work artifact revisions are synchronized.
++    await checkpoint.record("persisted", "incomplete", persistedCheckpoint);
++    await finalize?.();
++    if (!pipelineIncomplete) await checkpoint.record("persisted", "completed", persistedCheckpoint);
++    else {
++      const incompleteStages = [
++        ...(auditUnavailable ? ["audit"] : []),
++        ...(autoRevision.status === "unavailable" || autoRevision.status === "candidate" ? ["revision"] : []),
++        ...(autoRevision.reason.includes("post-audit-unavailable") ? ["post-audit"] : []),
++        ...(!truthValidation.validation.consistent || truthValidation.validation.reconciliationRequired ? ["state-validation"] : []),
++      ];
++      throw Object.assign(new Error(`Chapter ${chapterNumber} was saved, but its pipeline is incomplete (${incompleteStages.join(", ")}); use write resume`), {
++        code: "CHAPTER_RESUME_REQUIRED", chapterNumber, incompleteStages,
++      });
++    }
+ 
+     // 6. Send notification
+     if (this.config.notifyChannels && this.config.notifyChannels.length > 0) {
+@@ -2018,12 +2244,14 @@ export class PipelineRunner {
+       contextPackage: ContextPackage;
+     },
+     disableRetries = false,
++    baselineChapter?: number,
+   ): Promise<WriteChapterOutput> {
+     const writer = new WriterAgent({ ...this.agentCtxFor("writer", bookId), disableRetries });
+     const analyzed = await writer.settleChapterState({
+       book,
+       bookDir,
+       chapterNumber,
++      ...(baselineChapter === undefined ? {} : { baselineChapter, allowReapply: true }),
+       content: finalContent,
+       title: output.title,
+       chapterIntent: reducedControlInput.chapterIntent,
+@@ -2047,6 +2275,8 @@ export class PipelineRunner {
+     bookDir: string,
+     chapterNumber: number,
+     externalContext?: string,
++    checkpoint?: ChapterCheckpoint,
++    reuseCheckpoint = false,
+   ): Promise<Pick<WriteChapterInput, "externalContext" | "chapterIntent" | "chapterMemo" | "chapterIntentData" | "contextPackage"> & {
+     readonly contextTrace?: ChapterContextTraceSummary;
+   }> {
+@@ -2055,7 +2285,7 @@ export class PipelineRunner {
+       bookDir,
+       chapterNumber,
+       externalContext,
+-      { reuseExistingIntentWhenContextMissing: true },
++      { reuseExistingIntentWhenContextMissing: true, checkpoint, reuseCheckpoint },
+     );
+ 
+     return {
+@@ -2281,15 +2511,24 @@ export class PipelineRunner {
+     externalContext?: string,
+     options?: {
+       readonly reuseExistingIntentWhenContextMissing?: boolean;
++      readonly checkpoint?: ChapterCheckpoint;
++      readonly reuseCheckpoint?: boolean;
+     },
+   ): Promise<{
+     plan: PlanChapterOutput;
+     composed: ComposeChapterOutput;
+   }> {
+-    const plan = await this.resolveGovernedPlan(book, bookDir, chapterNumber, externalContext, options);
++    const savedPlan = options?.reuseCheckpoint ? options.checkpoint?.completed("plan", PlanCheckpointSchema) : undefined;
++    if (savedPlan && (savedPlan.intent.chapter !== chapterNumber || savedPlan.memo.chapter !== chapterNumber)) throw new Error("Plan checkpoint belongs to a different chapter");
++    const plan = savedPlan ?? (options?.checkpoint
++      ? await options.checkpoint.runStage("plan", () => this.resolveGovernedPlan(book, bookDir, chapterNumber, externalContext, options), Boolean(options.reuseCheckpoint))
++      : await this.resolveGovernedPlan(book, bookDir, chapterNumber, externalContext, options));
++    if (!savedPlan) await options?.checkpoint?.record("plan", "completed", plan);
+     const composerCtx = this.agentCtxFor("composer", book.id);
+     const composer = new ComposerAgent(composerCtx);
+-    const composed = await composer.composeChapter({
++    const savedContext = options?.reuseCheckpoint ? options.checkpoint?.completed("context", ContextCheckpointSchema) : undefined;
++    if (savedContext && (savedContext.contextPackage.chapter !== chapterNumber || savedContext.trace.chapter !== chapterNumber)) throw new Error("Context checkpoint belongs to a different chapter");
++    const compose = () => composer.composeChapter({
+       book,
+       bookDir,
+       chapterNumber,
+@@ -2302,6 +2541,9 @@ export class PipelineRunner {
+       ),
+       onContextCompression: this.config.onContextCompression,
+     });
++    const composed = savedContext ?? (options?.checkpoint
++      ? await options.checkpoint.runStage("context", compose, Boolean(options.reuseCheckpoint)) : await compose());
++    if (!savedContext) await options?.checkpoint?.record("context", "completed", composed);
+ 
+     return { plan, composed };
+   }
+-- 
+2.56.0.windows.3
+
