@@ -5,6 +5,9 @@ import { BaseAgent, type AgentContext } from "../agents/base.js";
 import { PipelineRunner } from "../pipeline/runner.js";
 import { createLLMClient } from "../llm/provider.js";
 import { LLMConfigSchema } from "../models/project.js";
+import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 describe("pipeline model metadata cache", () => {
   it.each([false, true])("isolates same-endpoint aliases in either order (%s)", reverse => {
@@ -20,7 +23,7 @@ describe("pipeline model metadata cache", () => {
     expect(auditor.client._piModel).toMatchObject({ id: "large", contextWindow: 32768, maxTokens: 2048 });
     expect(pipeline.createAgentContext("writer").client).toBe(writer.client);
     expect(pipeline.createAgentContext("auditor").client).toBe(auditor.client);
-    expect(pipeline.createAgentContext("reviser").client._piModel).toMatchObject({ id: "other-alias", contextWindow: 128000 });
+    expect(pipeline.createAgentContext("reviser").client._piModel).toMatchObject({ id: "other-alias", contextWindow: 200_000 });
     expect(pipeline.createAgentContext("unconfigured").client).toBe(base);
   });
 });
@@ -216,6 +219,50 @@ describe("Pi worker harness", () => {
     expect(guardedPiStreamMock.mock.calls[0]?.[2]).toMatchObject({
       toolChoice: "required",
     });
+  });
+
+  it("archives the complete structured response before domain validation", async () => {
+    const { createAssistantMessageEventStream } = await import("@mariozechner/pi-ai");
+    const root = await mkdtemp(join(tmpdir(), "inkos-worker-archive-"));
+    guardedPiStreamMock.mockImplementation((model: AgentContext["client"]["_piModel"]) => {
+      const stream = createAssistantMessageEventStream();
+      const message = {
+        role: "assistant" as const,
+        content: [{ type: "toolCall" as const, id: "archive-call", name: "submit_result", arguments: { value: "raw model output" } }],
+        api: model?.api ?? "openai-completions",
+        provider: model?.provider ?? "openai",
+        model: model?.id ?? "deepseek-v4-flash",
+        usage: { input: 23, output: 11, cacheRead: 0, cacheWrite: 0, totalTokens: 34,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+        stopReason: "toolUse" as const,
+        timestamp: Date.now(),
+      };
+      stream.push({ type: "done", reason: "toolUse", message });
+      stream.end(message);
+      return stream;
+    });
+
+    try {
+      const result = await runWorkerAgentTool(client(), "deepseek-v4-flash", [{ role: "user", content: "private prompt must not be archived" }], {
+        name: "submit_result", label: "Submit", description: "Submit the result.", parameters: Type.Object({ value: Type.String() }),
+        validate: async value => {
+          const directory = join(root, ".inkos", "agent-runs", "book-1", "worker-responses");
+          const files = await readdir(directory);
+          expect(files).toHaveLength(1);
+          const raw = await readFile(join(directory, files[0]!), "utf8");
+          const archived = JSON.parse(raw);
+          expect(archived.response.content[0].arguments).toEqual({ value: "raw model output" });
+          expect(archived.response.usage.output).toBe(11);
+          expect(raw).not.toContain("private prompt must not be archived");
+          expect(archived).not.toHaveProperty("apiKey");
+          return value;
+        },
+      }, { responseArchive: { projectRoot: root, workId: "book-1", role: "auditor" } });
+
+      expect(result).toEqual({ value: "raw model output" });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 
   it.each([
