@@ -8,8 +8,9 @@ import { PlannerAgent } from "../agents/planner.js";
 import { createLLMClient } from "../llm/provider.js";
 import type { BookConfig } from "../models/book.js";
 import { createInitialRuntimeState } from "../state/runtime-state-store.js";
+import type { Logger } from "../utils/logger.js";
 
-it("plans in Russian for a Russian narrative while preserving operational language and identifiers", async () => {
+it("sets the Russian plan contract and warns without discarding mixed-language output", async () => {
   const root = await mkdtemp(join(tmpdir(), "inkos-planner-narrative-language-"));
   const bookDir = join(root, "book");
   const requests: Array<{ messages: Array<{ role: string; content: string }>; tools: Array<{ function: { name: string } }> }> = [];
@@ -23,7 +24,7 @@ it("plans in Russian for a Russian narrative while preserving operational langua
     response.end(JSON.stringify({ choices: [{ finish_reason: "tool_calls", message: { tool_calls: [{
       id: "chapter-plan", type: "function", function: { name, arguments: JSON.stringify({
         goal: "Ирина должна выяснить, кто заменил страницу.",
-        body: "- Она сверяет подписи.\n- Находит следы подмены в журнале.",
+        body: "- Она сверяет подписи и находит следы подмены в журнале.\n- Her inability to grasp the new reality outside the yard задерживает решение.\n- 守着",
         threadRefs: ["hook:ledger-page-4"],
       }) },
     }] } }] }));
@@ -46,15 +47,23 @@ it("plans in Russian for a Russian narrative while preserving operational langua
       language: "en", narrativeLanguage: "ru", targetChapters: 3, chapterWordCount: 1200,
       createdAt: "2026-11-01T00:00:00.000Z", updatedAt: "2026-11-01T00:00:00.000Z",
     };
-    const result = await new PlannerAgent({ client, model: "fixture", projectRoot: root })
+    const warnings: string[] = [];
+    const logger: Logger = {
+      debug: () => undefined, info: () => undefined,
+      warn: (message: string) => { warnings.push(message); },
+      error: () => undefined, child: () => logger,
+    };
+    const result = await new PlannerAgent({ client, model: "fixture", projectRoot: root, logger })
       .planChapter({ book, bookDir, chapterNumber: 1 });
 
     expect(requests).toHaveLength(1);
     expect(requests[0]!.messages.find(message => message.role === "system")?.content)
-      .toContain("goal and body, must be written in Russian");
+      .toContain("Write all natural-language text in both free-text fields (goal and body) entirely in Russian");
     expect(requests[0]!.messages.find(message => message.role === "user")?.content)
-      .toContain("Write the goal and readable chapter plan in Russian");
+      .toContain("Write every natural-language part of goal and body in Russian");
     expect(result.memo.threadRefs).toEqual(["hook:ledger-page-4"]);
+    expect(warnings).toHaveLength(1);
+    expect(result.memo.body).toContain("Her inability to grasp the new reality outside the yard");
     expect(result.intentMarkdown).toContain("# План главы 1");
     expect(result.intentMarkdown).toContain("### Связанные линии\n- hook:ledger-page-4");
     expect(await readFile(result.runtimePath, "utf8")).toBe(result.intentMarkdown);

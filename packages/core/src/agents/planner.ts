@@ -21,6 +21,21 @@ import { ComposerAgent } from "./composer.js";
 import { resolveNarrativeLanguage } from "../utils/book-language.js";
 import { MAX_MODEL_OUTPUT_TOKENS } from "../llm/token-limits.js";
 
+function hasLikelyNonRussianPlanText(value: string): boolean {
+  const visibleText = value
+    .replace(/`[^`]*`/gu, " ")
+    .replace(/https?:\/\/\S+/gu, " ");
+  const segments = visibleText.split(/[\n.!?。！？]+/u);
+  return segments.some((segment) => {
+    const letters = segment.match(/\p{L}/gu) ?? [];
+    const cjk = segment.match(/[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}]/gu) ?? [];
+    if (cjk.length >= 2) return true;
+    if (letters.length < 20) return false;
+    const latin = segment.match(/\p{Script=Latin}/gu)?.length ?? 0;
+    return latin / letters.length >= 0.75;
+  });
+}
+
 export interface PlanChapterInput {
   readonly book: BookConfig;
   readonly bookDir: string;
@@ -159,12 +174,16 @@ export class PlannerAgent extends BaseAgent {
       },
       { temperature: 0.7, maxTokens: Math.min(MAX_MODEL_OUTPUT_TOKENS, this.ctx.client.defaults.maxTokens) },
     );
-    return ChapterMemoSchema.parse({
+    const memo = ChapterMemoSchema.parse({
       chapter: input.chapterNumber,
       goal: result.goal,
       body: result.body,
       threadRefs: result.threadRefs,
     });
+    if (input.narrativeLanguage === "ru" && (hasLikelyNonRussianPlanText(memo.goal) || hasLikelyNonRussianPlanText(memo.body))) {
+      this.ctx.logger?.warn("Planner output may contain substantial non-Russian prose. The answer is preserved; inspect the archived response and plan before the Author uses it.");
+    }
+    return memo;
   }
 
   private renderIntentMarkdown(
