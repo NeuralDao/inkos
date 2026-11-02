@@ -4,7 +4,7 @@ description: 长篇小说的场景构造、人物因果、信息释放与连载�
 ---
 # Long-form narrative craft
 
-Apply this method inside the active architect, writer, auditor, or reviser operation.
+Apply this method inside the active architect, planner, writer, auditor, or reviser operation. For chapter planning, use it to define causal scene progression, reader expectations, choices, consequences, and hook movement; write the author-facing plan in the Work's narrative language when the task contract specifies one.
 
 - Turn the chapter goal into scenes with an immediate objective, resistance, a meaningful turn, and consequences that survive the scene.
 - Let character choices follow what each person wants, knows, fears, and can afford. Relationships change through events, not author explanation.
