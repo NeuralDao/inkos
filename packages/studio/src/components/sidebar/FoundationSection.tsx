@@ -39,7 +39,7 @@ export function FoundationSection({ bookId }: FoundationSectionProps) {
           <li key={item.name}>
             <button
               onClick={() => openArtifact(item.name)}
-              className="w-full flex items-center gap-2 px-2 py-2 rounded-lg text-[15px] leading-6 font-medium text-muted-foreground hover:text-foreground hover:bg-secondary/50 transition-colors font-['SimSun','Songti_SC','STSong',serif]"
+              className="w-full flex items-center gap-2 px-2 py-2 rounded-lg text-[15px] leading-6 font-medium text-muted-foreground hover:text-foreground hover:bg-secondary/50 transition-colors"
             >
               <FileText size={16} className="shrink-0 text-muted-foreground/60" />
               <span className="truncate">{foundationFileLabel(item.name)}</span>

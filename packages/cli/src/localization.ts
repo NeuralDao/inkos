@@ -7,6 +7,7 @@ type WriteResultShape = {
   readonly title: string;
   readonly wordCount: number;
   readonly observations: ReadonlyArray<Observation>;
+  readonly autoRevision?: { readonly status: "skipped" | "applied" | "candidate" | "unchanged" | "unavailable"; readonly reason: string; readonly candidateVersionId?: string };
 };
 
 type ImportResultShape = {
@@ -133,6 +134,17 @@ export function formatWriteNextResultLines(
     for (const observation of result.observations) {
       lines.push(`    ${observation.code}: ${observation.summary}`);
     }
+  }
+
+  if (result.autoRevision) {
+    const revision = result.autoRevision;
+    const labels = {
+      skipped: { en: "not run", zh: "未运行" }, applied: { en: "applied", zh: "已采用" },
+      candidate: { en: "original kept; candidate saved", zh: "保留原稿；候选版本已保存" },
+      unchanged: { en: "unchanged", zh: "正文未变化" }, unavailable: { en: "unavailable; original kept", zh: "不可用；保留原稿" },
+    } as const;
+    lines.push(localize(language, { en: `  Automatic revision: ${labels[revision.status].en} (${revision.reason})`, zh: `  自动修订：${labels[revision.status].zh}（${revision.reason}）` }));
+    if (revision.candidateVersionId) lines.push(localize(language, { en: `  Candidate version: ${revision.candidateVersionId}`, zh: `  候选版本：${revision.candidateVersionId}` }));
   }
 
   return lines;

@@ -198,6 +198,7 @@ interface CachedAgent {
   deliveryFailed: boolean;
   artifactDeliveries: TurnArtifactDeliveries;
   pendingWorkTransition?: AgentWorkTransition;
+  stopAfterLongformAction?: boolean;
   completedPlayScene?: string;
   agent: Agent;
   sessionId: string;
@@ -763,6 +764,16 @@ export async function runAgentSession(
     let result = await runAgentSessionUnlocked(currentConfig, userMessage);
     while (result.workTransition && !result.errorMessage) {
       const transition = result.workTransition;
+      if (transition.action.capabilityId === "longform" && transition.action.actionId === "create_book") {
+        removeCachedAgent(agentCacheKey(config.projectRoot, config.sessionId));
+        return {
+          ...result,
+          workTransition: undefined,
+          workId: transition.work.id,
+          profileId: transition.work.profileId,
+          responseText: result.responseText || `Книга «${transition.work.title}» и её фундамент созданы. Я остановился здесь. Нажмите «Пиши дальше», чтобы начать первую главу.`,
+        };
+      }
       const scene = completedInteractiveScene(transition.action.capabilityId, transition.action.result);
       if (scene !== undefined) {
         removeCachedAgent(agentCacheKey(config.projectRoot, config.sessionId));
@@ -815,6 +826,25 @@ function stopForWorkTransition(model: Model<Api>) {
 
 function currentTurnCompletion(cached: CachedAgent): TurnCompletion | undefined {
   return cached.turnCompletion;
+}
+
+function longformActionCompletion(actionId: string, result: ActionResult): TurnCompletion {
+  const data = result.data && typeof result.data === "object" ? result.data as Record<string, unknown> : undefined;
+  if (actionId === "create_book") {
+    const title = typeof data?.title === "string" ? data.title : "Книга";
+    return {
+      status: "delivered",
+      message: `${title === "Книга" ? title : `Книга «${title}»`} и её фундамент созданы. Я остановился здесь. Нажмите «Пиши дальше», чтобы начать первую главу.`,
+    };
+  }
+  const firstChapter = Array.isArray(data?.chapters) ? data.chapters[0] as Record<string, unknown> | undefined : undefined;
+  const chapterNumber = typeof data?.chapterNumber === "number"
+    ? data.chapterNumber
+    : typeof firstChapter?.chapterNumber === "number" ? firstChapter.chapterNumber : undefined;
+  return {
+    status: "delivered",
+    message: `${chapterNumber ? `Глава ${chapterNumber}` : "Глава"} готова. Я остановился после одной главы. Нажмите «Пиши дальше», когда захотите продолжить.`,
+  };
 }
 
 async function runAgentSessionUnlocked(
@@ -1027,6 +1057,11 @@ async function runAgentSessionUnlocked(
           }
           cached.artifactDeliveries.observe(result, parameters);
           cached.completedPlayScene = completedInteractiveScene(capabilityId, result) ?? cached.completedPlayScene;
+          if (result.status === "success" && capabilityId === "longform"
+            && (actionId === "create_book" || actionId === "write_chapters")) {
+            cached.stopAfterLongformAction = true;
+            cached.turnCompletion = longformActionCompletion(actionId, result);
+          }
           if (result.status === "success" && WORK_CREATION_ACTIONS.has(actionId)) {
             const ids = new Set(result.artifacts.map(artifact => artifact.workId));
             const data = result.data && typeof result.data === "object" ? result.data as Record<string, unknown> : undefined;
@@ -1048,6 +1083,13 @@ async function runAgentSessionUnlocked(
           return result;
         } catch (error) {
           cached.deliveryFailed = true;
+          if (capabilityId === "longform" && (actionId === "create_book" || actionId === "write_chapters")) {
+            cached.stopAfterLongformAction = true;
+            cached.turnCompletion = {
+              status: "blocked",
+              message: `${actionId === "create_book" ? "Создание книги" : "Запись главы"} не завершилось. Автоматический повтор остановлен; проверьте сообщение об ошибке инструмента перед следующим запуском.`,
+            };
+          }
           if (ephemeral) cached.harnessRuntime.finishEpisode(handle, isAbortLike(error) ? "cancelled" : "failed");
           throw error;
         } finally {
@@ -1077,7 +1119,15 @@ async function runAgentSessionUnlocked(
       ? `\n\n## Restored committed context\n${restoredSystemContext.join("\n\n")}`
       : "";
     const agent = new Agent({
-      beforeToolCall: preserveToolArgumentTypes,
+      beforeToolCall: async (context) => {
+        if (cached?.stopAfterLongformAction && context.toolCall.name !== TURN_COMPLETION_TOOL) {
+          return {
+            block: true,
+            reason: "Long-form production already completed its one action for this turn. Wait for the next user message.",
+          };
+        }
+        await preserveToolArgumentTypes(context);
+      },
       initialState: {
         model,
         systemPrompt: [baseSystemPrompt, TURN_COMPLETION_GUIDANCE, restoredContextBlock, config.backgroundTaskContext]
@@ -1278,6 +1328,7 @@ async function runAgentSessionUnlocked(
     episodeId: `episode-${requestId}`,
   });
   cached.currentEpisode = episodeHandle;
+  cached.stopAfterLongformAction = false;
   cached.completedPlayScene = undefined;
   cached.turnCompletion = undefined;
   cached.hasDelivery = config.resumeAction?.result.status === "success";

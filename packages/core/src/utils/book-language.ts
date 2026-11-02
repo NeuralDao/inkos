@@ -4,6 +4,12 @@ export const BookLanguageSchema = z.enum(["en", "zh"]);
 export const NarrativeLanguageSchema = z.enum(["en", "zh", "ru"]);
 export type NarrativeLanguage = z.infer<typeof NarrativeLanguageSchema>;
 
+/** Fixed language contract for long-form works created by this Russian-language fork. */
+export const LONGFORM_CREATION_LANGUAGES = Object.freeze({
+  language: "en",
+  narrativeLanguage: "ru",
+} as const);
+
 export function resolveBookCreationLanguages(
   input: { readonly language?: unknown; readonly narrativeLanguage?: unknown },
   fallbackLanguage: unknown = "zh",

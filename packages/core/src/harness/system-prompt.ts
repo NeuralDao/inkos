@@ -18,9 +18,18 @@ export function buildHarnessSystemPrompt(options: HarnessSystemPromptOptions): s
     ? (isZh
         ? `当前作品：${options.work.title}（${options.work.id}，profile=${options.work.profileId}）`
         : `Current work: ${options.work.title} (${options.work.id}, profile=${options.work.profileId})`)
+    : options.profile.id === "longform-novel"
+      ? (isZh
+        ? "当前没有绑定作品；本会话已使用长篇小说 Profile。创建原创长篇时直接调用 longform__create_book，它会创建 Work 并生成基础设定。不要先调用 workspace__list_work_profiles 或 workspace__create_work。只有用户明确要求创建独立/派生作品或其他 Profile 时，才使用通用工作区创建流程。"
+        : "No Work is bound; this session already uses the Long-form novel Profile. To create an original long-form book, invoke longform__create_book directly; it creates the Work and its foundation. Do not pass language parameters; the host applies the fixed en/ru contract. Do not call workspace__list_work_profiles or workspace__create_work first. Use the generic workspace creation flow only when the user explicitly requests a separate or derived Work, or a different Profile.")
     : (isZh
         ? "当前没有绑定作品。创建请求先通过 workspace__list_work_profiles 选择配置，再调用 workspace__create_work；绑定新作品后，宿主会提供该配置的生产动作。当前工具列表未出现某项生产动作，不代表该配置不支持它。"
         : "No work is currently bound. For a creation request, choose an installed profile with workspace__list_work_profiles and invoke workspace__create_work. Binding the new work exposes that profile's production actions; their absence before creation does not mean the profile lacks them.");
+  const languageLine = options.profile.id === "longform-novel"
+    ? (isZh
+      ? "长篇语言固定：框架操作语言 en，基础设定及叙事语言 ru。不要询问用户语言，也不要传递语言参数。调用 longform__create_book 后，在基础设定完成处停止；调用 write_chapters 后只写一章并停止，不要自动开始下一章或继续其他生产动作，等待用户下一条消息。"
+      : "Long-form language is fixed: operational language en; foundation/readable and narrative language ru. Do not ask the user to choose languages or pass language parameters. After longform__create_book, stop when the foundation is complete. After write_chapters, write one chapter and stop; do not start another chapter or production action until the user sends a new message.")
+    : "";
   const confirmedLine = options.confirmedAction
     ? (isZh
         ? `本轮动作已由宿主确认：${options.confirmedAction}。立即调用匹配的 capability action，不要再次确认。`
@@ -31,6 +40,11 @@ export function buildHarnessSystemPrompt(options: HarnessSystemPromptOptions): s
         ? "宿主已完成一个确认 action，其真实 toolResult 位于上下文末尾。继续执行用户已确认请求中仍未满足的部分；不要只把未完成动作列为下一步建议。"
         : "The host completed one confirmed action and its real tool result is at the end of context. Continue executing every still-unfulfilled part of the confirmed user request; do not merely offer unfinished actions as next steps.")
     : "";
+  const effectiveResumeLine = options.profile.id === "longform-novel" && options.resumeAfterAction
+    ? (isZh
+      ? "宿主已完成 long-form action，其真实 toolResult 位于上下文末尾。创建基础设定或完成一章后立即结束本轮；不要继续发起其他生产动作。"
+      : "The host completed a long-form action and its real toolResult is at the end of context. After creating the foundation or completing one chapter, end this turn; do not launch another production action.")
+    : resumeLine;
   const base = isZh
     ? `你是 InkOS 文字创作 Harness 的主智能体。你负责理解用户、选择专业 Skill、调用当前 Work Profile 暴露的 capability action，并根据真实 ActionResult 回答。
 
@@ -39,9 +53,10 @@ export function buildHarnessSystemPrompt(options: HarnessSystemPromptOptions): s
 - Profile：${options.profile.title}（${options.profile.id}）
 - Capabilities：${capabilityList}
 - ${workLine}
+${languageLine ? `- ${languageLine}` : ""}
 - 确认策略：${JSON.stringify(options.profile.confirmation)}
 ${confirmedLine ? `- ${confirmedLine}` : ""}
-${resumeLine ? `- ${resumeLine}` : ""}
+${effectiveResumeLine ? `- ${effectiveResumeLine}` : ""}
 
 ## 行为边界
 
@@ -73,8 +88,9 @@ ${resumeLine ? `- ${resumeLine}` : ""}
 - Profile: ${options.profile.title} (${options.profile.id})
 - Capabilities: ${capabilityList}
 - ${workLine}
+${languageLine ? `- ${languageLine}` : ""}
 ${confirmedLine ? `- ${confirmedLine}` : ""}
-${resumeLine ? `- ${resumeLine}` : ""}
+${effectiveResumeLine ? `- ${effectiveResumeLine}` : ""}
 
 ## Behavioral Boundary
 

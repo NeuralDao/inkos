@@ -1210,9 +1210,10 @@ async function executeConfirmedProductionAction(args: {
     if (!args.bookId) {
       throw new ApiError(400, "BOOK_ID_REQUIRED", pick(lang, "写下一章需要先打开一本书。", "Writing the next chapter requires an active book."));
     }
-    const chapterCount = actionPayload?.writeNext?.chapterCount ?? 1;
+    const chapterCount = 1;
     tool = createWriteChaptersTool(args.pipeline, args.bookId, {
       language: lang,
+      maxChapterCount: 1,
       workerSkills: (worker) => (
         worker === "auditor" || worker === "reviser"
           ? profileSkills("longform-novel", true)
@@ -1222,6 +1223,7 @@ async function executeConfirmedProductionAction(args: {
     params = {
       bookId: args.bookId,
       instruction: args.instruction,
+      startChapterNumber: await new StateManager(args.root).getNextChapterNumber(args.bookId),
       chapterCount,
     };
   } else if (args.requestedIntent === "generate_cover") {
@@ -2937,8 +2939,6 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     const actionPayload: ActionPayload = {
       createBook: {
         title: body.title,
-        language: bookConfig.language,
-        ...(bookConfig.narrativeLanguage !== undefined ? { narrativeLanguage: bookConfig.narrativeLanguage } : {}),
         ...(body.genre ? { genre: body.genre } : {}),
         ...(body.platform ? { platform: normalizeStudioPlatform(body.platform) } : {}),
         ...(body.chapterWordCount ? { chapterWordCount: body.chapterWordCount } : {}),
@@ -2958,8 +2958,6 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       parameters: {
         instruction: body.blurb?.trim() || `Create ${body.title}`,
         title: body.title,
-        language: bookConfig.language,
-        ...(bookConfig.narrativeLanguage !== undefined ? { narrativeLanguage: bookConfig.narrativeLanguage } : {}),
         ...(body.genre ? { genre: body.genre } : {}),
         ...(body.platform ? { platform: normalizeStudioPlatform(body.platform) } : {}),
         ...(body.targetChapters ? { targetChapters: body.targetChapters } : {}),
@@ -3052,6 +3050,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
         brief,
         plan,
         versions,
+        autoRevision: index.find((chapter) => chapter.number === num)?.autoRevision,
         canDelete: num === latestChapter,
       });
     } catch (e) {
@@ -3348,6 +3347,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     const tool = createWriteChaptersTool(pipeline, id, {
       workerSkills: (worker) => worker === "auditor" || worker === "reviser" ? reviewSkills : writingSkills,
     });
+    const startChapterNumber = await state.getNextChapterNumber(id);
     executeExplicitCapabilityTool({
       projectRoot: root,
       binding: confirmedCapabilityBinding("write_next")!,
@@ -3355,17 +3355,18 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       parameters: {
         instruction: "Write the next chapter for the active Work.",
         bookId: id,
+        startChapterNumber,
         chapterCount: 1,
         ...(body.wordCount ? { chapterWordCount: body.wordCount } : {}),
       },
       workId: id,
     }).then(
       (result) => {
-        const data = result.data as { chapters?: ReadonlyArray<{ chapterNumber: number; title: string; wordCount: number; observations?: unknown[] }> } | undefined;
+        const data = result.data as { chapters?: ReadonlyArray<{ chapterNumber: number; title: string; wordCount: number; observations?: unknown[]; autoRevision?: { status: string; reason: string; candidateVersionId?: string } }> } | undefined;
         const chapter = data?.chapters?.at(-1);
         broadcast("write:complete", {
           bookId: id,
-          ...(chapter ? { chapterNumber: chapter.chapterNumber, title: chapter.title, wordCount: chapter.wordCount, observationCount: chapter.observations?.length ?? 0 } : {}),
+          ...(chapter ? { chapterNumber: chapter.chapterNumber, title: chapter.title, wordCount: chapter.wordCount, observationCount: chapter.observations?.length ?? 0, ...(chapter.autoRevision ? { autoRevision: chapter.autoRevision } : {}) } : {}),
         });
       },
       (e) => {
@@ -5070,6 +5071,43 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
             }
           }
 
+          if (exec.status === "completed" && (confirmedIntent === "create_book" || confirmedIntent === "write_next")) {
+            const detailData = exec.details && typeof exec.details === "object" ? exec.details as Record<string, unknown> : undefined;
+            const title = typeof detailData?.title === "string" ? detailData.title : createdBookId;
+            const chapterNumber = typeof detailData?.chapterNumber === "number" ? detailData.chapterNumber : undefined;
+            const responseText = confirmedIntent === "create_book"
+              ? `Книга${title ? ` «${title}»` : ""} и её фундамент созданы. Я остановился здесь. Нажмите «Пиши дальше», чтобы начать первую главу.`
+              : `${chapterNumber ? `Глава ${chapterNumber}` : "Глава"} готова. Я остановился после одной главы. Нажмите «Пиши дальше», когда захотите продолжить.`;
+            await appendSessionMessagesUnlessDeleted(root, bookSession.sessionId, [{
+              role: "assistant",
+              content: [{ type: "text", text: responseText }],
+              api: "openai-completions",
+              provider: "inkos",
+              model: "studio-host",
+              usage: {
+                input: 0,
+                output: 0,
+                cacheRead: 0,
+                cacheWrite: 0,
+                totalTokens: 0,
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+              },
+              stopReason: "stop",
+              timestamp: Date.now(),
+            }], "", { sessionKind });
+            await persistConfirmedTask(bookSession.sessionId, confirmedIntent, exec, sourceRequestId);
+            await refreshBookSessionFromTranscript();
+            broadcast("agent:complete", { instruction, activeBookId: bookSession.bookId, sessionId: bookSession.sessionId, sessionKind });
+            return c.json({
+              response: responseText,
+              details: { toolExecutions: [exec] },
+              session: {
+                ...workSessionResponseMetadata(bookSession),
+                ...(bookSession.bookId ? { activeBookId: bookSession.bookId } : {}),
+              },
+            });
+          }
+
           const continuedToolExecs: CollectedToolExec[] = [];
           taskController.signal.throwIfAborted();
           exec.status = "running";
@@ -5818,6 +5856,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       targetChapters?: number;
       status?: string;
       language?: string;
+      writing?: { reviewMode?: "auto" | "manual" };
     }>();
     try {
       const book = await state.loadBookConfig(id);
@@ -5827,6 +5866,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
         ...(updates.targetChapters !== undefined ? { targetChapters: Number(updates.targetChapters) } : {}),
         ...(updates.status !== undefined ? { status: updates.status as typeof book.status } : {}),
         ...(updates.language !== undefined ? { language: updates.language as "zh" | "en" } : {}),
+        ...(updates.writing !== undefined ? { writing: { ...book.writing, ...updates.writing } } : {}),
         updatedAt: new Date().toISOString(),
       };
       await state.saveBookConfig(id, updated);

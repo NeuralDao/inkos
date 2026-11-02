@@ -27,7 +27,8 @@ export const SourcedReviewIndexToolSchema=Type.Object({
     code:Type.String({minLength:1}),
     summary:Type.String({minLength:1,description:"Explain this finding concisely using the selected evidence and its effect on the story. The explanation and assessment must describe the same finding."}),
     assessment:SourcedReviewToolSchema.properties.observations.items.properties.assessment,
-    category:Type.Optional(Type.Union([Type.Literal("quality"),Type.Literal("execution"),Type.Literal("scope")])),
+    category:Type.Optional(Type.Union([Type.Literal("quality"),Type.Literal("execution"),Type.Literal("scope")], { description: "quality: prose, canon, chronology, causality, or chapter-plan adherence; execution: completion of a tool, API, or external operation only; scope: a verified edit outside an authorized edit region." })),
+    scope:Type.Optional(Type.Union([Type.Literal("local"),Type.Literal("structural"),Type.Literal("unknown")], {description:"The smallest scope needed to correct this finding."})),
     sourceRefs:Type.Array(Type.Object({sourceId:Type.String(),startLine:Type.Integer({minimum:1}),endLine:Type.Integer({minimum:1})},{additionalProperties:false}),{description:"Select nonempty source line ranges. May be empty only for an unavailable assessment."}),
   },{additionalProperties:false})),
 });
@@ -37,7 +38,7 @@ export const ArtifactReviewIndexToolSchema = Type.Object({
   observations: Type.Array(Type.Object({
     ...SourcedReviewIndexToolSchema.properties.observations.items.properties,
     category: Type.Union([Type.Literal("quality"), Type.Literal("execution"), Type.Literal("scope")], {
-      description: "scope: verified changes outside the author's authorized revision region, citing before/current sources. quality: other content findings. execution: whether an operation completed; source prose cannot establish this.",
+      description: "quality: prose, canon, chronology, causality, or chapter-plan adherence. execution: completion of a tool, API, or external operation only; never story events or plan adherence. scope: verified changes outside the author's authorized revision region, citing before/current sources.",
     }),
   }, { additionalProperties: false })),
 });

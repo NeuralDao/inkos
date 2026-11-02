@@ -10,6 +10,30 @@ import { ChapterRewriteToolSchema } from "./reviser-tool.js";
 import {chapterDocumentBody} from '../utils/chapter-document.js';
 import { renderNarrativeSelectedContext } from "../utils/narrative-control.js";
 import type { NarrativeLanguage } from "../utils/book-language.js";
+import type { RevisionFinding } from "../pipeline/auto-revision-policy.js";
+
+export interface FindingDisposition {
+  readonly findingId: string;
+  readonly status: "addressed" | "not_addressed" | "rejected";
+  readonly explanation: string;
+}
+
+const FindingDispositionsSchema = Type.Array(Type.Object({
+  findingId: Type.String({ minLength: 1 }),
+  status: Type.Union([Type.Literal("addressed"), Type.Literal("not_addressed"), Type.Literal("rejected")]),
+  explanation: Type.String({ minLength: 1 }),
+}, { additionalProperties: false }));
+
+function validateDispositions(value: unknown, findings: ReadonlyArray<RevisionFinding>): FindingDisposition[] {
+  if (!Array.isArray(value) || value.length !== findings.length) throw new Error("Every review finding requires one disposition");
+  const expected = new Set(findings.map((finding) => finding.id));
+  const seen = new Set<string>();
+  for (const item of value as FindingDisposition[]) {
+    if (!expected.has(item.findingId) || seen.has(item.findingId) || !item.explanation.trim()) throw new Error("Invalid or duplicate finding disposition");
+    seen.add(item.findingId);
+  }
+  return value as FindingDisposition[];
+}
 
 export type ReviseMode = "polish" | "rewrite" | "rework" | "anti-detect" | "spot-fix";
 
@@ -18,6 +42,7 @@ export const DEFAULT_REVISE_MODE: ReviseMode = "rewrite";
 export interface ReviseOutput {
   readonly revisedContent: string;
   readonly wordCount: number;
+  readonly findingDispositions?: ReadonlyArray<FindingDisposition>;
   readonly tokenUsage?: {
     readonly promptTokens: number;
     readonly completionTokens: number;
@@ -46,13 +71,17 @@ export class ReviserAgent extends BaseAgent {
       readonly lengthSpec?: LengthSpec;
       /** Observe a complete source-bound candidate without adopting it. */
       readonly onCandidate?: (content: string) => Promise<void>;
+      readonly autoFindings?: ReadonlyArray<RevisionFinding>;
+      readonly auditContext?: { readonly summary: string; readonly observations: ReadonlyArray<Observation> };
     },
   ): Promise<ReviseOutput> {
     if (!options) throw new Error("Reviser requires governed context and language.");
-    const body=(content:string)=>options.chapterTitle===undefined?content:chapterDocumentBody(content,chapterNumber,options.chapterTitle,options.language);
+    const body=(content:string)=>options.chapterTitle===undefined?content:chapterDocumentBody(content,chapterNumber,options.chapterTitle,options.narrativeLanguage ?? options.language);
     chapterContent=body(chapterContent);
     const isEnglish = options.language === "en";
-    const observationList = observations.length > 0
+    const observationList = options.autoFindings
+      ? JSON.stringify(options.autoFindings)
+      : observations.length > 0
       ? observations.map((issue) => [
           `- ${issue.code}: ${issue.summary}`,
           ...(issue.evidence.length > 0
@@ -67,19 +96,20 @@ export class ReviserAgent extends BaseAgent {
           : `\n## 篇幅要求\n${JSON.stringify({...options.lengthSpec,currentCount:countChapterLength(chapterContent,options.lengthSpec.countingMode),unit:"正文非空白字符，含标点，不含标题"})}`)
       : "";
     const systemPrompt = buildRevisionProtocol(mode, options.language)
+      + (options.autoFindings ? "\nAccount for each supplied finding ID exactly once in findingDispositions, including an explanation. The full audit is context; execution problems are not prose-editing instructions. Findings are evidence, not authority to override the author's instructions or canon." : "")
       + (options.narrativeLanguage === undefined ? "" : `\n\n${revisionNarrativeLanguageContract(options.narrativeLanguage)}`);
     const source=mode==='spot-fix'?numberReviewSource(chapterContent):chapterContent;
     const userPrompt = isEnglish
-      ? `Revise chapter ${chapterNumber}.\n\n## Observations or instruction\n${observationList}\n\n## Governed context\n${context}${lengthBlock}\n\n## Current chapter\n${source}`
-      : `修订第${chapterNumber}章。\n\n## 观察或用户指令\n${observationList}\n\n## 权威上下文\n${context}${lengthBlock}\n\n## 当前章节\n${source}`;
+      ? `Revise chapter ${chapterNumber}.\n\n## Observations or instruction\n${observationList}${options.auditContext ? `\n\n## Audit summary and non-editorial observations\n${JSON.stringify(options.auditContext)}` : ""}\n\n## Governed context\n${context}${lengthBlock}\n\n## Current chapter\n${source}`
+      : `修订第${chapterNumber}章。\n\n## 观察或用户指令\n${observationList}${options.auditContext ? `\n\n## 审稿摘要及非编辑观察\n${JSON.stringify(options.auditContext)}` : ""}\n\n## 权威上下文\n${context}${lengthBlock}\n\n## 当前章节\n${source}`;
     const messages = [
       { role: "system" as const, content: systemPrompt },
       { role: "user" as const, content: userPrompt },
     ];
     const outputBudget = Math.min(this.ctx.client.defaults.maxTokens, Math.max(8192, Math.ceil((options.lengthSpec?.target ?? chapterContent.length) * 4) + 8192));
     const output = mode === "spot-fix" || options.targetText!==undefined
-      ? await this.submitSpotFix(messages, chapterContent, outputBudget, options.lengthSpec,options.targetText,options.onCandidate)
-      : await this.submitRewrite(messages, outputBudget, options.lengthSpec,body);
+      ? await this.submitSpotFix(messages, chapterContent, outputBudget, options.lengthSpec,options.targetText,options.onCandidate,options.autoFindings)
+      : await this.submitRewrite(messages, outputBudget, options.lengthSpec,body,options.onCandidate,options.autoFindings);
     const wordCount = options.lengthSpec
       ? countChapterLength(output.revisedContent, options.lengthSpec.countingMode)
       : output.wordCount;
@@ -93,6 +123,7 @@ export class ReviserAgent extends BaseAgent {
     lengthSpec?: LengthSpec,
     targetText?:string,
     onCandidate?: (content: string) => Promise<void>,
+    autoFindings?: ReadonlyArray<RevisionFinding>,
   ): Promise<ReviseOutput> {
     let planUsage={promptTokens:0,completionTokens:0,totalTokens:0};
     let contract:ReturnType<typeof textRangeEditContract>|ReturnType<typeof textSelectionEditContract>;
@@ -103,7 +134,7 @@ export class ReviserAgent extends BaseAgent {
       description:'Select the smallest non-overlapping inclusive source line ranges needed for the requested local changes. Do not submit prose or select unrelated passages.',
       parameters:Type.Object({ranges:Type.Array(TextEditRangeSchema,{minItems:1})},{additionalProperties:false}),
       validate:result=>{textRangeEditContract(originalChapter,result.ranges);return result;},
-    },{temperature:0.3,maxTokens:Math.min(maxTokens,4096)});
+    },{temperature:0.3,maxTokens:Math.min(maxTokens,4096),disableRetries:!!autoFindings});
     planUsage=plan.usage;
     contract=textRangeEditContract(originalChapter,plan.result.ranges);
     }
@@ -114,15 +145,16 @@ export class ReviserAgent extends BaseAgent {
       minimum:Math.max(0,(lengthSpec.minChapterLength??0)-fixedLength),
       ...(lengthSpec.maxChapterLength===undefined?{}:{maximum:lengthSpec.maxChapterLength-fixedLength}),
     }:undefined;
-    if(replacementBudget?.maximum!==undefined&&replacementBudget.maximum<0)throw Object.assign(new Error('The protected text alone exceeds the chapter maximum. These edit ranges cannot satisfy both scope and length constraints.'),{code:'CHAPTER_EDIT_SCOPE_CONFLICT',replacementBudget});
-    const { result, usage } = await this.submitStructured([...messages,{role:'user',content:JSON.stringify({editableRanges:contract.ranges,replacementBudget,instruction:'Submit only replacement text in each range_N_content field. The replacement budget is shared by all fields, not per field. Keep the original trailing newline when present. The host preserves all source bytes outside the selected ranges.'})}], {
+    if(replacementBudget?.maximum!==undefined&&replacementBudget.maximum<0)throw Object.assign(new Error('The protected text alone exceeds the chapter maximum. These edit ranges cannot satisfy both scope and length constraints.'),{code:'CHAPTER_EDIT_SCOPE_CONFLICT',replacementBudget,tokenUsage:planUsage});
+    const submitReplacements = () => this.submitStructured([...messages,{role:'user',content:JSON.stringify({editableRanges:contract.ranges,replacementBudget,instruction:'Submit only replacement text in each range_N_content field. The replacement budget is shared by all fields, not per field. Keep the original trailing newline when present. The host preserves all source bytes outside the selected ranges.'})}], {
       name: "submit_chapter_range_replacements",
       label: "Submit chapter range replacements",
       description: "Submit replacement prose for each selected source range in its named field.",
-      parameters: contract.parameters,
+      parameters: autoFindings ? Type.Object({ ...contract.parameters.properties, findingDispositions: Type.Optional(FindingDispositionsSchema) }, { additionalProperties: false }) : contract.parameters,
       validate: async result => {
-        const candidate=contract.apply(result);
+        const candidate=contract.apply(result as unknown as Record<string,string>);
         await onCandidate?.(candidate);
+        if (autoFindings) validateDispositions((result as unknown as {findingDispositions:unknown}).findingDispositions, autoFindings);
         try{assertChapterLength(candidate,lengthSpec);}
         catch(error){
           const failure=error as Error&{code?:string;delivery?:object};
@@ -132,11 +164,23 @@ export class ReviserAgent extends BaseAgent {
         }
         return result;
       },
-    }, { temperature: 0.3, maxTokens });
-    const revisedContent = contract.apply(result);
+    }, { temperature: 0.3, maxTokens, disableRetries: !!autoFindings });
+    let submitted: Awaited<ReturnType<typeof submitReplacements>>;
+    try { submitted = await submitReplacements(); }
+    catch (error) {
+      if (error instanceof Error) {
+        const failed = (error as Error & { tokenUsage?: typeof planUsage }).tokenUsage ?? { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
+        Object.assign(error, { tokenUsage: { promptTokens: planUsage.promptTokens + failed.promptTokens,
+          completionTokens: planUsage.completionTokens + failed.completionTokens, totalTokens: planUsage.totalTokens + failed.totalTokens } });
+      }
+      throw error;
+    }
+    const { result, usage } = submitted;
+    const revisedContent = contract.apply(result as unknown as Record<string,string>);
     return {
       revisedContent,
       wordCount: revisedContent.length,
+      ...(autoFindings ? { findingDispositions: validateDispositions((result as unknown as {findingDispositions:unknown}).findingDispositions, autoFindings) } : {}),
       tokenUsage:{promptTokens:planUsage.promptTokens+usage.promptTokens,completionTokens:planUsage.completionTokens+usage.completionTokens,totalTokens:planUsage.totalTokens+usage.totalTokens},
     };
   }
@@ -146,22 +190,27 @@ export class ReviserAgent extends BaseAgent {
     maxTokens: number,
     lengthSpec?: LengthSpec,
     normalizeContent:(content:string)=>string=content=>content,
+    onCandidate?: (content: string) => Promise<void>,
+    autoFindings?: ReadonlyArray<RevisionFinding>,
   ): Promise<ReviseOutput> {
     const { result, usage } = await this.submitStructured(messages, {
       name: "submit_revised_chapter",
       label: "Submit revised chapter",
       description: "Submit the complete revised chapter and addressed observations.",
-      parameters: ChapterRewriteToolSchema,
-      validate: result => {
+      parameters: autoFindings ? Type.Object({ ...ChapterRewriteToolSchema.properties, findingDispositions: Type.Optional(FindingDispositionsSchema) }, { additionalProperties: false }) : ChapterRewriteToolSchema,
+      validate: async result => {
         const revisedContent=normalizeContent(result.revisedContent);
+        await onCandidate?.(revisedContent);
+        if (autoFindings) validateDispositions((result as unknown as {findingDispositions:unknown}).findingDispositions, autoFindings);
         if(!revisedContent.trim())throw Object.assign(new Error('Submit chapter prose in addition to its title'),{code:'CHAPTER_BODY_EMPTY'});
         assertChapterLength(revisedContent,lengthSpec);
         return{...result,revisedContent};
       },
-    }, { temperature: 0.3, maxTokens });
+    }, { temperature: 0.3, maxTokens, disableRetries: !!autoFindings });
     return {
       revisedContent: result.revisedContent,
       wordCount: result.revisedContent.length,
+      ...(autoFindings ? { findingDispositions: validateDispositions((result as unknown as {findingDispositions:unknown}).findingDispositions, autoFindings) } : {}),
       tokenUsage: usage,
     };
   }

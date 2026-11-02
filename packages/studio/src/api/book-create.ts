@@ -1,4 +1,4 @@
-import { PlatformSchema, defaultChapterLength, deriveBookIdFromTitle, resolveBookCreationLanguages, type NarrativeLanguage, type Platform } from "@actalk/inkos-core";
+import { LONGFORM_CREATION_LANGUAGES, PlatformSchema, defaultChapterLength, deriveBookIdFromTitle, type Platform } from "@actalk/inkos-core";
 export { waitForStudioBookReady } from "../lib/book-ready.js";
 export type { StudioBookDetail, WaitForStudioBookReadyOptions } from "../lib/book-ready.js";
 
@@ -25,8 +25,8 @@ export interface StudioBookConfigDraft {
   readonly chapterWordCount: number;
   readonly minChapterLength?: number;
   readonly maxChapterLength?: number;
-  readonly language: "zh" | "en";
-  readonly narrativeLanguage?: NarrativeLanguage;
+  readonly language: "en";
+  readonly narrativeLanguage: "ru";
   readonly createdAt: string;
   readonly updatedAt: string;
 }
@@ -36,7 +36,7 @@ export function normalizeStudioPlatform(platform?: string): Platform {
 }
 
 export function buildStudioBookConfig(body: StudioCreateBookBody, now: string): StudioBookConfigDraft {
-  const bookLanguages = resolveBookCreationLanguages(body);
+  const bookLanguages = LONGFORM_CREATION_LANGUAGES;
   return {
     id: deriveBookIdFromTitle(body.title),
     title: body.title,

@@ -42,6 +42,7 @@ interface BookData {
     readonly targetChapters?: number;
     readonly language?: string;
     readonly fanficMode?: string;
+    readonly writing?: { readonly reviewMode?: "auto" | "manual" };
   };
   readonly chapters: ReadonlyArray<ChapterMeta>;
   readonly nextChapter: number;
@@ -83,6 +84,7 @@ export function BookDetail({
   const [settingsWordCount, setSettingsWordCount] = useState<number | null>(null);
   const [settingsTargetChapters, setSettingsTargetChapters] = useState<number | null>(null);
   const [settingsStatus, setSettingsStatus] = useState<BookStatus | null>(null);
+  const [settingsReviewMode, setSettingsReviewMode] = useState<"auto" | "manual" | null>(null);
   const [exportFormat, setExportFormat] = useState<ExportFormat>("txt");
   const [bookActionPending, setBookActionPending] = useState<string | null>(null);
   const activity = useMemo(() => deriveBookActivity(sse.messages, bookId), [bookId, sse.messages]);
@@ -211,6 +213,7 @@ export function BookDetail({
       if (settingsWordCount !== null) body.chapterWordCount = settingsWordCount;
       if (settingsTargetChapters !== null) body.targetChapters = settingsTargetChapters;
       if (settingsStatus !== null) body.status = settingsStatus;
+      if (settingsReviewMode !== null) body.writing = { reviewMode: settingsReviewMode };
       await fetchJson(`/books/${bookId}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
@@ -411,6 +414,14 @@ export function BookDetail({
       <div className="paper-sheet rounded-2xl border border-border/40 shadow-sm p-6">
         <h2 className="text-sm font-bold uppercase tracking-widest text-muted-foreground mb-4">{t("book.settings")}</h2>
         <div className="flex flex-wrap items-end gap-4">
+          <div className="flex flex-col gap-1">
+            <label className="text-[11px] font-bold uppercase tracking-widest text-muted-foreground">{t("book.autoRevision")}</label>
+            <select value={settingsReviewMode ?? book.writing?.reviewMode ?? "auto"} onChange={(e) => setSettingsReviewMode(e.target.value as "auto" | "manual")}
+              className="px-3 py-2 text-sm rounded-lg border border-border/50 bg-secondary/30 outline-none focus:border-primary/50">
+              <option value="auto">{t("book.autoRevisionAuto")}</option>
+              <option value="manual">{t("book.autoRevisionManual")}</option>
+            </select>
+          </div>
           <div className="flex flex-col gap-1">
             <label className="text-[11px] font-bold uppercase tracking-widest text-muted-foreground">{t("create.wordsPerChapter")}</label>
             <input

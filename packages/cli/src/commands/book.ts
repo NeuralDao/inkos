@@ -5,7 +5,7 @@ import { join, resolve } from "node:path";
 import {
   createBookFoundationTool,
   deriveBookIdFromTitle,
-  resolveBookCreationLanguages,
+  LONGFORM_CREATION_LANGUAGES,
   executeExplicitCapabilityTool,
   PlatformSchema,
   PipelineRunner,
@@ -39,8 +39,6 @@ bookCommand
   .option("--target-chapters <n>", "Target chapter count", "200")
   .option("--chapter-words <n>", "Words per chapter", "3000")
   .option("--brief <path>", "Path to creative brief file (.md/.txt) — Architect builds from your ideas instead of generating from scratch")
-  .option("--lang <language>", "Writing language: zh (Chinese) or en (English). Defaults from genre.")
-  .option("--narrative-lang <language>", "Narrative language: en, zh, or ru (Russian uses the English pipeline)")
   .option("--json", "Output JSON")
   .action(async (opts) => {
     try {
@@ -50,9 +48,7 @@ bookCommand
       if (!bookId) throw new Error("Book title must contain at least one supported letter or digit.");
 
       const config = await loadConfig();
-      const bookLanguages = resolveBookCreationLanguages(
-        { language: opts.lang, narrativeLanguage: opts.narrativeLang }, config.language,
-      );
+      const bookLanguages = LONGFORM_CREATION_LANGUAGES;
 
       const workDir = workDirectory(root, bookId);
       const bookDir = join(workDir, "source");
@@ -95,14 +91,11 @@ bookCommand
         projectRoot: root,
         binding: { capabilityId: "longform", actionId: "create_book", profileId: "longform-novel", risk: "recoverable-write" },
         tool: createBookFoundationTool(pipeline, {
-          language: book.language,
           actionPayload: {
             createBook: {
               title: book.title,
               genre: book.genre,
               platform: book.platform,
-              language: book.language,
-              ...(book.narrativeLanguage !== undefined ? { narrativeLanguage: book.narrativeLanguage } : {}),
               targetChapters: book.targetChapters,
               chapterWordCount: book.chapterWordCount,
             },
@@ -114,8 +107,6 @@ bookCommand
           title: book.title,
           genre: book.genre,
           platform: book.platform,
-          language: book.language,
-          ...(book.narrativeLanguage !== undefined ? { narrativeLanguage: book.narrativeLanguage } : {}),
           targetChapters: book.targetChapters,
           chapterWordCount: book.chapterWordCount,
         },

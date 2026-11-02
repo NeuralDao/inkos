@@ -29,6 +29,27 @@ describe("Studio API mini-flows", () => {
     await rm(root, { recursive: true, force: true });
   });
 
+  it("stores the review mode per book and exposes the revision outcome in the chapter workspace", async () => {
+    const id = "review-book";
+    const initial = createInitialWorkManifestWrite({ workId: id, title: "Review", profileId: "longform-novel", language: "en", writes: [] });
+    const source = join(root, "works", id, "source");
+    await mkdir(join(source, "chapters"), { recursive: true });
+    await writeFile(join(root, initial.write.relativePath), initial.write.content);
+    const now = "2026-09-09T00:00:00.000Z";
+    await writeFile(join(source, "book.json"), JSON.stringify({ id, title: "Review", platform: "local", genre: "mystery", status: "active", targetChapters: 3, chapterWordCount: 500, language: "en", createdAt: now, updatedAt: now }));
+    await writeFile(join(source, "chapters", "index.json"), JSON.stringify([{ number: 1, title: "Draft", wordCount: 1, createdAt: now, updatedAt: now, observations: [], provenance: "generated", autoRevision: { status: "candidate", reason: "no-verified-improvement-or-new-issues", findings: [], candidateVersionId: "candidate-id" } }]));
+    await writeFile(join(source, "chapters", "0001_draft.md"), "# Chapter 1: Draft\n\nText.\n");
+    const app = createStudioServer({} as never, root);
+    const update = await app.request(`/api/v1/books/${id}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ writing: { reviewMode: "manual" } }) });
+    expect(update.status).toBe(200);
+    const book = await update.json() as { book: { writing?: { reviewMode?: string } } };
+    expect(book.book.writing?.reviewMode).toBe("manual");
+    const loaded = await (await app.request(`/api/v1/books/${id}`)).json() as { book: { writing?: { reviewMode?: string } } };
+    expect(loaded.book.writing?.reviewMode).toBe("manual");
+    const workspace = await (await app.request(`/api/v1/books/${id}/chapters/1/workspace`)).json() as { autoRevision?: { status: string; candidateVersionId?: string } };
+    expect(workspace.autoRevision).toMatchObject({ status: "candidate", candidateVersionId: "candidate-id" });
+  });
+
   it("protects local API reads and mutations from untrusted browser origins while preserving native and proxy requests", async () => {
     const app = createStudioServer({} as never, root);
     const origin = "https://untrusted.example";

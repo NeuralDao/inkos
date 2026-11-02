@@ -16,7 +16,6 @@ interface PlatformOption {
 }
 
 export interface BookCreateFormState {
-  readonly narrativeLanguage?: "en" | "zh" | "ru";
   readonly title: string;
   readonly genre: string;
   readonly platform: string;
@@ -26,11 +25,11 @@ export interface BookCreateFormState {
 }
 
 export interface BookCreatePayload {
-  readonly narrativeLanguage?: "en" | "zh" | "ru";
   readonly title: string;
   readonly genre: string;
   readonly platform: string;
-  readonly language: "zh" | "en";
+  readonly language: "en";
+  readonly narrativeLanguage: "ru";
   readonly targetChapters: number;
   readonly chapterWordCount: number;
   readonly blurb: string;
@@ -71,7 +70,7 @@ const PLATFORMS_EN: ReadonlyArray<PlatformOption> = [
 const PAGE_COPY: Record<"zh" | "en", PlatformCopy> = {
   zh: {
     heading: "创建长篇 Work",
-    hint: "这里提交的是明确建书动作。想先讨论和完善方向，请回到 Studio Chat 自然交流，确认卡会携带同一份结构化建书参数。",
+    hint: "这里提交的是明确建书动作。长篇的框架操作语言固定为 en，基础设定和叙事语言固定为 ru。想先讨论和完善方向，请回到 Studio Chat 自然交流，确认卡会携带同一份结构化建书参数。",
     titleLabel: "书名",
     titlePlaceholder: "例如：夜港账本",
     genreLabel: "题材 / 类型",
@@ -88,7 +87,7 @@ const PAGE_COPY: Record<"zh" | "en", PlatformCopy> = {
   },
   en: {
     heading: "Create a long-form Work",
-    hint: "This surface submits an explicit creation action. Use Studio Chat to discuss the direction first; its confirmation card carries the same typed creation parameters.",
+    hint: "This surface submits an explicit creation action. Long-form operational language is fixed to en; foundation and narrative language are fixed to ru. Use Studio Chat to discuss the direction first; its confirmation card carries the same typed creation parameters.",
     titleLabel: "Title",
     titlePlaceholder: "Example: Ledger of the Night Port",
     genreLabel: "Genre",
@@ -154,8 +153,8 @@ export function buildBookCreatePayload(form: BookCreateFormState, language: "zh"
     title: form.title.trim(),
     genre: form.genre.trim(),
     platform: form.platform.trim(),
-    language: form.narrativeLanguage === "ru" ? "en" : language,
-    ...(form.narrativeLanguage !== undefined ? { narrativeLanguage: form.narrativeLanguage } : {}),
+    language: "en",
+    narrativeLanguage: "ru",
     targetChapters,
     chapterWordCount,
     blurb: form.brief.trim(),
@@ -262,16 +261,7 @@ export function BookCreate({ nav, theme, t: _t }: { nav: Nav; theme: Theme; t: T
               <input value={form.genre} onChange={(event) => updateForm({ genre: event.target.value })} className={`w-full ${c.input} rounded-md px-3 py-2.5 text-sm focus:outline-none`} placeholder={copy.genrePlaceholder} />
             </label>
           </div>
-          <div className="grid gap-4 sm:grid-cols-3">
-            <label className="space-y-2">
-              <span className="text-xs font-medium text-muted-foreground">{projectLang === "zh" ? "作品语言" : "Narrative language"}</span>
-              <select value={form.narrativeLanguage ?? ""} onChange={(event) => updateForm({ narrativeLanguage: (event.target.value || undefined) as BookCreateFormState["narrativeLanguage"] })} className={`w-full ${c.input} rounded-md bg-background px-3 py-2.5 text-sm focus:outline-none`}>
-                <option value="">{projectLang === "zh" ? "继承工作语言" : "Use operational language"}</option>
-                <option value="en">English</option>
-                <option value="zh">中文</option>
-                <option value="ru">Русский</option>
-              </select>
-            </label>
+          <div className="grid gap-4 sm:grid-cols-2">
             <label className="space-y-2">
               <span className="text-xs font-medium text-muted-foreground">{copy.platformLabel}</span>
               <select value={form.platform} onChange={(event) => updateForm({ platform: event.target.value })} className={`w-full ${c.input} rounded-md bg-background px-3 py-2.5 text-sm focus:outline-none`}>

@@ -59,7 +59,7 @@ export function SummarySection({ bookId }: SummarySectionProps) {
   const openFull = (
     <button
       onClick={() => openArtifact("outline/story_frame.md")}
-      className="mt-2 text-[15px] leading-6 text-primary hover:underline font-['SimSun','Songti_SC','STSong',serif]"
+      className="mt-2 text-[15px] leading-6 text-primary hover:underline"
     >
       {tr("查看完整设定 →", "View full foundation →")}
     </button>

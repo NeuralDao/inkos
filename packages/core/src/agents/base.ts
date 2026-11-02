@@ -26,6 +26,7 @@ export interface AgentContext {
   readonly onStreamProgress?: OnStreamProgress;
   readonly signal?: AbortSignal;
   readonly activatedSkills?: ReadonlyArray<ActivatedSkillGuidance>;
+  readonly disableRetries?: boolean;
 }
 
 export abstract class BaseAgent {
@@ -55,7 +56,7 @@ export abstract class BaseAgent {
   protected async submitStructured<TParameters extends TSchema>(
     messages: ReadonlyArray<LLMMessage>,
     resultTool: WorkerResultTool<TParameters>,
-    options?: { readonly temperature?: number; readonly maxTokens?: number; readonly professionalGuidance?: boolean },
+    options?: { readonly temperature?: number; readonly maxTokens?: number; readonly professionalGuidance?: boolean; readonly disableRetries?: boolean },
   ): Promise<{ readonly result: Static<TParameters>; readonly usage: LLMResponse["usage"] }> {
     let usage: LLMResponse["usage"] = { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
     const result = await runWorkerAgentTool(
@@ -66,6 +67,7 @@ export abstract class BaseAgent {
       resultTool,
       {
         ...options,
+        disableRetries: options?.disableRetries ?? this.ctx.disableRetries,
         signal: this.ctx.signal,
         onStreamProgress: this.ctx.onStreamProgress,
         onUsage: (value) => { usage = value; },
@@ -88,7 +90,7 @@ export abstract class BaseAgent {
     messages: ReadonlyArray<LLMMessage>,
     sources: ReadonlyMap<string, string>,
     tool: { name: string; label: string; description: string },
-    options: { temperature?: number; maxTokens: number; categoryRequired?: boolean; validateObservations?: (observations: ReturnType<typeof resolveObservationSources>) => void },
+    options: { temperature?: number; maxTokens: number; categoryRequired?: boolean; disableRetries?: boolean; validateObservations?: (observations: ReturnType<typeof resolveObservationSources>) => void },
   ) {
     const { categoryRequired, validateObservations, ...generationOptions } = options;
     const resolve = (observations: Static<typeof SourcedReviewIndexToolSchema>["observations"]) => {

@@ -84,11 +84,11 @@ export function parsePendingHooks(md: string): ReadonlyArray<PendingHook> {
   if (rows.length < 2) return [];
   const header = splitTableRow(rows[0]);
   const colOf = (...names: string[]) => header.findIndex((h) => names.includes(h));
-  const idIdx = colOf("hook_id", "id");
-  const typeIdx = colOf("类型", "type");
-  const statusIdx = colOf("状态", "status");
-  const payoffIdx = colOf("预期回收", "expected_payoff", "回收卷");
-  const contentIdx = colOf("备注", "notes");
+  const idIdx = colOf("hook_id", "id", "ID крючка");
+  const typeIdx = colOf("类型", "type", "Тип");
+  const statusIdx = colOf("状态", "status", "Статус");
+  const payoffIdx = colOf("预期回收", "expected_payoff", "回收卷", "Ожидаемая развязка");
+  const contentIdx = colOf("备注", "notes", "Примечания");
 
   return rows
     .slice(1)

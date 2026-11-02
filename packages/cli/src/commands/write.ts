@@ -55,20 +55,25 @@ writeCommand
         externalContext: context,
         quiet: opts.quiet,
       }));
-      const activatedSkills = await resolveCliProfileSkills(root, "longform-novel");
+      const [activatedSkills, reviewSkills] = await Promise.all([
+        resolveCliProfileSkills(root, "longform-novel"),
+        resolveCliProfileSkills(root, "longform-novel", { includeRecommended: true }),
+      ]);
 
       const count = parseInt(opts.count, 10);
       const wordCount = opts.words ? parseInt(opts.words, 10) : undefined;
+      const startChapterNumber = await state.getNextChapterNumber(bookId);
 
       if (!opts.json) log(formatWriteNextProgress(language, 1, count, bookId));
       const action = await executeExplicitCapabilityTool({
         projectRoot: root,
         binding: { capabilityId: "longform", actionId: "write_chapters", profileId: "longform-novel", risk: "recoverable-write" },
-        tool: createWriteChaptersTool(pipeline, bookId, { activeSkills: () => activatedSkills }),
+        tool: createWriteChaptersTool(pipeline, bookId, { workerSkills: (worker) => worker === "auditor" || worker === "reviser" ? reviewSkills : activatedSkills }),
         workId: bookId,
         parameters: {
           instruction: context || "Write the requested consecutive chapters for the active Work.",
           bookId,
+          startChapterNumber,
           chapterCount: count,
           ...(wordCount ? { chapterWordCount: wordCount } : {}),
         },
@@ -79,6 +84,7 @@ writeCommand
           readonly title: string;
           readonly wordCount: number;
           readonly observations: ReadonlyArray<Observation>;
+          readonly autoRevision?: { readonly status: "skipped" | "applied" | "candidate" | "unchanged" | "unavailable"; readonly reason: string; readonly candidateVersionId?: string };
         }>;
       } | undefined;
       const results = [...(actionData?.chapters ?? [])];
@@ -235,6 +241,7 @@ writeCommand
         parameters: {
           instruction: opts.brief?.trim() || `Rewrite chapter ${chapter}.`,
           bookId,
+          startChapterNumber: nextChapter,
           chapterCount: 1,
           ...(wordCount ? { chapterWordCount: wordCount } : {}),
         },

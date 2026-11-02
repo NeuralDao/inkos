@@ -328,6 +328,7 @@ export interface LLMClient {
      */
     readonly maxTokens: number;
     readonly thinkingBudget: number;
+    readonly reasoning?: boolean;
     readonly extra: Record<string, unknown>;
   };
 }
@@ -371,6 +372,7 @@ export function createLLMClient(config: LLMConfig): LLMClient {
     temperature: config.temperature ?? 0.7,
     maxTokens: config.maxTokens ?? _earlyCard?.maxOutput ?? UNKNOWN_MODEL_FALLBACK_MAX_TOKENS,
     thinkingBudget: config.thinkingBudget ?? 0,
+    reasoning: config.reasoning,
     extra: config.extra ?? {},
   };
 
@@ -409,10 +411,10 @@ export function createLLMClient(config: LLMConfig): LLMClient {
     provider: piProvider,
     baseUrl,
     // 注意：piModel.reasoning 是"激活 reasoning 模式"标志（会让 pi-ai 把 system 改成 developer role 等），
-    // 不是"模型能力"标签。只有用户显式配了 thinkingBudget > 0 才启用 reasoning mode。
+    // 不是"模型能力"标签。显式的 per-role reasoning 设置优先；否则只在 thinkingBudget > 0 时启用。
     // 千万不要从 lobe abilities.reasoning 自动推导，否则 Moonshot 这类不支持 developer role 的服务
     // 会把 content 吃掉，只返回 reasoning_content（见 R4 bug 1 诊断）。
-    reasoning: (config.thinkingBudget ?? 0) > 0,
+    reasoning: config.reasoning ?? (config.thinkingBudget ?? 0) > 0,
     input: ["text"] as ("text" | "image")[],
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     contextWindow: config.contextWindow ?? modelCard?.contextWindowTokens ?? 128_000,
@@ -456,6 +458,7 @@ export function clientWithModel(client: LLMClient, model: string, override: Part
     model, baseUrl: client._piModel?.baseUrl ?? "", apiKey: client._apiKey ?? "",
     apiFormat: client.apiFormat, stream: client.stream, proxyUrl: client.proxyUrl,
     temperature: client.defaults.temperature, thinkingBudget: client.defaults.thinkingBudget,
+    reasoning: client.defaults.reasoning,
     extra: client.defaults.extra, headers: client._piModel?.headers,
   }, { ...override, model }));
 }
@@ -937,16 +940,15 @@ function buildCustomHeaders(client: LLMClient, traceHeaders: Record<string, stri
   }) ?? { "Content-Type": "application/json" };
 }
 
-function defaultOpenAIChatExtra(client: LLMClient, model: string): Record<string, unknown> {
+function defaultOpenAIChatExtra(client: LLMClient): Record<string, unknown> {
   if (client.service !== "minimax") return {};
   // MiniMax OpenAI 兼容端点（issue #329）：
   // - reasoning_split: true 让 thinking 拆分到 reasoning_content / reasoning_details，
   //   不再以 <think>...</think> 内联在 content 里。M2.x 系列的 thinking 无法关闭，
   //   不拆分的话思考内容会混进章节/对话正文。
-  // - M3 系列额外默认关闭 thinking（M2.x 不支持 thinking 参数，不能发送）。
+  // - M2.x 不支持 thinking 参数，不能发送；M3 保持服务端默认 reasoning 策略。
   return {
     reasoning_split: true,
-    ...(/^minimax-m3(?:$|[-_.])/i.test(model) ? { thinking: { type: "disabled" } } : {}),
   };
 }
 
@@ -1376,7 +1378,7 @@ async function chatCompletionViaCustomOpenAICompatible(
     stream: client.stream,
     temperature: resolved.temperature,
     max_tokens: resolved.maxTokens,
-    ...defaultOpenAIChatExtra(client, model),
+    ...defaultOpenAIChatExtra(client),
     ...extra,
   };
   if (client.stream) {

@@ -4,6 +4,7 @@ import type { ContextPackage } from "../models/input-governance.js";
 import type { LengthSpec } from "../models/length-governance.js";
 import { countChapterLength } from "../utils/length-metrics.js";
 import { resolveNarrativeLanguage, type NarrativeLanguage } from "../utils/book-language.js";
+import { usageFromError } from "./auto-revision-policy.js";
 
 export interface ChapterReviewUsage {
   readonly promptTokens: number;
@@ -41,11 +42,13 @@ export async function reviewChapterDraft(params: {
         readonly narrativeLanguage?: NarrativeLanguage;
         readonly contextPackage: ContextPackage;
         readonly temperature?: number;
+        readonly disableRetries?: boolean;
       },
     ) => Promise<AuditResult>;
   };
   readonly assertNotEmpty: (content: string) => void;
   readonly addUsage: (left: ChapterReviewUsage, right?: ChapterReviewUsage) => ChapterReviewUsage;
+  readonly disableRetries?: boolean;
 }): Promise<ChapterReviewResult> {
   const content = params.output.content;
   params.assertNotEmpty(content);
@@ -63,13 +66,16 @@ export async function reviewChapterDraft(params: {
         narrativeLanguage,
         contextPackage: params.controlInput.contextPackage,
         temperature: 0.3,
+        ...(params.disableRetries ? { disableRetries: true } : {}),
       },
     );
   } catch (error) {
     const isEnglish = narrativeLanguage === "en";
     const isRussian = narrativeLanguage === "ru";
+    const failedUsage = usageFromError(error);
     modelReview = {
       unavailable: true,
+      ...(failedUsage ? { tokenUsage: failedUsage } : {}),
       observations: [{
         code: "review-unavailable",
         summary: isEnglish

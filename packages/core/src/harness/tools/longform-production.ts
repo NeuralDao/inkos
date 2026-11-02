@@ -11,12 +11,13 @@ import { runAsWorkflowTrajectory } from "../../llm/agent-trajectory.js";
 import {StateManager} from "../../state/manager.js";
 import type {WorkManifest} from "../contracts.js";
 import type {BookConfig} from "../../models/book.js";
-import { resolveBookCreationLanguages } from "../../utils/book-language.js";
+import { LONGFORM_CREATION_LANGUAGES } from "../../utils/book-language.js";
 
 interface LongformToolOptions {
   readonly activeWork?: {readonly work:WorkManifest;readonly projectRoot:string};
   readonly actionPayload?: ActionPayload;
   readonly language?: "zh" | "en";
+  readonly maxChapterCount?: number;
   readonly activeSkills?: () => ReadonlyArray<ActivatedSkillGuidance>;
   readonly workerSkills?: (worker: string) => ReadonlyArray<ActivatedSkillGuidance>;
 }
@@ -27,8 +28,6 @@ const BookCreateParams = Type.Object({
   bookId: Type.Optional(Type.String()),
   genre: Type.Optional(Type.String()),
   platform: Type.Optional(Type.String({ minLength: 1 })),
-  language: Type.Optional(Type.Union([Type.Literal("zh"), Type.Literal("en")])),
-  narrativeLanguage: Type.Optional(Type.Union([Type.Literal("en"), Type.Literal("zh"), Type.Literal("ru")])),
   targetChapters: Type.Optional(Type.Integer({ minimum: 1 })),
   chapterWordCount: Type.Optional(Type.Integer({ minimum: 1 })),
   minChapterLength: Type.Optional(Type.Integer({minimum:1,description:"Lower end of an explicitly requested per-chapter range. Preserve it as a Work constraint."})),
@@ -43,7 +42,7 @@ const FoundationRevisionParams = Type.Object({
 const WriteChaptersParams = Type.Object({
   instruction: Type.String(),
   bookId: Type.Optional(Type.String()),
-  startChapterNumber: Type.Integer({ minimum: 1, description: "First chapter in the requested writing range. Use the author's target, or inspect current progress for a request to continue. Existing chapters require revision, not another append." }),
+  startChapterNumber: Type.Optional(Type.Integer({ minimum: 1, description: "Optional first chapter in the requested writing range. If omitted, write from the next unwritten chapter. Existing chapters require revision, not another append." })),
   chapterCount: Type.Optional(Type.Integer({ minimum: 1 })),
   chapterWordCount: Type.Optional(Type.Integer({ minimum: 1 })),
 });
@@ -113,8 +112,8 @@ export function createBookFoundationTool(
     name: "create_book",
     label: "Create long-form Work",
     description: options.activeWork
-      ? "Initialize the current long-form Work's native book configuration and foundation. Preserve its Work ID; provide targetChapters and chapterWordCount from the user's request. An initialized book cannot be overwritten."
-      : "Create one long-form Work foundation from the confirmed instruction.",
+      ? "Initialize the current long-form Work's native book configuration and foundation. Language is fixed by this fork: operational en, narrative/readable foundation ru. Preserve its Work ID; provide targetChapters and chapterWordCount from the user's request. An initialized book cannot be overwritten."
+      : "Create one long-form Work foundation from the confirmed instruction. Language is fixed by this fork: operational en, narrative/readable foundation ru.",
     parameters: BookCreateParams,
     async execute(_toolCallId, params: Static<typeof BookCreateParams>, signal, onUpdate) {
         const payload = options.actionPayload?.createBook;
@@ -132,19 +131,10 @@ export function createBookFoundationTool(
           if(await state.isCompleteBookDirectory(state.bookDir(id)))throw Object.assign(new Error("The current book is already initialized; use its foundation or chapter revision action."),{code:"BOOK_ALREADY_INITIALIZED"});
           try{existing=await state.loadBookConfig(id);}catch(error){if((error as NodeJS.ErrnoException).code!=="ENOENT")throw error;}
         }
-        const narrativeLanguage = existing?.narrativeLanguage ?? options.activeWork?.work.metadata.narrativeLanguage ?? payload?.narrativeLanguage ?? params.narrativeLanguage;
-        resolveBookCreationLanguages({
-          language: params.language,
-          narrativeLanguage: params.narrativeLanguage === undefined ? narrativeLanguage : params.narrativeLanguage,
-        });
-        if (payload) resolveBookCreationLanguages({
-          language: payload.language,
-          narrativeLanguage: payload.narrativeLanguage === undefined ? narrativeLanguage : payload.narrativeLanguage,
-        });
-        const bookLanguages = resolveBookCreationLanguages({
-          language: existing?.language ?? options.activeWork?.work.language ?? payload?.language ?? params.language,
-          narrativeLanguage,
-        }, options.language);
+        // Long-form creation in this fork always uses English operational schemas
+        // and Russian readable foundation/prose. Do not depend on chat arguments,
+        // UI locale, or optional action-payload fields to establish this contract.
+        const bookLanguages = LONGFORM_CREATION_LANGUAGES;
         const { language } = bookLanguages;
         const skills = activatedSkills(options, "architect");
         const now = new Date().toISOString();
@@ -156,7 +146,7 @@ export function createBookFoundationTool(
           genre: payload?.genre ?? params.genre ?? existing?.genre ?? "other",
           platform: payload?.platform ?? params.platform ?? existing?.platform ?? "other",
           language,
-          ...(bookLanguages.narrativeLanguage !== undefined ? { narrativeLanguage: bookLanguages.narrativeLanguage } : {}),
+          narrativeLanguage: bookLanguages.narrativeLanguage,
           status: "outlining",
           targetChapters: payload?.targetChapters ?? params.targetChapters ?? existing?.targetChapters ?? 200,
           chapterWordCount: payload?.chapterWordCount ?? params.chapterWordCount ?? existing?.chapterWordCount ?? defaultChapterLength(language),
@@ -211,11 +201,14 @@ export function createWriteChaptersTool(
   return {
     name: "write_chapters",
     label: "Write chapters",
-    description: "Write a specific consecutive range of new chapters. startChapterNumber must match the next unwritten chapter; an existing or skipped range is rejected before generation. Inspect existing chapters for review, revision or export instead of resending an already completed writing range. This persists chapter artifacts and story state.",
+    description: "Write a specific consecutive range of new chapters. If startChapterNumber is supplied, it must match the next unwritten chapter; an existing or skipped range is rejected before generation. If omitted, writing starts at the next unwritten chapter. Inspect existing chapters for review, revision or export instead of resending an already completed writing range. This persists chapter artifacts and story state.",
     parameters: WriteChaptersParams,
     async execute(_toolCallId, params: Static<typeof WriteChaptersParams>, signal, onUpdate) {
         const bookId = resolveBookId("write_chapters", params.bookId, activeBookId);
-        const count = params.chapterCount ?? 1;
+        const requestedCount = params.chapterCount ?? 1;
+        const count = options.maxChapterCount === undefined
+          ? requestedCount
+          : Math.min(requestedCount, options.maxChapterCount);
         const skills = activatedSkills(options, "writer");
         const results = await runPipeline(pipeline, signal, options, () => pipeline.writeChapters(bookId, count, {
           startChapterNumber: params.startChapterNumber,
@@ -236,8 +229,8 @@ export function createWriteChaptersTool(
           kind: results.length === 1 ? "chapter_written" : "chapters_written",
           bookId,
           requestedCount: count,
-          startChapterNumber: params.startChapterNumber,
-          endChapterNumber: params.startChapterNumber + count - 1,
+          startChapterNumber: first?.chapterNumber,
+          endChapterNumber: results.at(-1)?.chapterNumber,
           completedCount: results.length,
           ...(delivery?{delivery}:{}),
           observations,
@@ -247,6 +240,7 @@ export function createWriteChaptersTool(
                 chapterNumber: first.chapterNumber,
                 title: first.title,
                 wordCount: first.wordCount,
+                ...(first.autoRevision ? { autoRevision: first.autoRevision } : {}),
                 ...(first.contextTrace ? { contextTrace: first.contextTrace } : {}),
               }
             : {}),
@@ -255,6 +249,7 @@ export function createWriteChaptersTool(
             title: result.title,
             wordCount: result.wordCount,
             observations: result.review.observations,
+            ...(result.autoRevision ? { autoRevision: result.autoRevision } : {}),
             ...(result.contextTrace ? { contextTrace: result.contextTrace } : {}),
           })),
         });
