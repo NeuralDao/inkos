@@ -5,6 +5,7 @@ import type { LengthSpec } from "../models/length-governance.js";
 import { countChapterLength } from "../utils/length-metrics.js";
 import { resolveNarrativeLanguage, type NarrativeLanguage } from "../utils/book-language.js";
 import { usageFromError } from "./auto-revision-policy.js";
+import { isChapterResumeSafetyError } from "../agent/chapter-stage-context.js";
 
 export interface ChapterReviewUsage {
   readonly promptTokens: number;
@@ -70,6 +71,7 @@ export async function reviewChapterDraft(params: {
       },
     );
   } catch (error) {
+    if (isChapterResumeSafetyError(error)) throw error;
     const isEnglish = narrativeLanguage === "en";
     const isRussian = narrativeLanguage === "ru";
     const failedUsage = usageFromError(error);

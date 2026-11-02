@@ -1,0 +1,17 @@
+ M fork-docs/CURRENT_STATE.md
+ M packages/cli/src/commands/write.ts
+ M packages/core/src/__tests__/unicode-length.flow.test.ts
+ M packages/core/src/agent/worker-agent.ts
+ M packages/core/src/agent/worker-response-archive.ts
+ M packages/core/src/agents/continuity.ts
+ M packages/core/src/agents/reviser.ts
+ M packages/core/src/models/chapter.ts
+ M packages/core/src/pipeline/chapter-review.ts
+ M packages/core/src/pipeline/chapter-state-recovery.ts
+ M packages/core/src/pipeline/chapter-truth-validation.ts
+ M packages/core/src/pipeline/runner.ts
+?? fork-docs/G4_CHAPTER_RESUME.md
+?? packages/core/src/__tests__/chapter-checkpoint.test.ts
+?? packages/core/src/agent/chapter-stage-context.ts
+?? packages/core/src/pipeline/chapter-checkpoint.ts
+?? packages/core/src/pipeline/chapter-legacy-evidence.ts

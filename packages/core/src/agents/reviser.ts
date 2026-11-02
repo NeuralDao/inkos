@@ -215,8 +215,8 @@ export class ReviserAgent extends BaseAgent {
           { code: "PARTIAL_CHAPTER_OUTPUT" },
         );
         assertChapterLength(revisedContent,lengthSpec);
-        if (autoFindings) validateDispositions((result as unknown as {findingDispositions:unknown}).findingDispositions, autoFindings);
         await onCandidate?.(revisedContent);
+        if (autoFindings) validateDispositions((result as unknown as {findingDispositions:unknown}).findingDispositions, autoFindings);
         return{...result,revisedContent};
       },
     }, { temperature: 0.3, maxTokens, disableRetries: !!autoFindings });

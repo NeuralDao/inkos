@@ -126,11 +126,54 @@ writeCommand
         });
       }
       if (opts.json) {
-        log(JSON.stringify({ error: String(e) }));
+        const failure = e as { code?: unknown; chapterNumber?: unknown; incompleteStages?: unknown };
+        log(JSON.stringify({ error: String(e),
+          ...(typeof failure?.code === "string" ? { code: failure.code } : {}),
+          ...(typeof failure?.chapterNumber === "number" ? { chapterNumber: failure.chapterNumber } : {}),
+          ...(Array.isArray(failure?.incompleteStages) ? { incompleteStages: failure.incompleteStages } : {}) }));
       } else {
         logError(`Failed to write chapter: ${e}`);
       }
       process.exit(1);
+    }
+  });
+
+writeCommand
+  .command("resume")
+  .description("Continue a saved chapter operation from its first incomplete stage")
+  .argument("[args...]", "Book ID and optional chapter number")
+  .option("--json", "Output JSON")
+  .action(async (args: ReadonlyArray<string>, opts) => {
+    try {
+      if (args.length > 2) throw new Error("Usage: inkos write resume [book-id] [chapter]");
+      const root = findProjectRoot();
+      const bookArg = args.length === 1 && /^\d+$/.test(args[0]!) ? undefined : args[0];
+      const chapterArg = args.length === 2 ? args[1] : bookArg === undefined ? args[0] : undefined;
+      const chapter = chapterArg === undefined ? undefined : Number(chapterArg);
+      if (chapter !== undefined && (!Number.isInteger(chapter) || chapter < 1)) throw new Error("Chapter number must be a positive integer");
+      const bookId = await resolveBookId(bookArg, root);
+      const config = await loadConfig({ projectRoot: root });
+      const pipeline = new PipelineRunner(buildPipelineConfig(config, root));
+      const [skills, reviewSkills] = await Promise.all([
+        resolveCliProfileSkills(root, "longform-novel"),
+        resolveCliProfileSkills(root, "longform-novel", { includeRecommended: true }),
+      ]);
+      const result = await pipeline.runWithAgentContext({ workerSkills: worker =>
+        worker === "auditor" || worker === "reviser" ? reviewSkills : skills },
+      () => pipeline.resumeChapter(bookId, chapter));
+      if (opts.json) log(JSON.stringify(result, null, 2));
+      else {
+        const state = new StateManager(root);
+        const book = await state.loadBookConfig(bookId);
+        for (const line of formatWriteNextResultLines(resolveCliLanguage(book.language), {
+          chapterNumber: result.chapterNumber, title: result.title, wordCount: result.wordCount,
+          observations: result.review.observations,
+        })) log(line);
+      }
+    } catch (error) {
+      if (opts.json) log(JSON.stringify({ error: String(error), code: (error as { code?: string })?.code }));
+      else logError(`Failed to resume chapter: ${error}`);
+      process.exitCode = 1;
     }
   });
 
@@ -228,9 +271,9 @@ writeCommand
       const wordCount = opts.words ? parseInt(opts.words, 10) : undefined;
 
       const config = await loadConfig();
-      const pipeline = new PipelineRunner(buildPipelineConfig(config, root, {
+      const pipeline = new PipelineRunner({ ...buildPipelineConfig(config, root, {
         externalContext: opts.brief,
-      }));
+      }), allowIncompleteRewrite: true });
       const activatedSkills = await resolveCliProfileSkills(root, "longform-novel");
 
       const action = await executeExplicitCapabilityTool({

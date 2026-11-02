@@ -1,4 +1,5 @@
 import { Agent } from "@mariozechner/pi-agent-core";
+import { createHash } from "node:crypto";
 import type { AgentTool, AgentToolResult } from "@mariozechner/pi-agent-core";
 import {
   createAssistantMessageEventStream,
@@ -30,7 +31,8 @@ import { toPiApi } from "../llm/api-format.js";
 import { recordExecutionEvidence } from "../harness/execution-evidence.js";
 import {decodeStructuredFields} from './structured-arguments.js';
 import { preserveToolArgumentTypes, toolArgumentIssues } from "./tool-arguments.js";
-import { archiveWorkerResponse, markWorkerResponseArchive, type WorkerResponseArchiveContext } from "./worker-response-archive.js";
+import { archiveWorkerResponse, findArchivedWorkerResponse, markWorkerResponseArchive, type WorkerResponseArchiveContext } from "./worker-response-archive.js";
+import { currentChapterStage } from "./chapter-stage-context.js";
 import { MAX_MODEL_OUTPUT_TOKENS } from "../llm/token-limits.js";
 
 export interface WorkerAgentOptions {
@@ -128,6 +130,44 @@ function localStopStream(model: Model<Api>) {
     stream.end(message);
   });
   return stream;
+}
+
+function replayStream(message: AssistantMessage): AssistantMessageEventStream {
+  const stream = createAssistantMessageEventStream();
+  queueMicrotask(() => {
+    if (message.stopReason === "error" || message.stopReason === "aborted") {
+      stream.push({ type: "error", reason: message.stopReason, error: message });
+    } else {
+      stream.push({ type: "done", reason: message.stopReason, message });
+    }
+    stream.end(message);
+  });
+  return stream;
+}
+
+function failedLocalStream(model: Model<Api>, error: unknown): AssistantMessageEventStream {
+  return replayStream(assistantMessage(model, "", undefined, "error", String(error)));
+}
+
+async function chapterRequest(context: Context, archive: WorkerResponseArchiveContext | undefined, resultTool?: string): Promise<{
+  archive?: WorkerResponseArchiveContext; replay?: { path: string; response: AssistantMessage };
+}> {
+  const stage = currentChapterStage();
+  if (!stage) return { archive };
+  if (!archive || archive.workId !== stage.bookId) throw Object.assign(new Error("Chapter worker response archive is required"), { code: "CHAPTER_RESPONSE_ARCHIVE_REQUIRED" });
+  const messages = context.messages.map(message => ({ role: message.role, content: message.content,
+    ...(message.role === "toolResult" ? { toolCallId: message.toolCallId, toolName: message.toolName, isError: message.isError } : {}) }));
+  const fingerprint = createHash("sha256").update(JSON.stringify({ systemPrompt: context.systemPrompt, messages, tools: context.tools, resultTool })).digest("hex");
+  const request = await stage.beginRequest(fingerprint);
+  const requestArchive = { ...archive, requestFingerprint: fingerprint, requestSequence: request.sequence, ...(resultTool ? { resultTool } : {}) };
+  if (!request.replay) return { archive: requestArchive };
+  const replay = await findArchivedWorkerResponse({ context: requestArchive, operationId: stage.operationId,
+    chapterNumber: stage.chapterNumber, stage: stage.stage, attemptId: stage.attemptId,
+    requestSequence: request.sequence, requestFingerprint: fingerprint });
+  if (!replay) throw Object.assign(new Error(`The prior ${stage.stage} request has no complete archived response`), {
+    code: "CHAPTER_RESUME_AMBIGUOUS_STAGE", stage: stage.stage, chapterNumber: stage.chapterNumber,
+  });
+  return { archive: requestArchive, replay };
 }
 
 /** Archive a structured worker's complete response before Pi validates tool arguments. */
@@ -314,29 +354,34 @@ export async function runWorkerAgent(
   }
 
   let streamFailure: unknown;
+  let chapterReplayFailure: unknown;
+  let responseArchive = options.responseArchive;
+  let replayedResponse = false;
   const agent = new Agent({
     initialState: { model, systemPrompt, tools: [], messages: [] },
     toolExecution: "sequential",
-    streamFn: (streamModel, context, streamOptions) => providerWorkerStream(
-      client,
-      streamModel,
-      context,
-      streamOptions,
-      options,
-      (error) => { streamFailure = error; },
-    ),
+    streamFn: async (streamModel, context, streamOptions) => {
+      let request: Awaited<ReturnType<typeof chapterRequest>>;
+      try { request = await chapterRequest(context, options.responseArchive); }
+      catch (error) { chapterReplayFailure = error; return failedLocalStream(streamModel, error); }
+      responseArchive = request.archive;
+      if (request.replay) { replayedResponse = true; return replayStream(request.replay.response); }
+      return providerWorkerStream(client, streamModel, context, streamOptions, options,
+        (error) => { streamFailure = error; });
+    },
   });
   const abortAgent = () => agent.abort();
   options.signal?.addEventListener("abort", abortAgent, { once: true });
 
   try {
     await agent.prompt(promptMessages);
+    if (chapterReplayFailure !== undefined) throw chapterReplayFailure;
     const final = [...agent.state.messages].reverse().find(
       (message): message is AssistantMessage => message.role === "assistant",
     );
-    if (final && options.responseArchive) {
-      const artifactPath = await archiveWorkerResponse({ context: options.responseArchive, model, response: final, attempt: 1 });
-      recordExecutionEvidence("worker-response-archived", { artifactPath, role: options.responseArchive.role, model: model.id });
+    if (final && responseArchive && !replayedResponse) {
+      const artifactPath = await archiveWorkerResponse({ context: responseArchive, model, response: final, attempt: 1 });
+      recordExecutionEvidence("worker-response-archived", { artifactPath, role: responseArchive.role, model: model.id });
     }
     options.signal?.throwIfAborted();
     if (streamFailure !== undefined) throw streamFailure;
@@ -397,6 +442,7 @@ export async function runWorkerAgentTool<TParameters extends TSchema>(
   let lastValidationError: (Error & {code?:string}) | undefined;
   let activeResponseArtifactPath: string | undefined;
   let responseArchiveFailure: unknown;
+  let chapterReplayFailure: unknown;
   const responseArtifactPaths: string[] = [];
   const resultArtifactByToolCall = new Map<string, string>();
   const maxResultTurns = options.disableRetries ? 1 : 3;
@@ -460,13 +506,23 @@ export async function runWorkerAgentTool<TParameters extends TSchema>(
       return undefined;
     },
     toolExecution: "sequential",
-    streamFn: (streamModel, context, streamOptions) => {
+    streamFn: async (streamModel, context, streamOptions) => {
       if (submitted) return localStopStream(streamModel);
       if (modelTurns >= maxResultTurns) {
         resultAttemptsExhausted = true;
         return localStopStream(streamModel);
       }
       modelTurns++;
+      let request: Awaited<ReturnType<typeof chapterRequest>>;
+      try { request = await chapterRequest(context, options.responseArchive, resultTool.name); }
+      catch (error) { chapterReplayFailure = error; return failedLocalStream(streamModel, error); }
+      if (request.replay) {
+        const { response, path } = request.replay;
+        responseArtifactPaths.push(path);
+        for (const part of response.content) if (part.type === "toolCall") resultArtifactByToolCall.set(part.id, path);
+        activeResponseArtifactPath = path;
+        return replayStream(response);
+      }
       const resultOptions = {
           ...streamOptions,
           ...(options.temperature !== undefined ? { temperature: client.service === "custom" ? options.temperature
@@ -483,7 +539,7 @@ export async function runWorkerAgentTool<TParameters extends TSchema>(
         : client.stream === false
         ? guardedPiNonStreaming(streamModel, context, resultOptions, client.proxyUrl)
         : guardedPiStream(streamModel, context, resultOptions, 0, {firstEventTimeoutMs:900_000,idleTimeoutMs:1_000_000}, false);
-      return options.responseArchive ? archiveResponseStream(rawStream, streamModel, options.responseArchive, modelTurns,
+      return request.archive ? archiveResponseStream(rawStream, streamModel, request.archive, modelTurns,
         (response, artifactPath) => {
           responseArtifactPaths.push(artifactPath);
           for (const part of response.content) if (part.type === "toolCall") resultArtifactByToolCall.set(part.id, artifactPath);
@@ -515,6 +571,7 @@ export async function runWorkerAgentTool<TParameters extends TSchema>(
 
   try {
     await agent.prompt(promptMessages);
+    if (chapterReplayFailure !== undefined) throw chapterReplayFailure;
     if (responseArchiveFailure !== undefined) throw Object.assign(new Error("Could not preserve the raw worker response before processing."), {
       code: "WORKER_RESPONSE_ARCHIVE_FAILED", cause: responseArchiveFailure,
     });
@@ -538,6 +595,7 @@ export async function runWorkerAgentTool<TParameters extends TSchema>(
     }
     if (!submitted) {
       await agent.prompt(`You did not call ${resultTool.name}. Call it now with the complete result.`);
+      if (chapterReplayFailure !== undefined) throw chapterReplayFailure;
       if (responseArchiveFailure !== undefined) throw Object.assign(new Error("Could not preserve the raw worker response before processing."), {
         code: "WORKER_RESPONSE_ARCHIVE_FAILED", cause: responseArchiveFailure,
       });

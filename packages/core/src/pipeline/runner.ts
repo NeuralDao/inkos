@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { z } from "zod";
 import {readPinnedParentCanon} from "../harness/parent-canon.js";
 import {renderChapterDocument,chapterDocumentBody} from '../utils/chapter-document.js';
 import {changedSourceRegion} from '../utils/source-text.js';
@@ -7,8 +8,9 @@ import type { LLMClient, OnStreamProgress } from "../llm/provider.js";
 import { clientWithModel } from "../llm/provider.js";
 import type { Logger } from "../utils/logger.js";
 import { BookConfigSchema, type BookConfig, type FanficMode } from "../models/book.js";
+import { StateManifestSchema, CurrentStateStateSchema, HooksStateSchema, ChapterSummariesStateSchema, RuntimeStateDeltaSchema } from "../models/runtime-state.js";
 import { resolveNarrativeLanguage, type NarrativeLanguage } from "../utils/book-language.js";
-import type { AutoRevisionOutcome, ChapterMeta } from "../models/chapter.js";
+import { AutoRevisionOutcomeSchema, type AutoRevisionOutcome, type ChapterMeta } from "../models/chapter.js";
 import type { NotifyChannel, LLMConfig, AgentLLMOverride } from "../models/project.js";
 import { ArchitectAgent, type ArchitectOutput } from "../agents/architect.js";
 import { PlannerAgent, type PlanChapterOutput } from "../agents/planner.js";
@@ -20,15 +22,15 @@ import { StateValidatorAgent, type ValidationResult } from "../agents/state-vali
 import { RadarAgent } from "../agents/radar.js";
 import type { RadarSource } from "../agents/radar-source.js";
 import { StateManager } from "../state/manager.js";
-import { archiveChapterVersion, readChapterUserBrief } from "../state/chapter-workspace.js";
+import { archiveChapterVersion, readChapterUserBrief, readChapterVersion } from "../state/chapter-workspace.js";
 import { dispatchNotification, dispatchWebhookEvent } from "../notify/dispatcher.js";
 import type { WebhookEvent } from "../notify/webhook.js";
 import type { AgentContext } from "../agents/base.js";
 import type { AuditResult } from "../agents/continuity.js";
-import type { Observation } from "../models/observation.js";
+import { ObservationSchema, type Observation } from "../models/observation.js";
 import type { RadarResult } from "../agents/radar.js";
 import type { LengthSpec, LengthTelemetry } from "../models/length-governance.js";
-import type { ChapterMemo, ChapterTrace, ContextPackage } from "../models/input-governance.js";
+import { ChapterMemoSchema, ChapterIntentSchema, ChapterTraceSchema, ContextPackageSchema, type ChapterMemo, type ChapterTrace, type ContextPackage } from "../models/input-governance.js";
 import type { ContextCompressionCallback } from "../models/context-compression.js";
 import { buildLengthSpec, chapterLengthDelivery, countChapterLength, formatLengthCount, resolveLengthCountingMode, type LengthLanguage } from "../utils/length-metrics.js";
 import {
@@ -54,6 +56,10 @@ import { createWorkManifest, loadWorkManifest, saveWorkManifest } from "../harne
 import { WorkManifestSchema, type WorkManifest } from "../harness/contracts.js";
 import { syncWorkSourceArtifacts, captureWorkSourceState, changedWorkSourcePaths } from "../harness/source-sync.js";
 import { reviewChapterDraft } from "./chapter-review.js";
+import { ChapterCheckpoint, chapterAuthorityHashes, chapterBookIdentity, assertChapterCheckpointBaseline } from "./chapter-checkpoint.js";
+import { bootstrapLegacyAuditCheckpoint } from "./chapter-legacy-evidence.js";
+import { isDeepStrictEqual } from "node:util";
+import { isChapterResumeSafetyError } from "../agent/chapter-stage-context.js";
 import { actionableFindings, reviewFindings, revisionModeFor, usageFromError } from "./auto-revision-policy.js";
 import { validateChapterTruthPersistence } from "./chapter-truth-validation.js";
 import { loadPersistedPlan, relativeToBookDir, savePersistedPlan } from "./persisted-governed-plan.js";
@@ -63,6 +69,51 @@ import { loadAvailableAgentSkills, mergeActivatedSkillGuidance } from "../skills
 import { commitAtomicFileSet } from "../utils/atomic-file-set.js";
 import { compileStyleGuide } from "../agents/style-guide.js";
 import { compileImportSource, renderCompleteImportSource } from "../agents/import-context.js";
+
+const CheckpointUsageSchema = z.object({ promptTokens: z.number().int().nonnegative(),
+  completionTokens: z.number().int().nonnegative(), totalTokens: z.number().int().nonnegative() });
+const PreparedCheckpointSchema = z.object({
+  externalContext: z.string().optional(), chapterIntent: z.string(), chapterMemo: ChapterMemoSchema,
+  chapterIntentData: ChapterIntentSchema.optional(), contextPackage: ContextPackageSchema,
+}).passthrough();
+const PlanCheckpointSchema = z.object({ intent: ChapterIntentSchema, memo: ChapterMemoSchema, intentMarkdown: z.string(),
+  plannerInputs: z.array(z.string()), runtimePath: z.string() });
+const ContextCheckpointSchema = z.object({ contextPackage: ContextPackageSchema, trace: ChapterTraceSchema,
+  contextPath: z.string(), tracePath: z.string() });
+const DraftCheckpointSchema = z.object({
+  output: z.object({ chapterNumber: z.number().int().positive(), title: z.string().min(1), content: z.string().min(1),
+    wordCount: z.number().int().nonnegative(), tokenUsage: CheckpointUsageSchema }),
+  draftVersion: z.object({ id: z.string().min(1) }).passthrough().optional(),
+});
+const AuditCheckpointSchema = z.object({
+  content: z.string().min(1), wordCount: z.number().int().nonnegative(), totalUsage: CheckpointUsageSchema,
+  review: z.object({ summary: z.string(), observations: z.array(ObservationSchema), unavailable: z.boolean().optional(),
+    tokenUsage: CheckpointUsageSchema.optional(),
+    reviewedArtifact: z.object({ workId: z.string(), artifactId: z.string(), revisionId: z.string() }).optional() }),
+});
+const RevisionCheckpointSchema = z.object({
+  autoRevision: AutoRevisionOutcomeSchema, finalContent: z.string().min(1), candidateContent: z.string().optional(),
+  candidateVersionId: z.string().optional(), pendingRevisionContext: ContextPackageSchema.optional(), totalUsage: CheckpointUsageSchema,
+});
+const RevisionCandidateCheckpointSchema = z.object({ content: z.string().min(1), candidateVersionId: z.string().min(1) });
+const RuntimeSnapshotCheckpointSchema = z.object({ manifest: StateManifestSchema, currentState: CurrentStateStateSchema,
+  hooks: HooksStateSchema, chapterSummaries: ChapterSummariesStateSchema });
+const BaselineCheckpointSchema = z.object({ runtimeSnapshot: RuntimeSnapshotCheckpointSchema, authorityHashes: z.record(z.string()), bookIdentity: z.unknown() });
+const StartedCheckpointSchema = z.object({ wordCount: z.number().int().positive().optional(), temperatureOverride: z.number().optional(), externalContext: z.string().optional() });
+const PersistedCheckpointSchema = z.object({ chapterNumber: z.number().int().positive(), title: z.string(), content: z.string(),
+  autoRevision: AutoRevisionOutcomeSchema, auditResult: AuditCheckpointSchema.shape.review,
+  finalWordCount: z.number().int().nonnegative(), lengthTelemetry: z.unknown().optional(), totalUsage: CheckpointUsageSchema });
+const PersistenceOutputCheckpointSchema = z.object({ chapterNumber: z.number().int().positive(), title: z.string(), content: z.string(),
+  wordCount: z.number().int().nonnegative(), postSettlement: z.string(), runtimeStateDelta: RuntimeStateDeltaSchema,
+  runtimeStateSnapshot: RuntimeSnapshotCheckpointSchema, updatedState: z.string(), updatedHooks: z.string(),
+  updatedChapterSummaries: z.string(), runtimeStateApplied: z.boolean(), tokenUsage: CheckpointUsageSchema.optional() });
+const SettlementCheckpointSchema = z.object({ candidate: z.boolean(), content: z.string(), persistenceOutput: PersistenceOutputCheckpointSchema,
+  totalUsage: CheckpointUsageSchema });
+const TruthCheckpointSchema = z.object({ validation: z.object({ consistent: z.boolean(), reconciliationRequired: z.boolean(),
+  observations: z.array(ObservationSchema) }), persistenceOutput: PersistenceOutputCheckpointSchema });
+const PostAuditCheckpointSchema = z.object({ autoRevision: AutoRevisionOutcomeSchema,
+  candidateReview: AuditCheckpointSchema.shape.review.optional(), auditResult: AuditCheckpointSchema.shape.review,
+  totalUsage: CheckpointUsageSchema, content: z.string() });
 
 function mergeChapterRevisionInstructions(
   persistedBrief: string,
@@ -117,6 +168,8 @@ export interface PipelineConfig {
   readonly notifyChannels?: ReadonlyArray<NotifyChannel>;
   readonly radarSources?: ReadonlyArray<RadarSource>;
   readonly externalContext?: string;
+  /** Explicit chapter rewrite replaces the interrupted operation after confirmation. */
+  readonly allowIncompleteRewrite?: boolean;
   readonly modelOverrides?: Record<string, string | AgentLLMOverride>;
   readonly logger?: Logger;
   readonly onStreamProgress?: OnStreamProgress;
@@ -1179,6 +1232,72 @@ export class PipelineRunner {
     }
   }
 
+  /** Continue the latest saved chapter operation without re-running completed model stages. */
+  async resumeChapter(bookId: string, requestedChapter?: number): Promise<ChapterPipelineResult> {
+    const releaseLock = await this.state.acquireBookLock(bookId);
+    try {
+      const book = await this.state.loadBookConfig(bookId);
+      const bookDir = this.state.bookDir(bookId);
+      const index = await this.state.loadChapterIndex(bookId);
+      const sourceBefore = await captureWorkSourceState(this.config.projectRoot, bookId);
+      let checkpoint = requestedChapter === undefined
+        ? await ChapterCheckpoint.latestForBook(this.config.projectRoot, bookId)
+        : await ChapterCheckpoint.latest(this.config.projectRoot, bookId, requestedChapter);
+      const latestChapter = index.reduce((latest, item) => Math.max(latest, item.number), 0);
+      const legacyChapter = requestedChapter ?? latestChapter;
+      if ((!checkpoint || (requestedChapter === undefined && checkpoint.chapter < latestChapter)) && legacyChapter > 0) {
+        const chapter = index.find(item => item.number === legacyChapter);
+        if (chapter && chapter.number === latestChapter) checkpoint = await bootstrapLegacyAuditCheckpoint({
+          projectRoot: this.config.projectRoot, bookId, bookDir, book, chapter, sourceState: sourceBefore,
+          currentContent: await this.readChapterContent(bookDir, chapter.number),
+        });
+      }
+      if (!checkpoint) throw Object.assign(new Error("No chapter checkpoint found for this book"), { code: "CHAPTER_CHECKPOINT_NOT_FOUND" });
+      const chapterNumber = checkpoint.chapter;
+      if (index.some(chapter => chapter.number > chapterNumber)) {
+        throw Object.assign(new Error("Cannot resume a chapter after later chapters have been saved"), { code: "CHAPTER_RESUME_NOT_LATEST" });
+      }
+      const chapterPersisted = index.some(chapter => chapter.number === chapterNumber);
+      if (!chapterPersisted && await this.state.getNextChapterNumber(bookId) !== chapterNumber) {
+        throw Object.assign(new Error("Checkpoint does not refer to the next chapter"), { code: "CHAPTER_RESUME_NUMBER_CONFLICT" });
+      }
+      const started = checkpoint.completed("started", StartedCheckpointSchema);
+      if (!started) throw new Error("Chapter checkpoint has no operation settings");
+      const liveSnapshot = await loadRuntimeStateSnapshot(bookDir);
+      if (!checkpoint.latestRecord("baseline") && !chapterPersisted
+        && !checkpoint.hasStartedStage()
+        && !checkpoint.latestRecord("plan") && !checkpoint.latestRecord("context") && !checkpoint.latestRecord("draft")) {
+        await checkpoint.record("baseline", "completed", { runtimeSnapshot: liveSnapshot,
+          authorityHashes: chapterAuthorityHashes(sourceBefore, chapterNumber), bookIdentity: chapterBookIdentity(book) });
+      }
+      const baselineSnapshot = chapterPersisted
+        ? await loadRuntimeStateSnapshotAtChapter({ bookDir, chapterNumber: chapterNumber - 1, language: book.language })
+        : liveSnapshot;
+      assertChapterCheckpointBaseline(checkpoint.latestRecord("baseline"), sourceBefore, baselineSnapshot, book, chapterNumber);
+
+      if (chapterPersisted) {
+        const currentContent = await this.readChapterContent(bookDir, chapterNumber);
+        const savedTruth = checkpoint.matching("state-validation", TruthCheckpointSchema, item =>
+          item.persistenceOutput.content === currentContent && isDeepStrictEqual(item.persistenceOutput.runtimeStateSnapshot, liveSnapshot));
+        if (!savedTruth) {
+          throw Object.assign(new Error("Saved chapter or state changed since the checkpoint"), { code: "CHAPTER_RESUME_CHAPTER_CHANGED" });
+        }
+      }
+      const completed = checkpoint.completed("persisted", PersistedCheckpointSchema);
+      if (completed) return { chapterNumber, title: completed.title, wordCount: completed.finalWordCount,
+        review: completed.auditResult, autoRevision: completed.autoRevision, tokenUsage: completed.totalUsage };
+
+      const result = await this._executeNextChapterLocked(bookId, started.wordCount, started.temperatureOverride,
+        started.externalContext, { checkpoint, chapterNumber, chapterPersisted }, async () => {
+          await syncWorkSourceArtifacts({ projectRoot: this.config.projectRoot, workId: bookId, accept: true,
+            acceptPaths: await changedWorkSourcePaths(this.config.projectRoot, bookId, sourceBefore) });
+        });
+      return result;
+    } finally {
+      await releaseLock();
+    }
+  }
+
   async writeChapters(
     bookId: string,
     chapterCount: number,
@@ -1254,6 +1373,12 @@ export class PipelineRunner {
     externalContext?: string,
   ): Promise<ChapterPipelineResult> {
     const bookDir = this.state.bookDir(bookId);
+    const previousRun = await ChapterCheckpoint.latestForBook(this.config.projectRoot, bookId);
+    if (!this.config.allowIncompleteRewrite && previousRun && previousRun.latestRecord("persisted")?.status !== "completed") {
+      throw Object.assign(new Error(`Chapter ${previousRun.chapter} has an incomplete operation; use write resume first`), {
+        code: "CHAPTER_RESUME_REQUIRED", chapterNumber: previousRun.chapter,
+      });
+    }
     if (!await this.state.isCompleteBookDirectory(bookDir)) {
       throw Object.assign(new Error(`Work "${bookId}" is not ready for chapter writing. Complete or recover its foundation first.`), {
         code: "WORK_NOT_READY", workId: bookId, recoveryAction: "revise_foundation",
@@ -1267,16 +1392,15 @@ export class PipelineRunner {
       wordCount,
       temperatureOverride,
       externalContext,
+      undefined,
+      async () => {
+        const chapterFile = (await readdir(join(bookDir, "chapters")))
+          .find((file) => file.startsWith(`${paddedChapter}_`) && file.endsWith(".md"));
+        if (!chapterFile) throw new Error(`Chapter ${chapterNumber} completed without a persisted chapter artifact.`);
+        await syncWorkSourceArtifacts({projectRoot:this.config.projectRoot,workId:bookId,accept:true,
+          acceptPaths:await changedWorkSourcePaths(this.config.projectRoot,bookId,sourceBefore)});
+      },
     );
-    const chapterFile = (await readdir(join(bookDir, "chapters")))
-      .find((file) => file.startsWith(`${paddedChapter}_`) && file.endsWith(".md"));
-    if (!chapterFile) {
-      throw new Error(`Chapter ${chapterNumber} completed without a persisted chapter artifact.`);
-    }
-    // Publish at the same chapter boundary as native progress. A later model
-    // failure in this batch must not hide already completed chapters from Work readers.
-    await syncWorkSourceArtifacts({projectRoot:this.config.projectRoot,workId:bookId,accept:true,
-      acceptPaths:await changedWorkSourcePaths(this.config.projectRoot,bookId,sourceBefore)});
     return result;
   }
 
@@ -1285,20 +1409,33 @@ export class PipelineRunner {
     wordCount?: number,
     temperatureOverride?: number,
     externalContext?: string,
+    recovery?: { readonly checkpoint: ChapterCheckpoint; readonly chapterNumber: number; readonly chapterPersisted: boolean },
+    finalize?: () => Promise<void>,
   ): Promise<ChapterPipelineResult> {
     this.throwIfOperationAborted();
     await this.state.ensureControlDocuments(bookId);
     const book = await this.state.loadBookConfig(bookId);
     const bookDir = this.state.bookDir(bookId);
-    const chapterNumber = await this.state.getNextChapterNumber(bookId);
+    const chapterNumber = recovery?.chapterNumber ?? await this.state.getNextChapterNumber(bookId);
+    const checkpoint = recovery?.checkpoint ?? new ChapterCheckpoint(this.config.projectRoot, bookId, chapterNumber);
+    if (!recovery) {
+      await checkpoint.record("started", "completed", { wordCount, temperatureOverride, externalContext });
+      await checkpoint.record("baseline", "completed", {
+        runtimeSnapshot: await loadRuntimeStateSnapshot(bookDir),
+        authorityHashes: chapterAuthorityHashes(await captureWorkSourceState(this.config.projectRoot, bookId), chapterNumber),
+        bookIdentity: chapterBookIdentity(book),
+      });
+    }
     const stageLanguage = await this.resolveBookLanguage(book);
     this.logStage(stageLanguage, { zh: "准备章节输入", en: "preparing chapter inputs" });
-    const writeInput = await this.prepareWriteInput(
-      book,
-      bookDir,
-      chapterNumber,
-      externalContext,
+    const savedInput = recovery ? checkpoint.completed("prepared", PreparedCheckpointSchema) : undefined;
+    if (savedInput && (savedInput.chapterMemo.chapter !== chapterNumber || savedInput.contextPackage.chapter !== chapterNumber)) {
+      throw new Error("Prepared checkpoint belongs to a different chapter");
+    }
+    const writeInput = savedInput ? { ...savedInput, contextTrace: undefined } : await this.prepareWriteInput(
+      book, bookDir, chapterNumber, externalContext, checkpoint, Boolean(recovery),
     );
+    if (!savedInput) await checkpoint.record("prepared", "completed", writeInput);
     const reducedControlInput = {
       chapterIntent: writeInput.chapterIntent,
       chapterMemo: writeInput.chapterMemo,
@@ -1314,7 +1451,9 @@ export class PipelineRunner {
     // 1. Write chapter
     const writer = new WriterAgent(this.agentCtxFor("writer", bookId));
     this.logStage(stageLanguage, { zh: "撰写章节草稿", en: "writing chapter draft" });
-    const output = await writer.writeChapterDraft({
+    const savedDraft = recovery ? checkpoint.completed("draft", DraftCheckpointSchema) : undefined;
+    if (savedDraft && savedDraft.output.chapterNumber !== chapterNumber) throw new Error("Draft checkpoint belongs to a different chapter");
+    const output = savedDraft?.output ?? await checkpoint.runStage("draft", () => writer.writeChapterDraft({
       book,
       bookDir,
       chapterNumber,
@@ -1322,16 +1461,17 @@ export class PipelineRunner {
       lengthSpec,
       ...(wordCount ? { wordCountOverride: wordCount } : {}),
       ...(temperatureOverride ? { temperatureOverride } : {}),
-    });
+    }), Boolean(recovery));
     this.throwIfOperationAborted();
     const writerCount = countChapterLength(output.content, lengthSpec.countingMode);
     // Preserve the paid draft before any further model or validation call can fail.
-    const draftVersion = book.writing?.reviewMode !== "manual"
-      ? await archiveChapterVersion(bookDir, chapterNumber, output.content, "agent")
-      : undefined;
+    const draftVersion = savedDraft ? savedDraft.draftVersion : book.writing?.reviewMode !== "manual"
+      ? await archiveChapterVersion(bookDir, chapterNumber, output.content, "agent") : undefined;
+    if (!savedDraft) await checkpoint.record("draft", "completed", { output, draftVersion });
 
     // Token usage accumulator
-    let totalUsage: TokenUsageSummary = output.tokenUsage ?? { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
+    const previousUsage = recovery ? checkpoint.latestCumulativeUsage() : undefined;
+    let totalUsage: TokenUsageSummary = previousUsage ?? output.tokenUsage ?? { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
     const reviewSkill = book.writing?.reviewMode === "manual" ? undefined :
       (await loadAvailableAgentSkills({ projectRoot: this.config.projectRoot })).skills.filter((skill) => skill.id === "inkos-story-review").at(-1);
     const reviewAgentContext = (agent: "auditor" | "reviser"): AgentContext => {
@@ -1339,7 +1479,9 @@ export class PipelineRunner {
       return { ...context, activatedSkills: mergeActivatedSkillGuidance(reviewSkill ? [{ skill: reviewSkill, resources: [] }] : [], context.activatedSkills ?? []) };
     };
     this.logStage(stageLanguage, { zh: "生成章节审查观察", en: "collecting chapter review observations" });
-    const reviewResult = await reviewChapterDraft({
+    const savedReview = recovery ? checkpoint.completed("audit", AuditCheckpointSchema) : undefined;
+    if (savedReview && savedReview.content !== output.content) throw new Error("Audit checkpoint does not match the saved draft");
+    const reviewResult = savedReview ?? await checkpoint.runStage("audit", () => reviewChapterDraft({
       book: { genre: book.genre, language: book.language, narrativeLanguage: resolveNarrativeLanguage(book) },
       bookDir,
       chapterNumber,
@@ -1351,20 +1493,32 @@ export class PipelineRunner {
       assertNotEmpty: (content) => this.assertChapterContentNotEmpty(content, chapterNumber, "draft generation"),
       addUsage: PipelineRunner.addUsage,
       disableRetries: book.writing?.reviewMode !== "manual",
-    });
-    totalUsage = reviewResult.totalUsage;
+    }), Boolean(recovery));
+    if (!savedReview) await checkpoint.record("audit", reviewResult.review.unavailable || reviewResult.review.observations.some(item => item.assessment === "unavailable")
+      ? "failed" : "completed", reviewResult);
+    if (recovery && (reviewResult.review.unavailable || reviewResult.review.observations.some(item => item.assessment === "unavailable"))) {
+      throw Object.assign(new Error("Chapter audit remains unavailable; run resume again after addressing the cause"), { code: "CHAPTER_RESUME_AUDIT_UNAVAILABLE" });
+    }
+    if (!savedReview || !previousUsage) totalUsage = reviewResult.totalUsage;
     let finalContent = reviewResult.content;
     let finalWordCount = reviewResult.wordCount;
     let auditResult = reviewResult.review;
     const findings = reviewFindings(reviewResult.review.observations);
     const actionable = actionableFindings(reviewResult.review.observations);
     const auditUnavailable = reviewResult.review.unavailable || reviewResult.review.observations.some((observation) => observation.assessment === "unavailable");
-    let candidateContent: string | undefined;
-    let candidateVersionId: string | undefined;
+    const savedCandidateRecord = recovery ? checkpoint.latestRecordAfter("revision-candidate", "revision-started") : undefined;
+    const savedCandidate = savedCandidateRecord?.status === "candidate" ? RevisionCandidateCheckpointSchema.parse(savedCandidateRecord.data) : undefined;
+    if (savedCandidate && await readChapterVersion(bookDir, chapterNumber, savedCandidate.candidateVersionId) !== savedCandidate.content) {
+      throw new Error("Revision candidate differs from its saved version");
+    }
+    let candidateContent: string | undefined = savedCandidate?.content;
+    let candidateVersionId: string | undefined = savedCandidate?.candidateVersionId;
     const preserveCandidate = async (content: string) => {
+      const previousCandidate = candidateContent;
       candidateContent = content;
-      if (content.trim() && content !== output.content && !candidateVersionId) {
+      if (content.trim() && content !== output.content && (!candidateVersionId || previousCandidate !== content)) {
         candidateVersionId = (await archiveChapterVersion(bookDir, chapterNumber, content, "revision")).id;
+        await checkpoint.record("revision-candidate", "candidate", { content, candidateVersionId });
       }
     };
     let candidateReview: AuditResult | undefined;
@@ -1378,7 +1532,17 @@ export class PipelineRunner {
       ...(draftVersion ? { originalVersionId: draftVersion.id } : {}),
       usage: { ...(reviewResult.review.tokenUsage ? { auditor: reviewResult.review.tokenUsage } : {}) },
     };
-    if (book.writing?.reviewMode !== "manual" && !auditUnavailable && actionable.length > 0) {
+    const savedRevision = recovery ? checkpoint.completedAfter("revision", "audit", RevisionCheckpointSchema) : undefined;
+    if (savedRevision) {
+      if (savedRevision.autoRevision.status === "applied" && (!savedRevision.pendingRevisionContext
+        || savedRevision.candidateContent !== savedRevision.finalContent)) throw new Error("Revision checkpoint is incomplete");
+      autoRevision = savedRevision.autoRevision;
+      finalContent = savedRevision.finalContent;
+      candidateContent = savedRevision.candidateContent;
+      candidateVersionId = savedRevision.candidateVersionId;
+      pendingRevisionContext = savedRevision.pendingRevisionContext;
+      if (!previousUsage) totalUsage = savedRevision.totalUsage;
+    } else if (book.writing?.reviewMode !== "manual" && !auditUnavailable && actionable.length > 0) {
       this.logStage(stageLanguage, { zh: "根据审稿意见修订草稿", en: "revising draft from review findings" });
       let activeStage: "reviser" | "postAudit" = "reviser";
       try {
@@ -1397,13 +1561,13 @@ export class PipelineRunner {
         };
         pendingRevisionContext = revisionContext;
         const reviser = new ReviserAgent(reviewAgentContext("reviser"));
-        const revised = await reviser.reviseChapter(bookDir, output.content, chapterNumber, findings.map((finding) => finding.observation),
+        const revised = await checkpoint.runStage("revision", () => reviser.reviseChapter(bookDir, output.content, chapterNumber, findings.map((finding) => finding.observation),
           revisionModeFor(actionable), book.genre, {
             language: book.language, narrativeLanguage: resolveNarrativeLanguage(book), chapterTitle: output.title,
             contextPackage: revisionContext, lengthSpec, autoFindings: findings,
             auditContext: { summary: reviewResult.review.summary, observations: reviewResult.review.observations.filter((observation) => observation.category === "execution" || observation.assessment === "unavailable") },
             onCandidate: preserveCandidate,
-          });
+          }), Boolean(recovery));
         this.throwIfOperationAborted();
         await preserveCandidate(revised.revisedContent);
         candidateContent = revised.revisedContent;
@@ -1421,6 +1585,7 @@ export class PipelineRunner {
         }
       } catch (error) {
         this.throwIfOperationAborted();
+        if (isChapterResumeSafetyError(error)) throw error;
         const failedUsage = usageFromError(error);
         totalUsage = PipelineRunner.addUsage(totalUsage, failedUsage);
         autoRevision = { ...autoRevision, status: candidateContent?.trim() && candidateContent !== output.content ? "candidate" : "unavailable", reason: `revision-or-review-unavailable: ${String(error)}`,
@@ -1428,6 +1593,12 @@ export class PipelineRunner {
       }
     }
 
+    if (!savedRevision) await checkpoint.record("revision", autoRevision.status === "unavailable" || autoRevision.status === "candidate"
+      ? "failed" : autoRevision.status === "skipped" ? "skipped" : "completed",
+    { autoRevision, finalContent, candidateContent, candidateVersionId, pendingRevisionContext, totalUsage });
+    if (recovery && (autoRevision.status === "unavailable" || autoRevision.status === "candidate")) {
+      throw Object.assign(new Error("Chapter revision remains incomplete; the candidate and findings were preserved"), { code: "CHAPTER_RESUME_REVISION_UNAVAILABLE" });
+    }
     this.throwIfOperationAborted();
     // 4. Save the final chapter and truth files from a single persistence source
     this.logStage(stageLanguage, { zh: "落盘最终章节", en: "persisting final chapter" });
@@ -1436,8 +1607,10 @@ export class PipelineRunner {
     // 4.1 Validate settler output before writing
     this.logStage(stageLanguage, { zh: "校验真相文件变更", en: "validating truth file updates" });
     const storyDir = join(bookDir, "story");
+    const savedBaseline = recovery ? checkpoint.completed("baseline", BaselineCheckpointSchema) : undefined;
+    if (recovery && !savedBaseline) throw new Error("Chapter checkpoint has no baseline");
     const [runtimeSnapshot, authorityStoryFrame, authorityBookRules] = await Promise.all([
-      loadRuntimeStateSnapshot(bookDir),
+      savedBaseline ? Promise.resolve(savedBaseline.runtimeSnapshot) : loadRuntimeStateSnapshot(bookDir),
       readStoryFrame(bookDir),
       readFile(join(storyDir, "book_rules.md"), "utf-8"),
     ]);
@@ -1447,42 +1620,68 @@ export class PipelineRunner {
     const authorityChapterSummaries = renderChapterSummariesProjection(runtimeSnapshot.chapterSummaries, stateLanguage);
     const validator = new StateValidatorAgent(this.agentCtxFor("state-validator", bookId));
     const prepareAndValidate = async (content: string, candidate: boolean) => {
-      const persistenceOutput = await this.buildPersistenceOutput(bookId, book, bookDir, chapterNumber, output,
-        content, lengthSpec.countingMode, reducedControlInput, candidate);
+      const savedSettlement = recovery ? checkpoint.completedMatching("settlement", SettlementCheckpointSchema,
+        item => item.content === content && item.candidate === candidate && item.persistenceOutput.content === content
+          && item.persistenceOutput.chapterNumber === chapterNumber) : undefined;
+      const persistenceOutput = savedSettlement?.persistenceOutput ?? await checkpoint.runStage("settlement", () =>
+        this.buildPersistenceOutput(bookId, book, bookDir, chapterNumber, output,
+          content, lengthSpec.countingMode, reducedControlInput, candidate, recovery?.chapterPersisted ? chapterNumber - 1 : undefined), Boolean(recovery));
       const draftUsage = output.tokenUsage ?? { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
       const persistenceUsage = persistenceOutput.tokenUsage ?? draftUsage;
-      totalUsage = PipelineRunner.addUsage(totalUsage, {
+      if (!savedSettlement) totalUsage = PipelineRunner.addUsage(totalUsage, {
         promptTokens: Math.max(0, persistenceUsage.promptTokens - draftUsage.promptTokens),
         completionTokens: Math.max(0, persistenceUsage.completionTokens - draftUsage.completionTokens),
         totalTokens: Math.max(0, persistenceUsage.totalTokens - draftUsage.totalTokens),
       });
+      if (!savedSettlement) await checkpoint.record("settlement", "completed", { candidate, content, persistenceOutput, totalUsage });
       const validationWriter = candidate ? new WriterAgent({ ...this.agentCtxFor("writer", bookId), disableRetries: true }) : writer;
       const validationAgent = candidate ? new StateValidatorAgent({ ...this.agentCtxFor("state-validator", bookId), disableRetries: true }) : validator;
-      return validateChapterTruthPersistence({
+      const result = await checkpoint.runStage("state-validation", () => validateChapterTruthPersistence({
         writer: validationWriter, validator: validationAgent, book, bookDir, chapterNumber, title: persistenceOutput.title, content, persistenceOutput,
         previousTruth: { oldState, oldHooks },
         authorityContext: { storyFrame: authorityStoryFrame, bookRules: authorityBookRules, chapterSummaries: authorityChapterSummaries },
         reducedControlInput, language: pipelineLang,
         logWarn: (message) => this.logWarn(pipelineLang, message), logger: this.config.logger,
         allowRecovery: !candidate,
-      });
+      }), Boolean(recovery));
+      await checkpoint.record("state-validation", result.validation.consistent && !result.validation.reconciliationRequired
+        ? "completed" : "failed", result);
+      return result;
     };
     let truthValidation: Awaited<ReturnType<typeof prepareAndValidate>>;
+    const savedTruth = recovery ? checkpoint.completedMatching("state-validation", TruthCheckpointSchema,
+      item => item.persistenceOutput.chapterNumber === chapterNumber && item.persistenceOutput.content === finalContent
+        && item.persistenceOutput.runtimeStateApplied && item.validation.consistent && !item.validation.reconciliationRequired) : undefined;
     try {
-      truthValidation = await prepareAndValidate(finalContent, autoRevision.status === "applied");
+      if (savedTruth) {
+        truthValidation = savedTruth;
+      } else truthValidation = await prepareAndValidate(finalContent, autoRevision.status === "applied");
       this.throwIfOperationAborted();
       if (autoRevision.status === "applied" && (!truthValidation.validation.consistent || truthValidation.validation.reconciliationRequired)) {
         throw new Error("Revised chapter failed state validation");
       }
     } catch (error) {
       this.throwIfOperationAborted();
+      if (isChapterResumeSafetyError(error)) throw error;
+      if (recovery) throw error;
       if (autoRevision.status !== "applied") throw error;
       autoRevision = { ...autoRevision, status: "candidate", reason: `technical-validation-failed: ${String(error)}` };
       finalContent = output.content;
       truthValidation = await prepareAndValidate(finalContent, false);
       this.throwIfOperationAborted();
     }
-    if ((autoRevision.status === "applied" || autoRevision.status === "unchanged") && pendingRevisionContext) {
+    if (recovery && (!truthValidation.validation.consistent || truthValidation.validation.reconciliationRequired)) {
+      throw Object.assign(new Error("Chapter state validation remains incomplete"), { code: "CHAPTER_RESUME_STATE_UNAVAILABLE" });
+    }
+    const savedPostAudit = recovery && savedTruth
+      ? checkpoint.completedAfterAll("post-audit", ["audit", "revision", "state-validation"], PostAuditCheckpointSchema) : undefined;
+    if (savedPostAudit && savedPostAudit.content !== finalContent) throw new Error("Post-audit checkpoint does not match the revision");
+    if (savedPostAudit) {
+      autoRevision = savedPostAudit.autoRevision;
+      candidateReview = savedPostAudit.candidateReview;
+      auditResult = savedPostAudit.auditResult;
+      if (!previousUsage) totalUsage = savedPostAudit.totalUsage;
+    } else if ((autoRevision.status === "applied" || autoRevision.status === "unchanged") && pendingRevisionContext) {
       try {
         this.logStage(stageLanguage, { zh: "复核修订稿并保留审稿意见", en: "adding auditor notes to revised draft" });
         const settledContext: ContextPackage = {
@@ -1494,13 +1693,15 @@ export class PipelineRunner {
             { source: "runtime/chapter-summaries", reason: "Chapter summaries settled from the accepted Reviser text", excerpt: truthValidation.persistenceOutput.updatedChapterSummaries, protection: "protected" },
           ],
         };
-        const comparison = await new ContinuityAuditor(reviewAgentContext("auditor")).compareRevision({
+        const comparison = await checkpoint.runStage("post-audit", () => new ContinuityAuditor(reviewAgentContext("auditor")).compareRevision({
           chapterNumber, original: output.content, candidate: finalContent, findings,
           language: book.language, narrativeLanguage: resolveNarrativeLanguage(book), contextPackage: settledContext,
-        });
+        }), Boolean(recovery));
         this.throwIfOperationAborted();
         totalUsage = PipelineRunner.addUsage(totalUsage, comparison.tokenUsage);
-        autoRevision = { ...autoRevision, assessments: [...comparison.assessments], newIssues: [...comparison.newIssues], reason: "revised-text-accepted; post-audit-notes-attached",
+        autoRevision = { ...autoRevision, assessments: [...comparison.assessments], newIssues: [...comparison.newIssues],
+          ...(comparison.warnings?.length ? { postAuditWarnings: [...comparison.warnings] } : {}),
+          reason: comparison.warnings?.length ? "revised-text-accepted; post-audit-needs-review" : "revised-text-accepted; post-audit-notes-attached",
           usage: { ...autoRevision.usage, postAudit: comparison.tokenUsage } };
         const assessments = new Map(comparison.assessments.map((item) => [item.findingId, item]));
         const retainedObservations = reviewResult.review.observations.flatMap((observation, index) => {
@@ -1516,7 +1717,10 @@ export class PipelineRunner {
         });
         candidateReview = {
           ...reviewResult.review,
-          observations: [...retainedObservations, ...comparison.newIssues],
+          observations: [...retainedObservations, ...comparison.newIssues, ...(comparison.warnings ?? []).map(warning => ({
+            code: warning.code, summary: `Неподтверждённое замечание повторного аудита${warning.findingId ? ` (${warning.findingId})` : ""}: ${warning.message}`,
+            assessment: "unavailable" as const, category: "quality" as const, evidence: [],
+          }))],
           summary: resolveNarrativeLanguage(book) === "ru"
             ? "Текст Ревизора принят. Ниже сохранены заметки повторного аудита для вычитки."
             : book.language === "en" ? "Reviser text accepted. Follow-up auditor notes are retained for proofreading."
@@ -1524,6 +1728,7 @@ export class PipelineRunner {
         };
       } catch (error) {
         this.throwIfOperationAborted();
+        if (isChapterResumeSafetyError(error)) throw error;
         const failedUsage = usageFromError(error);
         totalUsage = PipelineRunner.addUsage(totalUsage, failedUsage);
         autoRevision = { ...autoRevision, reason: "revised-text-accepted; post-audit-unavailable", ...(failedUsage ? { usage: { ...autoRevision.usage, postAudit: failedUsage } } : {}) };
@@ -1541,6 +1746,7 @@ export class PipelineRunner {
       }
     }
     if ((autoRevision.status === "applied" || autoRevision.status === "unchanged") && candidateReview) auditResult = candidateReview;
+    if (!savedPostAudit) await checkpoint.record("post-audit", candidateReview ? "completed" : "skipped", { autoRevision, candidateReview, auditResult, totalUsage, content: finalContent });
     if (autoRevision.status === "applied" && !draftVersion) {
       const version = await archiveChapterVersion(bookDir, chapterNumber, output.content, "agent");
       autoRevision = { ...autoRevision, originalVersionId: version.id };
@@ -1576,6 +1782,26 @@ export class PipelineRunner {
       saveChapter: (index) => writer.saveChapter(bookDir, persistenceOutput, pipelineLang, index, resolveNarrativeLanguage(book)),
       markBookActiveIfNeeded: () => this.markBookActiveIfNeeded(bookId),
     });
+    const pipelineIncomplete = auditUnavailable || autoRevision.status === "unavailable"
+      || autoRevision.status === "candidate"
+      || !truthValidation.validation.consistent || truthValidation.validation.reconciliationRequired;
+    const persistedCheckpoint = { chapterNumber, title: persistenceOutput.title, content: persistenceOutput.content,
+      autoRevision, auditResult, finalWordCount, lengthTelemetry, totalUsage };
+    // A saved chapter is not complete until its Work artifact revisions are synchronized.
+    await checkpoint.record("persisted", "incomplete", persistedCheckpoint);
+    await finalize?.();
+    if (!pipelineIncomplete) await checkpoint.record("persisted", "completed", persistedCheckpoint);
+    else {
+      const incompleteStages = [
+        ...(auditUnavailable ? ["audit"] : []),
+        ...(autoRevision.status === "unavailable" || autoRevision.status === "candidate" ? ["revision"] : []),
+        ...(autoRevision.reason.includes("post-audit-unavailable") ? ["post-audit"] : []),
+        ...(!truthValidation.validation.consistent || truthValidation.validation.reconciliationRequired ? ["state-validation"] : []),
+      ];
+      throw Object.assign(new Error(`Chapter ${chapterNumber} was saved, but its pipeline is incomplete (${incompleteStages.join(", ")}); use write resume`), {
+        code: "CHAPTER_RESUME_REQUIRED", chapterNumber, incompleteStages,
+      });
+    }
 
     // 6. Send notification
     if (this.config.notifyChannels && this.config.notifyChannels.length > 0) {
@@ -2018,12 +2244,14 @@ export class PipelineRunner {
       contextPackage: ContextPackage;
     },
     disableRetries = false,
+    baselineChapter?: number,
   ): Promise<WriteChapterOutput> {
     const writer = new WriterAgent({ ...this.agentCtxFor("writer", bookId), disableRetries });
     const analyzed = await writer.settleChapterState({
       book,
       bookDir,
       chapterNumber,
+      ...(baselineChapter === undefined ? {} : { baselineChapter, allowReapply: true }),
       content: finalContent,
       title: output.title,
       chapterIntent: reducedControlInput.chapterIntent,
@@ -2047,6 +2275,8 @@ export class PipelineRunner {
     bookDir: string,
     chapterNumber: number,
     externalContext?: string,
+    checkpoint?: ChapterCheckpoint,
+    reuseCheckpoint = false,
   ): Promise<Pick<WriteChapterInput, "externalContext" | "chapterIntent" | "chapterMemo" | "chapterIntentData" | "contextPackage"> & {
     readonly contextTrace?: ChapterContextTraceSummary;
   }> {
@@ -2055,7 +2285,7 @@ export class PipelineRunner {
       bookDir,
       chapterNumber,
       externalContext,
-      { reuseExistingIntentWhenContextMissing: true },
+      { reuseExistingIntentWhenContextMissing: true, checkpoint, reuseCheckpoint },
     );
 
     return {
@@ -2281,15 +2511,24 @@ export class PipelineRunner {
     externalContext?: string,
     options?: {
       readonly reuseExistingIntentWhenContextMissing?: boolean;
+      readonly checkpoint?: ChapterCheckpoint;
+      readonly reuseCheckpoint?: boolean;
     },
   ): Promise<{
     plan: PlanChapterOutput;
     composed: ComposeChapterOutput;
   }> {
-    const plan = await this.resolveGovernedPlan(book, bookDir, chapterNumber, externalContext, options);
+    const savedPlan = options?.reuseCheckpoint ? options.checkpoint?.completed("plan", PlanCheckpointSchema) : undefined;
+    if (savedPlan && (savedPlan.intent.chapter !== chapterNumber || savedPlan.memo.chapter !== chapterNumber)) throw new Error("Plan checkpoint belongs to a different chapter");
+    const plan = savedPlan ?? (options?.checkpoint
+      ? await options.checkpoint.runStage("plan", () => this.resolveGovernedPlan(book, bookDir, chapterNumber, externalContext, options), Boolean(options.reuseCheckpoint))
+      : await this.resolveGovernedPlan(book, bookDir, chapterNumber, externalContext, options));
+    if (!savedPlan) await options?.checkpoint?.record("plan", "completed", plan);
     const composerCtx = this.agentCtxFor("composer", book.id);
     const composer = new ComposerAgent(composerCtx);
-    const composed = await composer.composeChapter({
+    const savedContext = options?.reuseCheckpoint ? options.checkpoint?.completed("context", ContextCheckpointSchema) : undefined;
+    if (savedContext && (savedContext.contextPackage.chapter !== chapterNumber || savedContext.trace.chapter !== chapterNumber)) throw new Error("Context checkpoint belongs to a different chapter");
+    const compose = () => composer.composeChapter({
       book,
       bookDir,
       chapterNumber,
@@ -2302,6 +2541,9 @@ export class PipelineRunner {
       ),
       onContextCompression: this.config.onContextCompression,
     });
+    const composed = savedContext ?? (options?.checkpoint
+      ? await options.checkpoint.runStage("context", compose, Boolean(options.reuseCheckpoint)) : await compose());
+    if (!savedContext) await options?.checkpoint?.record("context", "completed", composed);
 
     return { plan, composed };
   }

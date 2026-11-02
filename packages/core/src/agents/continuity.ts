@@ -26,6 +26,16 @@ const RevisionComparisonSchema = Type.Object({
   }, { additionalProperties: false })),
 }, { additionalProperties: false });
 
+/** Recover an exact source excerpt only when differences are whitespace and the match is unique. */
+function exactRevisionEvidence(candidate: string, evidence: string): string | undefined {
+  if (candidate.includes(evidence)) return evidence;
+  const parts = evidence.trim().split(/\s+/u);
+  if (!parts.length || parts.some(part => !part)) return undefined;
+  const escaped = parts.map(part => part.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+  const matches = candidate.match(new RegExp(escaped.join("\\s+"), "gu"));
+  return matches?.length === 1 ? matches[0] : undefined;
+}
+
 export interface AuditResult {
   readonly observations: ReadonlyArray<Observation>;
   readonly summary: string;
@@ -52,35 +62,47 @@ export class ContinuityAuditor extends BaseAgent {
     readonly narrativeLanguage?: NarrativeLanguage;
     readonly contextPackage: ContextPackage;
   }): Promise<{ readonly assessments: ReadonlyArray<FindingAssessment & { explanation: string; evidence: string }>;
-    readonly newIssues: ReadonlyArray<Observation>; readonly tokenUsage: NonNullable<AuditResult["tokenUsage"]> }> {
+    readonly newIssues: ReadonlyArray<Observation>; readonly warnings?: ReadonlyArray<{ code: string; message: string; findingId?: string; evidence?: string }>;
+    readonly tokenUsage: NonNullable<AuditResult["tokenUsage"]> }> {
     const context = renderNarrativeSelectedContext(input.contextPackage.selectedContext, input.language);
     const sourceId = `chapter-${input.chapterNumber}`;
     const messages = [
-      { role: "system" as const, content: `Compare the original chapter and revision under the activated review Skill and governed context. Assess each supplied finding ID exactly once as resolved or remaining. Report newly introduced defects and any worsening of an existing finding separately as new issues, including conflicts with the author's instructions, canon or narrative voice. Evidence must be an exact nonempty quote from the revised chapter. Preserve the author's instructions and canon. ${input.narrativeLanguage === "ru" ? "Write explanations and summaries in Russian; retain IDs and schema values." : ""}` },
-      { role: "user" as const, content: JSON.stringify({ chapterNumber: input.chapterNumber, governedContext: context, original: input.original, candidate: input.candidate, findings: input.findings }) },
+      { role: "system" as const, content: `Compare the original chapter and revision under the activated review Skill and governed context. Return exactly one assessment for every ID in expectedFindingIds, including neutral and positive observations, not only defects. Use each ID exactly once and mark it resolved or remaining. Report newly introduced defects and any worsening of an existing finding separately as new issues, including conflicts with the author's instructions, canon or narrative voice. For every assessment and new issue, evidence must be one short, contiguous, verbatim excerpt copied from the revised chapter. Do not paraphrase, join separate passages, add ellipses, or alter punctuation or whitespace in evidence. Preserve the author's instructions and canon. ${input.narrativeLanguage === "ru" ? "Write explanations and summaries in Russian; retain IDs and schema values." : ""}` },
+      { role: "user" as const, content: JSON.stringify({ chapterNumber: input.chapterNumber, expectedFindingIds: input.findings.map(finding => finding.id), governedContext: context, original: input.original, candidate: input.candidate, findings: input.findings }) },
     ];
     const { result, usage } = await this.submitStructured(messages, {
       name: "submit_revision_comparison", label: "Compare chapter revision",
       description: "Assess every original finding and identify newly introduced issues with exact revised-chapter evidence.",
       parameters: RevisionComparisonSchema,
-      validate: (value) => {
-        const expected = new Set(input.findings.map((finding) => finding.id));
-        const seen = new Set<string>();
-        for (const assessment of value.assessments) {
-          if (!expected.has(assessment.findingId) || seen.has(assessment.findingId) || !input.candidate.includes(assessment.evidence)) throw new Error("Invalid finding assessment or evidence");
-          seen.add(assessment.findingId);
-        }
-        if (seen.size !== expected.size || value.newIssues.some((issue) => !input.candidate.includes(issue.evidence))) throw new Error("Incomplete comparison or invalid evidence");
-        return value;
-      },
     }, { temperature: 0, maxTokens: this.ctx.client.defaults.maxTokens, disableRetries: true });
-    return {
-      assessments: result.assessments,
-      newIssues: result.newIssues.map((issue) => ({
+    const expected = new Set(input.findings.map(item => item.id));
+    const confirmed = new Set<string>();
+    const warnings: Array<{ code: string; message: string; findingId?: string; evidence?: string }> = [];
+    const assessments = result.assessments.flatMap(item => {
+      const evidence = exactRevisionEvidence(input.candidate, item.evidence);
+      if (!expected.has(item.findingId) || confirmed.has(item.findingId) || !evidence) {
+        warnings.push({ code: "POST_AUDIT_FINDING_UNVERIFIED", findingId: item.findingId,
+          message: item.explanation, evidence: item.evidence });
+        return [];
+      }
+      confirmed.add(item.findingId);
+      return [{ ...item, evidence }];
+    });
+    for (const item of input.findings) if (!confirmed.has(item.id) && !warnings.some(warning => warning.findingId === item.id)) {
+      warnings.push({ code: "POST_AUDIT_FINDING_MISSING", findingId: item.id, message: "Оценка не предоставлена." });
+    }
+    const newIssues = result.newIssues.map((issue) => {
+      const evidence = exactRevisionEvidence(input.candidate, issue.evidence);
+      if (!evidence) warnings.push({ code: "POST_AUDIT_EVIDENCE_UNVERIFIED", message: issue.summary, evidence: issue.evidence });
+      return {
         code: issue.code, summary: issue.summary, scope: issue.scope,
-        assessment: "issue" as const, category: "quality" as const,
-        evidence: [issue.evidence], sourceRefs: [{ sourceId, quote: issue.evidence }],
-      })),
+        assessment: evidence ? "issue" as const : "unavailable" as const, category: "quality" as const,
+        evidence: evidence ? [evidence] : [], sourceRefs: evidence ? [{ sourceId, quote: evidence }] : [],
+      };
+    });
+    return {
+      assessments,
+      newIssues, warnings,
       tokenUsage: usage,
     };
   }

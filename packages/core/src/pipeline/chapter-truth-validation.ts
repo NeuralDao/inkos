@@ -12,6 +12,7 @@ import {
   renderHooksProjection,
 } from "../state/state-projections.js";
 import { resolveNarrativeLanguage } from "../utils/book-language.js";
+import { isChapterResumeSafetyError } from "../agent/chapter-stage-context.js";
 
 export async function validateChapterTruthPersistence(params: {
   readonly writer: Pick<WriterAgent, "settleChapterState">;
@@ -55,6 +56,7 @@ export async function validateChapterTruthPersistence(params: {
       resolveNarrativeLanguage(params.book),
     );
   } catch (error) {
+    if (isChapterResumeSafetyError(error)) throw error;
     params.logger?.warn(`State validation error for chapter ${params.chapterNumber}: ${String(error)}`);
     return {
       validation: {

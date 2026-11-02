@@ -11,6 +11,7 @@ import type { BookConfig } from "../models/book.js";
 import type { ContextPackage } from "../models/input-governance.js";
 import type { LengthLanguage } from "../utils/length-metrics.js";
 import { resolveNarrativeLanguage } from "../utils/book-language.js";
+import { isChapterResumeSafetyError } from "../agent/chapter-stage-context.js";
 
 export interface SettlementRetryParams {
   readonly writer: Pick<WriterAgent, "settleChapterState">;
@@ -87,6 +88,7 @@ export async function reconcileChapterStateAfterReview(
       resolveNarrativeLanguage(params.book),
     );
   } catch (error) {
+    if (isChapterResumeSafetyError(error)) throw error;
     const validation: ValidationResult = {
       consistent: false,
       reconciliationRequired: true,

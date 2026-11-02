@@ -183,11 +183,11 @@ describe("automatic longform revision", () => {
     vi.mocked(StateValidatorAgent.prototype.validate)
       .mockResolvedValueOnce({ consistent: false, reconciliationRequired: true, observations: [] })
       .mockResolvedValueOnce({ consistent: true, reconciliationRequired: false, observations: [] });
-    const result = await runner.writeNextChapter(book.id);
+    await expect(runner.writeNextChapter(book.id)).rejects.toMatchObject({ code: "CHAPTER_RESUME_REQUIRED" });
     expect(save).toHaveBeenCalledTimes(1);
     expect(save.mock.calls[0]?.[1].content).toBe(prose);
-    expect(result.autoRevision).toMatchObject({ status: "candidate", reason: expect.stringContaining("technical-validation-failed") });
     const saved = (await state.loadChapterIndex(book.id))[0]!;
+    expect(saved.autoRevision).toMatchObject({ status: "candidate", reason: expect.stringContaining("technical-validation-failed") });
     expect(await readChapterVersion(bookDir, 1, saved.autoRevision!.candidateVersionId!)).toBe(revised);
     const file = (await readdir(join(bookDir, "chapters"))).find(name => name.endsWith(".md"))!;
     expect(await readFile(join(bookDir, "chapters", file), "utf8")).toContain(prose);
@@ -209,16 +209,134 @@ describe("automatic longform revision", () => {
   it("keeps the accepted revision and records an unavailable post-audit without retrying", async () => {
     const { runner, state, book, bookDir } = await fixture();
     vi.mocked(ContinuityAuditor.prototype.auditChapter).mockResolvedValue({ observations: [finding], summary: "Issue" });
-    vi.spyOn(ReviserAgent.prototype, "reviseChapter").mockResolvedValue({ revisedContent: revised, wordCount: 9, findingDispositions: [disposition] });
-    const compare = vi.spyOn(ContinuityAuditor.prototype, "compareRevision").mockRejectedValue(Object.assign(new Error("offline"), { tokenUsage: usage }));
-    const result = await runner.writeNextChapter(book.id);
+    const revise = vi.spyOn(ReviserAgent.prototype, "reviseChapter").mockResolvedValue({ revisedContent: revised, wordCount: 9, findingDispositions: [disposition] });
+    const compare = vi.spyOn(ContinuityAuditor.prototype, "compareRevision")
+      .mockRejectedValueOnce(Object.assign(new Error("offline"), { tokenUsage: usage }))
+      .mockResolvedValueOnce({ assessments: [assessment], newIssues: [], tokenUsage: usage });
+    const written = await runner.writeNextChapter(book.id);
+    expect(written.autoRevision?.reason).toBe("revised-text-accepted; post-audit-unavailable");
     expect(compare).toHaveBeenCalledTimes(1);
-    expect(result.autoRevision).toMatchObject({ status: "applied", reason: "revised-text-accepted; post-audit-unavailable", usage: { postAudit: usage } });
-    expect(result.tokenUsage?.totalTokens).toBeGreaterThanOrEqual(usage.totalTokens);
     const saved = (await state.loadChapterIndex(book.id))[0]!;
+    expect(saved.autoRevision).toMatchObject({ status: "applied", reason: "revised-text-accepted; post-audit-unavailable", usage: { postAudit: usage } });
     expect(saved.observations).toContainEqual(expect.objectContaining({ code: "POST_REVISION_AUDIT_UNAVAILABLE", assessment: "unavailable" }));
     const file = (await readdir(join(bookDir, "chapters"))).find(name => name.endsWith(".md"))!;
     expect(await readFile(join(bookDir, "chapters", file), "utf8")).toContain(revised);
+    const draftCalls = calls.filter(call => call.name === "submit_chapter_draft").length;
+    const result = await runner.resumeChapter(book.id, 1);
+    expect(result.autoRevision).toMatchObject({ status: "applied", reason: "revised-text-accepted; post-audit-unavailable" });
+    expect(compare).toHaveBeenCalledTimes(1);
+    expect(revise).toHaveBeenCalledTimes(1);
+    expect(calls.filter(call => call.name === "submit_chapter_draft")).toHaveLength(draftCalls);
+    await runner.resumeChapter(book.id, 1);
+    expect(compare).toHaveBeenCalledTimes(1);
+  }, 30000);
+
+  it("continues from a failed initial audit without regenerating the draft", async () => {
+    const { runner, state, book, bookDir } = await fixture();
+    const audit = vi.mocked(ContinuityAuditor.prototype.auditChapter)
+      .mockRejectedValueOnce(new Error("offline"))
+      .mockResolvedValueOnce({ observations: [finding], summary: "Issue", tokenUsage: usage });
+    const revise = vi.spyOn(ReviserAgent.prototype, "reviseChapter")
+      .mockResolvedValue({ revisedContent: revised, wordCount: 9, findingDispositions: [disposition], tokenUsage: usage });
+    const compare = vi.spyOn(ContinuityAuditor.prototype, "compareRevision")
+      .mockResolvedValue({ assessments: [assessment], newIssues: [], tokenUsage: usage });
+    await expect(runner.writeNextChapter(book.id)).rejects.toMatchObject({ code: "CHAPTER_RESUME_REQUIRED" });
+    expect((await state.loadChapterIndex(book.id))[0]?.autoRevision?.reason).toBe("audit-unavailable");
+    expect(revise).not.toHaveBeenCalled();
+    const draftCalls = calls.filter(call => call.name === "submit_chapter_draft").length;
+    await expect(runner.writeNextChapter(book.id)).rejects.toMatchObject({ code: "CHAPTER_RESUME_REQUIRED", chapterNumber: 1 });
+    expect(calls.filter(call => call.name === "submit_chapter_draft")).toHaveLength(draftCalls);
+    expect(audit).toHaveBeenCalledTimes(1);
+
+    const result = await runner.resumeChapter(book.id, 1);
+    expect(result.autoRevision).toMatchObject({ status: "applied", reason: "revised-text-accepted; post-audit-notes-attached" });
+    expect(audit).toHaveBeenCalledTimes(2);
+    expect(revise).toHaveBeenCalledTimes(1);
+    expect(compare).toHaveBeenCalledTimes(1);
+    expect(calls.filter(call => call.name === "submit_chapter_draft")).toHaveLength(draftCalls);
+    const file = (await readdir(join(bookDir, "chapters"))).find(name => name.endsWith(".md"))!;
+    expect(await readFile(join(bookDir, "chapters", file), "utf8")).toContain(revised);
+  }, 30000);
+
+  it("saves the revision and canon when post-audit fails during resume", async () => {
+    const { runner, state, book, bookDir } = await fixture();
+    vi.mocked(ContinuityAuditor.prototype.auditChapter)
+      .mockRejectedValueOnce(new Error("initial audit unavailable"))
+      .mockResolvedValueOnce({ observations: [finding], summary: "Issue", tokenUsage: usage });
+    const revise = vi.spyOn(ReviserAgent.prototype, "reviseChapter")
+      .mockResolvedValue({ revisedContent: revised, wordCount: 9, findingDispositions: [disposition], tokenUsage: usage });
+    const compare = vi.spyOn(ContinuityAuditor.prototype, "compareRevision")
+      .mockRejectedValueOnce(new Error("post audit unavailable"))
+      .mockResolvedValueOnce({ assessments: [assessment], newIssues: [], tokenUsage: usage });
+    await expect(runner.writeNextChapter(book.id)).rejects.toMatchObject({ code: "CHAPTER_RESUME_REQUIRED" });
+    const result = await runner.resumeChapter(book.id, 1);
+    expect(result.autoRevision?.reason).toBe("revised-text-accepted; post-audit-unavailable");
+    const saved = (await state.loadChapterIndex(book.id))[0]!;
+    expect(saved.autoRevision).toMatchObject({ status: "applied", reason: "revised-text-accepted; post-audit-unavailable" });
+    const file = (await readdir(join(bookDir, "chapters"))).find(name => name.endsWith(".md"))!;
+    expect(await readFile(join(bookDir, "chapters", file), "utf8")).toContain(revised);
+    const snapshot = await loadRuntimeStateSnapshot(bookDir);
+    expect(snapshot.manifest.lastAppliedChapter).toBe(1);
+    await runner.resumeChapter(book.id, 1);
+    expect(revise).toHaveBeenCalledTimes(1);
+    expect(compare).toHaveBeenCalledTimes(1);
+  }, 30000);
+
+  it("retries a failed revision using the saved audit findings", async () => {
+    const { runner, state, book } = await fixture();
+    const audit = vi.mocked(ContinuityAuditor.prototype.auditChapter)
+      .mockResolvedValue({ observations: [finding], summary: "Issue", tokenUsage: usage });
+    const revise = vi.spyOn(ReviserAgent.prototype, "reviseChapter")
+      .mockRejectedValueOnce(new Error("reviser unavailable"))
+      .mockResolvedValueOnce({ revisedContent: revised, wordCount: 9, findingDispositions: [disposition], tokenUsage: usage });
+    const compare = vi.spyOn(ContinuityAuditor.prototype, "compareRevision")
+      .mockResolvedValue({ assessments: [assessment], newIssues: [], tokenUsage: usage });
+    await expect(runner.writeNextChapter(book.id)).rejects.toMatchObject({ code: "CHAPTER_RESUME_REQUIRED" });
+    expect((await state.loadChapterIndex(book.id))[0]?.autoRevision?.status).toBe("unavailable");
+    const draftCalls = calls.filter(call => call.name === "submit_chapter_draft").length;
+
+    const result = await runner.resumeChapter(book.id, 1);
+    expect(result.autoRevision?.status).toBe("applied");
+    expect(audit).toHaveBeenCalledTimes(1);
+    expect(revise).toHaveBeenCalledTimes(2);
+    expect(revise.mock.calls[1]?.[3]).toEqual([finding]);
+    expect(compare).toHaveBeenCalledTimes(1);
+    expect(calls.filter(call => call.name === "submit_chapter_draft")).toHaveLength(draftCalls);
+  }, 30000);
+
+  it("refuses to resume after the saved chapter was edited by the user", async () => {
+    const { runner, book, bookDir } = await fixture();
+    const audit = vi.mocked(ContinuityAuditor.prototype.auditChapter).mockRejectedValue(new Error("offline"));
+    await expect(runner.writeNextChapter(book.id)).rejects.toMatchObject({ code: "CHAPTER_RESUME_REQUIRED" });
+    const file = (await readdir(join(bookDir, "chapters"))).find(name => name.endsWith(".md"))!;
+    const path = join(bookDir, "chapters", file);
+    const edited = `${await readFile(path, "utf8")}\nРучная правка.\n`;
+    await writeFile(path, edited, "utf8");
+    await expect(runner.resumeChapter(book.id, 1)).rejects.toMatchObject({ code: "CHAPTER_RESUME_CHAPTER_CHANGED" });
+    expect(await readFile(path, "utf8")).toBe(edited);
+    expect(audit).toHaveBeenCalledTimes(1);
+  }, 30000);
+
+  it("reuses the revision when settlement of that revision fails", async () => {
+    const { runner, state, book } = await fixture();
+    const audit = vi.mocked(ContinuityAuditor.prototype.auditChapter)
+      .mockResolvedValue({ observations: [finding], summary: "Issue", tokenUsage: usage });
+    const revise = vi.spyOn(ReviserAgent.prototype, "reviseChapter")
+      .mockResolvedValue({ revisedContent: revised, wordCount: 9, findingDispositions: [disposition], tokenUsage: usage });
+    const settleOriginal = WriterAgent.prototype.settleChapterState;
+    const settle = vi.spyOn(WriterAgent.prototype, "settleChapterState")
+      .mockRejectedValueOnce(new Error("settlement unavailable"))
+      .mockImplementation(function (this: WriterAgent, ...args) { return settleOriginal.apply(this, args); });
+    const compare = vi.spyOn(ContinuityAuditor.prototype, "compareRevision")
+      .mockResolvedValue({ assessments: [assessment], newIssues: [], tokenUsage: usage });
+    await expect(runner.writeNextChapter(book.id)).rejects.toMatchObject({ code: "CHAPTER_RESUME_REQUIRED" });
+    expect((await state.loadChapterIndex(book.id))[0]?.autoRevision?.status).toBe("candidate");
+    const result = await runner.resumeChapter(book.id, 1);
+    expect(result.autoRevision?.status).toBe("applied");
+    expect(audit).toHaveBeenCalledTimes(1);
+    expect(revise).toHaveBeenCalledTimes(1);
+    expect(settle).toHaveBeenCalledTimes(3);
+    expect(compare).toHaveBeenCalledTimes(1);
   }, 30000);
 
   it("accepts the Reviser's text even when the Auditor reports a remaining issue", async () => {
@@ -309,6 +427,8 @@ describe("automatic longform revision", () => {
       expect(Value.Check(tool.parameters, payload)).toBe(true);
       expect(options?.disableRetries).toBe(true);
       expect(messages.map(message => message.content).join("\n")).toContain('"finding-1"');
+      expect(messages.map(message => message.content).join("\n")).toContain('"expectedFindingIds":["finding-1"]');
+      expect(messages.map(message => message.content).join("\n")).toContain('Do not paraphrase, join separate passages, add ellipses');
       options?.onUsage?.(usage);
       return (tool.validate ? await tool.validate(payload as never) : payload) as never;
     });
@@ -320,8 +440,28 @@ describe("automatic longform revision", () => {
       const payload = { assessments: [], newIssues: [] };
       return (tool.validate ? await tool.validate(payload as never) : payload) as never;
     });
-    await expect(auditor.compareRevision({ chapterNumber: 1, original: prose, candidate: revised,
-      findings: [{ id: "finding-1", observation: finding }], language: "en", narrativeLanguage: "ru", contextPackage: { chapter: 1, selectedContext: [] } })).rejects.toThrow(/Incomplete comparison/);
+    const missing = await auditor.compareRevision({ chapterNumber: 1, original: prose, candidate: revised,
+      findings: [{ id: "finding-1", observation: finding }], language: "en", narrativeLanguage: "ru", contextPackage: { chapter: 1, selectedContext: [] } });
+    expect(missing.warnings).toContainEqual(expect.objectContaining({ code: "POST_AUDIT_FINDING_MISSING", findingId: "finding-1" }));
+  });
+
+  it("restores exact evidence after whitespace-only changes but rejects ambiguous matches", async () => {
+    const { root, book } = await fixture();
+    const auditor = new ContinuityAuditor({ projectRoot: root, client, model: "unused", bookId: book.id });
+    const candidate = "Начало.\n\nЁж увидел пристань.\nКонец.";
+    const payload = { assessments: [{ ...assessment, evidence: "Начало. Ёж увидел пристань." }], newIssues: [] };
+    vi.mocked(runWorkerAgentTool).mockImplementationOnce(async (_client, _model, _messages, tool) =>
+      (tool.validate ? await tool.validate(payload as never) : payload) as never);
+    const input = { chapterNumber: 1, original: prose, candidate, findings: [{ id: "finding-1", observation: finding }],
+      language: "en" as const, narrativeLanguage: "ru" as const, contextPackage: { chapter: 1, selectedContext: [] } };
+    const result = await auditor.compareRevision(input);
+    expect(result.assessments[0]?.evidence).toBe("Начало.\n\nЁж увидел пристань.");
+
+    vi.mocked(runWorkerAgentTool).mockImplementationOnce(async (_client, _model, _messages, tool) =>
+      (tool.validate ? await tool.validate(payload as never) : payload) as never);
+    const ambiguous = await auditor.compareRevision({ ...input, candidate: `${candidate}\n${candidate}` });
+    expect(ambiguous.assessments).toEqual([]);
+    expect(ambiguous.warnings).toContainEqual(expect.objectContaining({ code: "POST_AUDIT_FINDING_UNVERIFIED", findingId: "finding-1" }));
   });
 
   it.each(["manual", "unavailable", "partial", "execution"] as const)("does not revise for %s", async mode => {
@@ -333,9 +473,13 @@ describe("automatic longform revision", () => {
       ...(mode === "partial" ? [{ code: "missing-source", summary: "Source unavailable", assessment: "unavailable" as const, evidence: [] }] : []),
     ], summary: "Issue" });
     const revise = vi.spyOn(ReviserAgent.prototype, "reviseChapter");
-    const result = await runner.writeNextChapter(book.id);
+    if (mode === "unavailable" || mode === "partial") {
+      await expect(runner.writeNextChapter(book.id)).rejects.toMatchObject({ code: "CHAPTER_RESUME_REQUIRED" });
+    } else {
+      const result = await runner.writeNextChapter(book.id);
+      expect(result.autoRevision?.status).toBe("skipped");
+    }
     expect(revise).not.toHaveBeenCalled();
-    expect(result.autoRevision?.status).toBe("skipped");
   }, 30000);
 });
 

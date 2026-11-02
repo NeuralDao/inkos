@@ -10,6 +10,7 @@ export const AutoRevisionOutcomeSchema = z.object({
   initialReview: z.object({ summary: z.string(), observations: z.array(ObservationSchema), unavailable: z.boolean().optional() }).strict().optional(),
   dispositions: z.array(z.object({ findingId: z.string(), status: z.enum(["addressed", "not_addressed", "rejected"]), explanation: z.string() }).strict()).optional(),
   assessments: z.array(z.object({ findingId: z.string(), status: z.enum(["resolved", "remaining"]), explanation: z.string(), evidence: z.string() }).strict()).optional(),
+  postAuditWarnings: z.array(z.object({ code: z.string(), message: z.string(), findingId: z.string().optional(), evidence: z.string().optional() }).strict()).optional(),
   newIssues: z.array(ObservationSchema).optional(),
   candidateVersionId: z.string().optional(),
   originalVersionId: z.string().optional(),
