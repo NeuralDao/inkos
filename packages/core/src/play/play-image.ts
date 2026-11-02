@@ -264,7 +264,7 @@ export async function generatePlayImage(input: {
         {role:'system',content:'Describe one illustration of the final current moment from the supplied reference. Follow the illustration guidance and explicit visual contract. Current moment and active possession/location facts take precedence over opening assumptions, earlier entity descriptions and earlier actions in the scene. Keep the established viewpoint and state explicitly where visible participants are relative to the camera and physical boundaries. Include only participants and objects visible from that viewpoint. Describe a still picture, not a sequence. Omit state identifiers, controls, unchosen options and off-screen history. Return one concise visual paragraph through the tool.'},
         {role:'user',content:sourcePrompt},
       ],{name:'submit_visual_brief',label:'Describe current illustration',description:'Submit an image prompt grounded in the current visible moment.',parameters:Type.Object({prompt:Type.String({minLength:1})})},{maxTokens:MAX_MODEL_OUTPUT_TOKENS,signal:input.signal,
-        responseArchive:{projectRoot:input.root,workId:input.worldId,role:'play-image-brief'}});
+        responseArchive:{projectRoot:input.root,role:'play-image-brief'}});
       prompt=brief.prompt;
     }
     input.signal?.throwIfAborted();

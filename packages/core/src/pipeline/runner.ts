@@ -1847,7 +1847,7 @@ export class PipelineRunner {
           client: this.config.client,
           model: this.config.model,
           projectRoot: this.config.projectRoot,
-          workId: bookId,
+          workId: input.bookId,
           chapters: input.chapters,
           language: resolvedLanguage,
           activeSkills: this.currentActivatedSkills("import-context"),
