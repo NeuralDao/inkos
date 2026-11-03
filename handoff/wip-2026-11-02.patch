@@ -1,7 +1,7 @@
 From abe80919b757c12baca4ef5b046a34f950cd31ba Mon Sep 17 00:00:00 2001
 From: NeuralDao <01071267728c@gmail.com>
 Date: Mon, 2 Nov 2026 19:07:28 +0100
-Subject: [PATCH] wip: handoff before Codex limit
+Subject: [PATCH 1/3] wip: handoff before Codex limit
 
 ---
  HANDOFF-HERMES.md                             |  54 +++
@@ -2134,6 +2134,585 @@ index d0aeb95d..a722a424 100644
  
      return { plan, composed };
    }
+-- 
+2.56.0.windows.3
+
+
+From 2287f2fe0d7a5dd920ab2ccf77604a7333991c11 Mon Sep 17 00:00:00 2001
+From: NeuralDao <01071267728c@gmail.com>
+Date: Mon, 2 Nov 2026 19:07:47 +0100
+Subject: [PATCH 2/3] docs: finalize Hermes handoff
+
+---
+ HANDOFF-HERMES.md | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/HANDOFF-HERMES.md b/HANDOFF-HERMES.md
+index 8064264f..2e7cb2f8 100644
+--- a/HANDOFF-HERMES.md
++++ b/HANDOFF-HERMES.md
+@@ -4,7 +4,7 @@
+ - Checkout передачи: `C:\Projects\inkos-merge-custom-main` (последние команды разработки выполнялись здесь).
+ - Checkout, из которого реально запущен Studio/Core/CLI: `UNKNOWN` — на момент проверки процесса InkOS не обнаружено.
+ - Исходная ветка: `custom/main`; исходный HEAD: `26ac2076`.
+-- WIP-ветка: `wip/handoff-2026-11-02`; коммит: заполнить после фиксации.
++- WIP-ветка: `wip/handoff-2026-11-02`; WIP-коммит: `abe80919b757c12baca4ef5b046a34f950cd31ba` (`wip: handoff before Codex limit`).
+ - Последний файл в `packages/core/dist`: 2026-11-02 19:03:09 +01:00.
+ - Последний файл в `packages/cli/dist`: 2026-11-02 19:03:20 +01:00.
+ - Последний файл в `packages/studio/dist`: 2026-11-02 19:02:30 +01:00.
+@@ -52,3 +52,4 @@
+ - Project root для книги отдельный: `C:\Projects\inkos-g4-workspace`; команды CLI надо выполнять из него.
+ - Текущий полный стек моделей и наличие free-only флага не проверялись и неизвестны; старые скриншоты и назначения могли устареть.
+ - `fork-docs/` имел изменения до handoff; они включаются в WIP-коммит как часть уже имеющейся незакоммиченной работы, но в этом handoff не редактировались.
++
+-- 
+2.56.0.windows.3
+
+
+From 24fde6ad52a161227955d4956b6f709aec6e4f26 Mon Sep 17 00:00:00 2001
+From: NeuralDao <01071267728c@gmail.com>
+Date: Tue, 3 Nov 2026 02:44:32 +0100
+Subject: [PATCH 3/3] docs: add CLI playbook and refresh Hermes handoff
+
+---
+ HANDOFF-HERMES.md              |  76 ++++----
+ fork-docs/CLI_PLAYBOOK.md      | 312 +++++++++++++++++++++++++++++++++
+ fork-docs/CURRENT_STATE.md     |   4 +
+ fork-docs/G4_CHAPTER_RESUME.md |  62 ++++---
+ fork-docs/INDEX.md             |   2 +
+ 5 files changed, 392 insertions(+), 64 deletions(-)
+ create mode 100644 fork-docs/CLI_PLAYBOOK.md
+
+diff --git a/HANDOFF-HERMES.md b/HANDOFF-HERMES.md
+index 2e7cb2f8..d0b6950c 100644
+--- a/HANDOFF-HERMES.md
++++ b/HANDOFF-HERMES.md
+@@ -1,55 +1,61 @@
+ # HANDOFF-HERMES
+ 
+ ## Идентичность
+-- Checkout передачи: `C:\Projects\inkos-merge-custom-main` (последние команды разработки выполнялись здесь).
+-- Checkout, из которого реально запущен Studio/Core/CLI: `UNKNOWN` — на момент проверки процесса InkOS не обнаружено.
+-- Исходная ветка: `custom/main`; исходный HEAD: `26ac2076`.
+-- WIP-ветка: `wip/handoff-2026-11-02`; WIP-коммит: `abe80919b757c12baca4ef5b046a34f950cd31ba` (`wip: handoff before Codex limit`).
++- Checkout передачи: `C:\Projects\inkos-merge-custom-main`; ветка `wip/handoff-2026-11-02`.
++- Checkout, из которого реально запущен Studio/Core/CLI: `UNKNOWN` — активного процесса InkOS не обнаружено.
++- База ветки: `custom/main`, HEAD `26ac2076`.
++- Базовый WIP-коммит: `abe80919b757c12baca4ef5b046a34f950cd31ba`; последующие handoff-коммиты и актуальный HEAD см. `git log --oneline`.
+ - Последний файл в `packages/core/dist`: 2026-11-02 19:03:09 +01:00.
+ - Последний файл в `packages/cli/dist`: 2026-11-02 19:03:20 +01:00.
+ - Последний файл в `packages/studio/dist`: 2026-11-02 19:02:30 +01:00.
+-- Полный `git status --porcelain` до handoff-артефактов: [handoff/status-before-commit.txt](handoff/status-before-commit.txt).
++- Полный `git status --porcelain` до первоначального handoff: [handoff/status-before-commit.txt](handoff/status-before-commit.txt).
++- Патч handoff-ветки относительно `custom/main`, без включения самого patch-файла: `handoff/wip-2026-11-02.patch`.
+ 
+ ## Как запускается
+-- Сборка: из корня checkout `pnpm build`.
+-- Studio (известная команда): `pnpm --filter @actalk/inkos-studio dev`; переменная `INKOS_STUDIO_PORT` (значение не фиксировать).
+-- CLI запускается Node через `packages/cli/dist/index.js`.
+-- Последний использованный project root: `C:\Projects\inkos-g4-workspace`.
+-- Остальные переменные окружения для запуска: `UNKNOWN`.
++- Сборка из корня checkout: `pnpm build`.
++- Studio: `pnpm --filter @actalk/inkos-studio dev`; используется `INKOS_STUDIO_PORT`.
++- CLI: Node через `packages/cli/dist/index.js`; типовая переменная `$cli` задана в playbook.
++- Project root рабочего Work: `C:\Projects\inkos-g4-workspace`.
++- Остальные переменные окружения и фактические значения: `UNKNOWN`.
+ 
+ ## Сделано и проверено
+-- Пользователь сообщил: целевые тесты и сборка прошли `PASS` до последних изменений advisory post-audit; точные команды/вывод этих успешных запусков в текущей передаче не приложены.
+-- Ручной `write resume dogbook01 3` запускался пользователем; выполнение дошло до сохранения главы, обновления truth-файлов и post-audit.
+-- Ручная проверка `scripts/check-pipeline.ps1 -BookId dogbook01 -Chapter 3` после успешного восстановления показала все этапы `✓`; поздний повтор снова показал `Повторный аудит ✗`.
+-- В этом handoff-тёрне тесты, сборки, генерация/API не запускались.
++- До последних изменений advisory post-audit пользователь сообщал о проходе тестов и сборки `PASS`; точный вывод в handoff не приложен.
++- Ручные `write resume dogbook01 3` и `scripts/check-pipeline.ps1 -BookId dogbook01 -Chapter 3` выполнялись пользователем; checkpoint и текст главы сохранялись. В последовательных ручных прогонах встречались недоступный/неподтверждённый повторный аудит.
++- Для CLI-playbook прочитаны `inkos --help`, `inkos config --help`, `inkos book --help`, `inkos work --help`, `inkos write --help`; параметры остальных групп сверены по определениям CLI-команд.
++- `git diff --check` проходил после предыдущего обновления документации `write resume`.
++- Текущие тесты, сборки, Studio, платные модели и генерация в handoff-сессиях не запускались.
+ 
+ ## Сделано, но НЕ проверено
+-- Изменения по сохранению неполных/сомнительных заметок post-audit как advisory, без блокировки выпуска: `NOT RUN` после этих изменений.
+-- Новые тестовые ожидания для advisory post-audit: `NOT RUN` после этих изменений.
+-- Финальная сборка текущего WIP: `NOT RUN`.
+-- Запуск Studio из любого checkout: `NOT RUN`.
++- Механизм advisory для неполного/сомнительного post-audit: `NOT RUN` после последних изменений.
++- Повторное локальное использование сохранённого post-audit ответа и отсутствие сетевого вызова при resume: `NOT RUN` на текущем коде.
++- CLI-playbook сверён статически с исходниками и частью `--help`, но примеры не исполнялись: `NOT RUN`.
++- Текущая сборка Core/CLI/Studio после последних source/doc изменений: `NOT RUN`.
++- Полный платный сквозной прогон: `NOT RUN`.
+ 
+ ## В работе или сломано
+-- Post-audit всё ещё может повторно вызвать дорогую модель при `write resume`; сохранённый ответ пока не гарантированно переиспользуется: `packages/core/src/pipeline/runner.ts:1703-1738`.
+-- Некорректные доказательства повторного аудита должны становиться пометками для вычитки, но проверка и отображение предупреждений не завершены: `packages/core/src/agents/continuity.ts:30-95`, `packages/core/src/models/chapter.ts:13`.
+-- Текущий скрипт статуса может помечать advisory post-audit как блокирующий; его путь/строки в checkout передачи: `UNKNOWN`.
+-- Последний ручной запуск `write resume` завершился `CHAPTER_RESUME_REQUIRED`; затем таблица показывала `Повторный аудит ✗` при остальном `✓`.
++- Поведение resume после сбоя/неполного ответа повторного аудитора не подтверждено на текущих изменениях. См. `packages/core/src/pipeline/runner.ts:1676-1803`.
++- Преобразование неполных или недоказанных оценок post-audit в advisory-заметки требует тестов и сверки представления. См. `packages/core/src/agents/continuity.ts:30-95`, `packages/core/src/models/chapter.ts:13`.
++- `C:\Projects\inkos-g4-workspace\scripts\check-pipeline.ps1` может трактовать недоступный post-audit как блокер; поведение после advisory-политики не проверено.
++- CLI-playbook описывает ветку WIP; установленный у пользователя CLI может быть собран из другого checkout или более старых исходников.
+ 
+ ## Решения, ожидающие владельца
+-- Неверифицированные заметки post-audit: A) сохранить как advisory с явной пометкой; B) отклонить весь отчёт. Рекомендация: A, без автоматического изменения статуса исходных замечаний.
+-- Реальный Studio checkout: A) подтвердить текущую папку процесса при следующем запуске; B) считать checkout передачи авторитетным. Рекомендация: A; сейчас runtime `UNKNOWN`.
+-- Модели/провайдеры активного стека и free-only routing: `UNKNOWN` без чтения текущего `inkos.json`.
++- Источник реально запущенного Studio/Core/CLI: A) проверить командную строку процесса при запуске; B) считать этот checkout источником. Рекомендация: A; сейчас фактический runtime checkout `UNKNOWN`.
++- Актуальный стек моделей и free-only routing: `UNKNOWN` без чтения рабочего `inkos.json`; рекомендация — сверить локально перед платным запуском.
++- Состояние `check-pipeline.ps1`: A) синхронизировать его индикатор post-audit с advisory-политикой; B) оставить как строгую проверку артефактов, отдельно пояснив предупреждение. Рекомендация: A, если цель таблицы — показать блокирующую готовность главы.
+ 
+ ## Следующая задача
+-- Цель: завершить advisory-поведение повторного аудита: сохранять ответ и сомнительные заметки для человека/LLM, не блокировать завершение главы и не запускать повторную платную генерацию при resume.
+-- Файлы: `packages/core/src/agents/continuity.ts`, `packages/core/src/models/chapter.ts`, `packages/core/src/pipeline/runner.ts`, тесты в `packages/core/src/__tests__/unicode-length.flow.test.ts`; локальный `scripts/check-pipeline.ps1` — если путь подтверждён.
+-- Приёмка: глава остаётся завершённой при недоступном/частично невалидном post-audit; замечания и причины сохранены, нерешённые исходные находки не объявлены устранёнными; повторный resume не вызывает модель без необходимости.
+-- Запрещено: тесты/сборки/платные API без отдельного запуска владельцем; менять `inkos.json`; переписывать `fork-docs/`; push/merge и изменение `custom/main`.
++- Цель: завершить и проверить безопасную advisory-обработку повторного аудита и восстановление главы через `write resume`.
++- Файлы: `packages/core/src/agents/continuity.ts`, `packages/core/src/models/chapter.ts`, `packages/core/src/pipeline/runner.ts`, `packages/core/src/__tests__/unicode-length.flow.test.ts`; локальный workspace script — после сверки его версии.
++- Приёмка: текст Ревизора остаётся принятым после технической проверки; повторный аудит сохраняет только проверенные заметки, сомнительные помечает как непроверенные; сбой/плохая схема post-audit сама по себе не блокирует главу; повторный resume не делает лишний платный вызов; статусная таблица согласована с этой политикой.
++- Ограничения: пользователь сам запускает тесты/сборки и платные команды; не менять `inkos.json`; не push/merge; не менять `custom/main`.
+ 
+ ## Ловушки
+-- Есть несколько checkout’ов: `inkos-merge-custom-main` (`custom/main` на момент проверки), `inkos-auto-revision` (`feat/longform-auto-revision`), `inkos-auto-revision-test` (`test/auto-revision-pipeline`). Не путать их.
+-- Studio процесса сейчас нет; наличие свежих dist-файлов не доказывает, какой checkout был источником последнего запуска.
+-- Project root для книги отдельный: `C:\Projects\inkos-g4-workspace`; команды CLI надо выполнять из него.
+-- Текущий полный стек моделей и наличие free-only флага не проверялись и неизвестны; старые скриншоты и назначения могли устареть.
+-- `fork-docs/` имел изменения до handoff; они включаются в WIP-коммит как часть уже имеющейся незакоммиченной работы, но в этом handoff не редактировались.
+-
++- Несколько checkout’ов: `inkos-merge-custom-main`, `inkos-auto-revision` (`feat/longform-auto-revision`), `inkos-auto-revision-test` (`test/auto-revision-pipeline`). Не смешивать их.
++- Нет активного процесса InkOS; свежий `dist` сам по себе не доказывает, откуда запускался Studio.
++- Work workspace отделён от репозитория исходников: команды книги запускаются из `C:\Projects\inkos-g4-workspace`.
++- Длинный прогон `write next --count N` может писать несколько глав подряд; для ручного контроля указывать `--count 1`.
++- `write resume` продолжает сохранённую главу; `write sync` только перестраивает состояние/аудирует; `write rewrite` заново генерирует главу.
++- Для `book create` длинной формы в этой ветке языки фиксированы: операционный `en`, проза `ru`; CLI-флагов `--lang`/`--narrative-lang` у create нет.
++- Повторный `book create` с тем же ID при неполной директории может удалить черновой Work; сначала проверить ID и backup.
++- Полный стек моделей и free-only флаг не проверялись; не доверять старым скриншотам конфигурации.
++- `fork-docs/` обновлялся по отдельному запросу владельца; передача включает `CLI_PLAYBOOK.md` и обновлённый статус. Не считать документацию подтверждением непрогнанных примеров.
+diff --git a/fork-docs/CLI_PLAYBOOK.md b/fork-docs/CLI_PLAYBOOK.md
+new file mode 100644
+index 00000000..098cf13e
+--- /dev/null
++++ b/fork-docs/CLI_PLAYBOOK.md
+@@ -0,0 +1,312 @@
++# Практический CLI-playbook InkOS
++
++Руководство для запуска InkOS из PowerShell без чата и Studio. Команды сверены с CLI текущей ветки `wip/handoff-2026-11-02`; при обновлении сборки синтаксис может измениться. Перед редкой или разрушительной операцией сверяйте `inkos <команда> --help`.
++
++## 1. Подготовка
++
++Нужны Node.js `>=22.16.0`, pnpm и настроенный проект InkOS. `inkos init` создаёт проект; большинство команд ищут `inkos.json` в текущей папке или выше по дереву. Команду создания книги и главы запускайте из project root, а не из папки репозитория.
++
++```powershell
++# Репозиторий с исходниками и собранным CLI
++Set-Location C:\Projects\inkos-merge-custom-main
++pnpm build
++
++# Проект с книгами
++Set-Location C:\Projects\inkos-g4-workspace
++$cli = 'C:\Projects\inkos-merge-custom-main\packages\cli\dist\index.js'
++node $cli --help
++```
++
++Если в вашей копии CLI находится в другом checkout, поменяйте только `$cli`. Перед платной командой проверьте, что `$cli` указывает на нужную сборку, текущая папка содержит `inkos.json`, а конфигурация моделей соответствует ожидаемой.
++
++Создание/изменение книг вызывает модели и может тарифицироваться. `--json` меняет формат вывода, но не делает команду бесплатной. Не запускайте один и тот же `write next` повторно, пока не проверили результат первой команды и контрольную точку.
++
++## 2. Рекомендуемый цикл длинной книги
++
++### 2.1 Проверить проект и текущие книги
++
++```powershell
++node $cli doctor
++node $cli status
++node $cli book list
++node $cli config show-models
++```
++
++`doctor` проверяет окружение; `status` показывает проект/книги; `book list` перечисляет книги; `config show-models` показывает маршрутизацию ролей. `doctor --repair-node-runtime` меняет файлы проекта (`.nvmrc`, `.node-version`), поэтому запускайте его только если это нужно.
++
++### 2.2 Подготовить бриф и создать книгу
++
++Пишите бриф в UTF-8 `.md` или `.txt`. В брифе задайте идею, жанр/тон, главных героев и конфликты, желаемый финал, ограничения и то, что обязано/не должно появиться. Передайте путь через `--brief`:
++
++```powershell
++$brief = 'C:\Projects\inkos-g4-workspace\story-brief.md'
++node $cli book create `
++  --title 'Тихий берег' `
++  --genre 'социальная драма' `
++  --platform other `
++  --target-chapters 8 `
++  --chapter-words 1800 `
++  --brief $brief `
++  --json
++if ($LASTEXITCODE -ne 0) { throw 'Создание книги завершилось с ошибкой.' }
++```
++
++`--title` обязателен. Остальные флаги: `--genre` (по умолчанию `xuanhuan`), `--platform` (по умолчанию `tomato`), `--target-chapters` (200), `--chapter-words` (3000), `--brief <path>`, `--json`. Значения по умолчанию ориентированы на upstream, поэтому для русской книги явно задавайте жанр, платформу, объём и число глав.
++
++В этой ветке создание длинной книги задаёт языки константами: операционный язык `en`, язык прозы `ru`; флагов `--lang` и `--narrative-lang` у `book create` нет. `book update --lang` меняет операционный язык книги (`en`/`zh`), но не предназначен для переключения языка прозы.
++
++**Проверьте id перед повторным Create.** ID выводится из заголовка. Если сгенерированная директория с таким ID существует, но ещё не является завершённой книгой, текущая команда `book create` может удалить её перед созданием нового фундамента. Для уже существующей/незавершённой книги сначала проверьте `book list`, `work show`, резервные копии и путь Work; не повторяйте Create с тем же заголовком вслепую.
++
++### 2.3 Проверить фундамент и выбрать одну главу
++
++После успешного Create проверьте книгу и её артефакты:
++
++```powershell
++node $cli book list
++node $cli work list
++node $cli work show 'тихий-берег'
++node $cli status 'тихий-берег' --chapters
++```
++
++ID в примере надо заменить на фактический ID из результата Create. Не запускайте автора, пока фундамент (план, персонажи, правила мира, карта глав) не сохранён и не просмотрен.
++
++Запуск одной главы полным конвейером:
++
++```powershell
++node $cli write next 'тихий-берег' --count 1 --words 1800 --json
++$writeExitCode = $LASTEXITCODE
++if ($writeExitCode -ne 0) { throw "Глава не завершила конвейер (код $writeExitCode). Сначала проверьте статус и используйте write resume." }
++.\scripts\check-pipeline.ps1 -BookId 'тихий-берег' -Chapter 1
++```
++
++`--count` — число глав за одну команду, по умолчанию `1`. Если нужен контроль после каждой главы, оставляйте `--count 1`. Не используйте `auto` для такого режима: он пишет до указанного номера подряд. `--words` временно переопределяет объём главы; иначе действует настройка книги. `--context <text>` и `--context-file <path>` добавляют разовое творческое указание. Также есть `--quiet` (`-q`) и `--notify`.
++
++### 2.4 Диагностика и продолжение после ошибки
++
++Первым делом сохраните весь терминальный вывод и запустите проверку статуса. Не запускайте `write next` повторно, если глава уже появилась: сначала выясните, завершена ли операция.
++
++```powershell
++node $cli status 'тихий-берег' --chapters
++.\scripts\check-pipeline.ps1 -BookId 'тихий-берег' -Chapter 1
++```
++
++Если команда сообщила, что глава сохранена, но конвейер незавершён, продолжайте **ту же главу**:
++
++```powershell
++node $cli write resume 'тихий-берег' 1 --json
++$resumeExitCode = $LASTEXITCODE
++.\scripts\check-pipeline.ps1 -BookId 'тихий-берег' -Chapter 1
++if ($resumeExitCode -ne 0) { Write-Warning "Resume остановился с кодом $resumeExitCode; прочитайте ошибку и таблицу." }
++```
++
++`write resume [book-id] [chapter]` берёт сохранённую контрольную точку и продолжает неподтверждённые этапы. Без `book-id` CLI автоматически выберет книгу, только если в проекте она одна; без номера — последнюю операцию этой книги. Команда не начинает следующую главу. При изменившемся исходном тексте, фундаменте, каноне или неоднозначном архиве resume должен остановиться: сначала выясните, какой артефакт менялся. Не удаляйте `.inkos/chapter-runs` и worker archives вручную.
++
++Локальный `scripts/check-pipeline.ps1` находится в workspace книги, а не в репозитории CLI. Его таблица показывает подтверждённые этапы и причины пропусков/ошибок; это диагностический скрипт, он ничего не исправляет и не запускает. После последних изменений advisory post-audit его трактовка может отличаться от runtime — ориентируйтесь также на итоговый JSON и сохранённые артефакты.
++
++### 2.5 После главы
++
++```powershell
++node $cli status 'тихий-берег' --chapters
++node $cli review 'тихий-берег'
++node $cli analytics 'тихий-берег'
++```
++
++`review` показывает сохранённые замечания, а не обязательно выполняет новый вызов аудитора. Новая глава может запускать аудит/ревизора автоматически согласно режиму книги. В принятом long-form процессе текст ревизора становится текстом главы после технической проверки; повторный аудит прикладывается как заметки для вычитки и не должен сам по себе отменять редакцию.
++
++## 3. Команды длинной прозы по назначению
++
++### Книга и Work
++
++```text
++inkos book create --title <title> [--genre <genre>] [--platform <platform>]
++  [--target-chapters <n>] [--chapter-words <n>] [--brief <path>] [--json]
++inkos book update [book-id] [--chapter-words <n>] [--target-chapters <n>]
++  [--status outlining|active|paused|completed] [--lang en|zh] [--json]
++inkos book list [--json]
++inkos book backup <book-id> [--list] [--json]
++inkos book restore <book-id> <backup-id> [--json]
++inkos book delete <book-id> [--force] [--json]
++inkos work migrate [--source <path>] [--apply] [--json]
++inkos work list [--profile <profile-id>] [--json]
++inkos work show <work-id> [--json]
++```
++
++`book backup` без `--list` создаёт резервную копию; `book restore` перед восстановлением автоматически сохраняет текущее состояние в backup. `book delete` необратимо удаляет книгу, главы, truth files и snapshots — `--force` только пропускает подтверждение, не добавляйте его в обычные команды. `work migrate` без `--apply` — предварительный просмотр; `--apply` копирует legacy project, исходные папки сохраняются.
++
++### Главы и состояния
++
++```text
++inkos write next [book-id] [--count <n>] [--words <n>]
++  [--context <text> | --context-file <path>] [--json] [--quiet] [--notify]
++inkos write resume [book-id] [chapter] [--json]
++inkos write rewrite [book-id] <chapter> [--force] [--words <n>] [--brief <text>] [--json] [--notify]
++inkos write sync [book-id] <chapter> [--brief <text>] [--json]
++inkos review [book-id] [--json]
++inkos status [book-id] [--chapters] [--json]
++inkos chapter sync [book-id] [--json]
++inkos chapter delete <book-id> [--chapter <n>] [--force] [--json]
++inkos revise [book-id] [chapter] [--mode spot-fix|polish|rewrite|rework|anti-detect]
++  [--brief <text>] [--json] [--notify]
++inkos export [book-id] [--format txt|md|epub] [--output <path>] [--json]
++inkos analytics [book-id] [--json]
++inkos detect [book-id] [chapter] [--all] [--stats] [--json]
++inkos auto [book-id] <target-chapter> [--words <n>] [--json] [--quiet] [--notify]
++```
++
++- `write rewrite` повторно генерирует указанную главу; это не восстановление после сбоя. Команда подтверждается перед перезаписью, `--force` пропускает подтверждение.
++- `write sync` перестраивает truth/index из уже отредактированного текста, затем запускает аудит. Это не полный resume редакторской цепочки.
++- `chapter sync` пересчитывает счётчик слов глав и обновляет index.
++- `chapter delete` допускает удаление только последней главы и откатывает index/state; сделайте `book backup` заранее.
++- `revise` — отдельная редактура существующей главы. Режимы: точечная правка `spot-fix`, полировка `polish`, переписывание `rewrite`, редактура по замечаниям `rework`, anti-detect `anti-detect`. Может вызывать модель.
++- `auto` пишет до целевой главы, включая её; не применяйте, если требуется ручная проверка каждой главы.
++- `export` формирует один файл, доступные форматы: TXT, Markdown, EPUB.
++
++### Отдельные роли long-form
++
++`agent run` вызывает одну роль и останавливается; это режим диагностики/сравнения, а не полный pipeline. Результат сохраняется в `.inkos/agent-runs/`.
++
++```text
++inkos agent run <role> --book-id <book-id> --chapter <n> [options]
++roles: planner, composer, author (writer), auditor, reviser, settler, state-validator
++options: --input-file <path> --observations-file <path> --settlement-file <path>
++         --stage-context <text> --mode polish|rewrite|rework|anti-detect|spot-fix
++         --words <n> --result-json
++```
++
++Примеры:
++
++```powershell
++node $cli agent run planner --book-id 'тихий-берег' --chapter 2 --result-json
++node $cli agent run composer --book-id 'тихий-берег' --chapter 2 --result-json
++node $cli agent run author --book-id 'тихий-берег' --chapter 2 --words 1800 --result-json
++node $cli agent run auditor --book-id 'тихий-берег' --chapter 2 `
++  --input-file 'C:\Projects\inkos-g4-workspace\works\тихий-берег\source\chapters\0002_Глава.md' --result-json
++```
++
++`composer` собирает и сохраняет контекст локально, обычно без model call. `auditor`, `author`, `planner`, `reviser`, `settler` и `state-validator` могут вызывать модели. `reviser` требует отчёт аудитора через `--observations-file`; `state-validator` использует результат settlement через `--settlement-file`. Файлы должны относиться именно к этой книге/главе. Отдельный `agent run` не записывает полный результат как завершённую главу и не запускает следующие роли автоматически. Не запускайте главу 2 автором, если глава 1/канон не готовы.
++
++### Конфигурация модели
++
++```text
++inkos config show
++inkos config show-models [--json]
++inkos config set-model <agent> <model> [--provider <openai|anthropic|custom>]
++  [--base-url <url>] [--api-key-env <env-name>] [--stream|--no-stream]
++inkos config remove-model <agent>
++inkos config list-models <service> [--api-key <key>] [--base-url <url>] [--json]
++inkos config set <key> <value>
++inkos config set-global --provider <provider> --base-url <url> --api-key <key> --model <model>
++  [--temperature <n>] [--max-tokens <n>] [--thinking-budget <n>] [--api-format chat|responses] [--lang en|zh]
++inkos config show-global
++```
++
++Known agent IDs include `architect`, `planner`, `composer`, `writer`, `auditor`, `reviser`, `state-validator`, `actor`, `radar`. `set-model` добавляет override; `remove-model` возвращает агента к default. После изменения сверьте `show-models`. `list-models` может обращаться к API провайдера. Не передавайте настоящий ключ прямо аргументом `--api-key`: он может попасть в историю shell/список процессов; используйте предусмотренную переменную окружения, когда это поддерживается.
++
++Глобальные параметры можно передавать до команды, например `node $cli --model <id> write next ...`: `--service`, `--model`, `--api-key-env`, `--base-url`, `--api-format chat|responses|anthropic`, `--stream`, `--no-stream`. Это override только для текущего запуска и может переопределить ожидаемую конфигурацию ролей. Не применяйте его, если нужен назначенный каждой роли стек.
++
++## 4. Полный каталог CLI
++
++Справка на конкретную команду: `node $cli <команда> --help`; на подкоманду: `node $cli <группа> <подкоманда> --help`. Команды верхнего уровня текущего CLI:
++
++| Команда | Назначение / варианты |
++| --- | --- |
++| `init [name] [--lang zh|en]` | Создать InkOS project в текущей папке или подкаталоге. |
++| `config` | `set`, `set-global`, `show-global`, `show`, `set-model`, `remove-model`, `show-models`, `list-models`. |
++| `book` | `create`, `update`, `list`, `delete`, `backup`, `restore`. |
++| `work` | `migrate`, `list`, `show`. |
++| `chapter` | `sync`, `delete`. |
++| `write` | `next`, `resume`, `rewrite`, `sync`. |
++| `auto` | Продолжать главы до целевого номера. |
++| `review`, `status`, `analytics` (`stats`) | Читать сохранённые замечания, состояние и метрики. |
++| `radar scan` | Обзор рыночных сигналов. |
++| `up`, `down` | Запуск/остановка фонового daemon; `up --quiet`. |
++| `doctor [--repair-node-runtime]` | Диагностика; с флагом исправляет Node pin-файлы. |
++| `export` | TXT/MD/EPUB export книги. |
++| `revise` | Редактура главы по режиму и brief. |
++| `agent <instruction>` | Natural-language agent с tool-use; флаги `--book`, `--work`, `--session`, `--context`, `--context-file`, `--json`, `--quiet`. Может самостоятельно выбрать и выполнить несколько инструментов; для контролируемого полного long-form цикла предпочитайте `book create` и `write next`. |
++| `agent run` | Один изолированный long-form агентский этап. |
++| `update` | Обновление InkOS; перед применением проверьте источник/версию и сохраните работу. |
++| `detect` | AIGC detection одной главы или `--all`, `--stats`. |
++| `style import <file> [book-id]` | Компиляция референсного текста в style guide; `--name`, `--json`. |
++| `import canon`, `import chapters` | Импорт канона из родительской книги или текстов; см. `--help`, может вызывать модели и менять Work. |
++| `fanfic init`, `fanfic show`, `fanfic refresh` | Создание/обновление fanfic Work и просмотр источников; `init`/`refresh` требуют `--from`. |
++| `short run`, `short revise` | Отдельный short-fiction workflow с собственными моделями/настройками длины. Не смешивайте его с long-form книгой. |
++| `forecast create`, `forecast show`, `forecast select` | Создать, изучить и выбрать неписаную альтернативную ветку сюжета. `create` принимает `--divergence`, `--branches`, `--horizon`, `--model`, `--llm-base-url`, `--json`. |
++| `translate init`, `translate run`, `translate export` | Отдельный переводческий pipeline; не является русским long-form writer workflow. |
++| `studio [--port <port>] [--project <path>]` | Запуск Studio из CLI. |
++| `interact [message...]` | Natural-language interaction; варианты `--message`, `--book`, `--work`, `--session`, `--json`. |
++| `tui` | Терминальный UI. |
++
++У всех семейств используйте `--help` для полного перечня параметров, типов и defaults именно установленной сборки. `inkos` без подкоманды запускает Studio; это не команда для написания главы.
++
++Полные варианты вспомогательных семейств:
++
++```text
++inkos init [name] [--lang zh|en]
++inkos radar scan [--json]
++inkos up [--quiet]
++inkos down
++inkos doctor [--repair-node-runtime]
++inkos update
++
++inkos style import <file> [book-id] [--name <name>] [--json]
++
++inkos import canon [target-book-id] --from <parent-book-id> [--json]
++inkos import chapters [book-id] --from <file-or-directory> [--split <regex>]
++  [--resume-from <n>] [--series] [--json]
++
++inkos fanfic init --title <title> --from <path> [--mode <text>] [--genre <genre>]
++  [--platform <platform>] [--target-chapters <n>] [--chapter-words <n>]
++  [--lang zh|en] [--json]
++inkos fanfic show [book-id] [--json]
++inkos fanfic refresh [book-id] --from <path> [--json]
++
++inkos short run --direction <text> [--reference <path>] [--story-id <id>]
++  [--lang zh|en] [--chapters <n>] [--chars <n>] [--min-chapter-length-ratio <ratio>]
++  [--llm-base-url <url>] [--model <id>] [--planner-model <id>] [--writer-model <id>]
++  [--draft-review-model <id>] [--package-model <id>] [--cover-base-url <url>]
++  [--cover-endpoint <url>] [--cover-model <id>] [--cover-size <size>]
++  [--cover-api-key-env <name>] [--no-cover] [--json]
++inkos short revise <story-id> --instruction <text> [--chars <n>] [--model <id>]
++  [--chapters <comma-separated-numbers>] [--json]
++
++inkos forecast create [book-id] --divergence <text> [--branches <n>] [--horizon <n>]
++  [--model <id>] [--llm-base-url <url>] [--json]
++inkos forecast show [book-id] <forecast-id> [--json]
++inkos forecast select [book-id] <forecast-id> <branch-id> [--json]
++
++inkos translate init --from <path> --source <lang|auto> --target <lang>
++  [--title <title>] [--segment-max-chars <n>] [--json]
++inkos translate run <work-id> [--batch-size <n>] [--max-tokens <n>] [--json]
++inkos translate export <work-id> [--format md|txt|epub] [--output <path>] [--json]
++
++inkos studio [--port <port>] [--project <path>]
++inkos interact [message...] [--message <text>] [--book <id>] [--work <id>]
++  [--session <id>] [--json]
++inkos tui
++```
++
++`init --lang` задаёт язык нового проекта (`zh` по умолчанию или `en`); для long-form книг этого русского форка операционный/нарративный языки задаются отдельно константами создания книги. Переводческие команды — самостоятельная функция upstream и не нужны для генерации русской оригинальной прозы.
++
++## 5. Работа с результатами и файлами
++
++- Work-каталог находится в `works/<book-id>/`; исходные главы — `works/<book-id>/source/chapters/`.
++- Runtime artifacts, контрольные точки и диагностика лежат в `.inkos/` внутри project root. Не чистите их, пока не завершили восстановление и не скопировали нужные отчёты.
++- После неудачной команды проверьте консольный код `$LASTEXITCODE`, `status --chapters`, chapter index и `check-pipeline.ps1`. Появившийся Markdown-файл сам по себе не означает, что редактура, settlement, state validation и синхронизация завершились.
++- Сохраняйте stdout/stderr платных запусков. Для OpenRouter расходы подтверждайте в billing/generation details; локальный tokenUsage не всегда совпадает с биллингом.
++- Перед удалением/перезаписью: `book backup <id>`, затем `book backup <id> --list`; операции с `--force` выполняйте лишь после проверки точной книги/главы.
++
++## 6. Форматирование и отладка
++
++Посмотреть команды/версии, не изменяя книгу:
++
++```powershell
++node $cli --version
++node $cli --help
++node $cli write --help
++node $cli agent run --help
++```
++
++Глобальные параметры ставьте перед подкомандой: `node $cli --model <id> write next ...`. Для PowerShell используйте backtick для переноса строки; не оставляйте пробел после backtick. После каждой платной команды немедленно сохраните `$LASTEXITCODE`, прежде чем выполнять другую команду.
++
++Справка этой ветки отражает текущие команды, но текущий WIP не проверен новой сборкой. Если CLI и исходники разошлись, достоверная фактическая поверхность — `node $cli --help` из той сборки, которую вы запускаете; сообщите её версию и путь.
+diff --git a/fork-docs/CURRENT_STATE.md b/fork-docs/CURRENT_STATE.md
+index 232f7e25..dfd08bdc 100644
+--- a/fork-docs/CURRENT_STATE.md
++++ b/fork-docs/CURRENT_STATE.md
+@@ -1,5 +1,9 @@
+ # Текущее состояние форка
+ 
++**03.11.2026 — CLI-playbook:** добавлено руководство `CLI_PLAYBOOK.md` для работы без чата/Studio. Оно описывает подготовку project root, создание длинной книги с русским нарративным языком, безопасный запуск одной главы, `resume`, проверку `check-pipeline.ps1`, восстановление и каталог команд CLI. Добавлена ссылка в `INDEX.md`. Сверка выполнена по текущему CLI help и описаниям команд в исходниках; выполнялись только справочные вызовы `--help`. Генерация/API, тесты, сборка и ручной прогон команд книги **NOT RUN**. Руководство относится к checkout `C:\Projects\inkos-merge-custom-main`, ветка `wip/handoff-2026-11-02`; актуальность бинарника после последних WIP-изменений не подтверждена новой сборкой.
++
++**02.11.2026 — Документация `write resume`:** контракт уточнён по текущим `ChapterCheckpoint`, CLI и `PipelineRunner`. Контрольные точки сохраняются в `.inkos/chapter-runs/`; продолжение проверяет baseline книги/главы, переиспользует завершённые этапы и при совпадении запроса пытается локально обработать архивированный ответ. `write next` блокируется при незавершённой операции; `write resume` не должен писать следующую главу. Повторный аудит принятой редакции документирован как вычиточная заметка: его недоступность не отменяет редакцию и не является самостоятельным блокером выпуска. Первичный аудит, применимость редакции и техническая проверка состояния остаются условиями готовности. Raw-ответ с невалидным структурированным результатом остаётся диагностическим артефактом; извлекать из него неподтверждённые замечания нельзя. Руководство: `G4_CHAPTER_RESUME.md`. Пользовательские тесты/build после последних изменений advisory post-audit **NOT RUN**; отдельная таблица `check-pipeline.ps1` может ещё показывать старую интерпретацию повторного аудита и требует сверки. Платный полный прогон **NOT RUN**.
++
+ **02.11.2026 — Восстановление конвейера главы:** изучены индексы тестовых глав и реализация long-form pipeline. Чаще всего фиксируется недоступный аудит; встречаются ошибки структурированного результата ревизии/состояния и недоступный валидатор. Добавлены контрольные точки в `.inkos/chapter-runs/`, вход `write resume`, проверка базы и повторное использование этапов. Запросы получают устойчивый идентификатор и хеш входа; при прерывании добавлена повторная локальная обработка соответствующего архивного ответа без сетевого вызова, а при отсутствии или неоднозначности архива продолжение останавливается. Добавлено ограниченное восстановление ранее сохранённой главы с недоступным аудитом по журналу и артефактам; при нехватке доказательств продолжение останавливается. Сборка **PASS по сообщению пользователя**; результаты тестов отсутствуют, проверка сценариев восстановления и учёта расходов остаётся открытой. Контракт и ограничения описаны в `G4_CHAPTER_RESUME.md`; платные вызовы **NOT RUN**.
+ 
+ **02.11.2026 — Русский язык планов глав:** общий `PlannerAgent` получает усиленный явный контракт: весь естественно-языковой текст `goal` и `body`, включая Markdown-заголовки, должен быть на русском независимо от языка исходных материалов; имена, необходимые дословные цитаты, термины и идентификаторы сохраняются. Long-writing Skill теперь прямо включает Planner в круг ролей и уточняет, что язык читательского плана определяется контрактом Work. После структурной проверки добавлено только предупреждение о вероятном существенном английском/CJK-фрагменте; ответ не отклоняется и не переписывается, а остаётся сохранённым для разбора. Изменены `planner-prompts.ts`, `planner.ts`, Skill и регрессионный тест, проверяющий предупреждение и сохранение смешанного ответа. Тесты/build **NOT RUN**; полный авторский цикл **NOT RUN**. Сохранённый план может быть переиспользован без повторного вызова Planner, поэтому для применения правки к уже существующей главе план потребуется явно перегенерировать до запуска Автора.
+diff --git a/fork-docs/G4_CHAPTER_RESUME.md b/fork-docs/G4_CHAPTER_RESUME.md
+index 8909e9ae..8593d650 100644
+--- a/fork-docs/G4_CHAPTER_RESUME.md
++++ b/fork-docs/G4_CHAPTER_RESUME.md
+@@ -1,46 +1,50 @@
+-# Продолжение прерванной главы
++# Восстановление конвейера главы: `write resume`
+ 
+-## Цель
++## Для чего нужна команда
+ 
+-`inkos write resume [book-id] [chapter]` продолжает последнюю незавершённую главу с первого незавершённого этапа и выполняет оставшиеся этапы до сохранения главы и состояния. Завершённые платные вызовы повторно не выполняются. Команда не пишет следующую главу.
++`inkos write resume [book-id] [chapter]` продолжает незавершённую операцию над главой с сохранённой контрольной точки. Она выполняет ещё не подтверждённые этапы до сохранения главы и состояния. Команда не начинает следующую главу и не является синонимом `write sync` или `write rewrite`.
+ 
+-## Наблюдения
++Обычный `write next` останавливается, если предыдущая операция главы не отмечена завершённой, и предлагает сначала выполнить `write resume`. Это предотвращает случайный переход к следующей главе при незакрытом конвейере.
+ 
+-В текущих индексах тестовых рабочих пространств найдено 26 записей глав: у пяти отмечен недоступный аудит, у трёх — ошибки структурированного результата или технической проверки редакции, у одной — недоступная проверка состояния. Это снимок индексов, а не статистика независимых запусков: незаписанные главы и исторические повторы в него не входят.
++## Запуск из PowerShell
+ 
+-`check-pipeline.ps1` выводит состояние по наличию файлов, индексу и снимкам. Он не сохраняет результаты каждого этапа и не управляет конвейером. Архив worker-ответов сохраняет сырые ответы, но сам по себе не содержит полного состояния выполнения главы.
++Из корня проекта книги:
+ 
+-Для ранее созданной тестовой главы с недоступным аудитом сохранены версия черновика, план, фактически собранный `context.json` и события эпизода в `harness.sqlite`, включая исходное указание и путь к ответу Автора. Соседний `context-package.json` может относиться к более ранней операции. Для восстановления старой главы нужно сначала доказать соответствие эпизода, черновика, плана, контекста и текущего состояния; использовать последний файл пакета по одному имени недостаточно.
++```powershell
++Set-Location C:\Projects\inkos-g4-workspace
++$cli = 'C:\Projects\inkos-merge-custom-main\packages\cli\dist\index.js'
++node $cli write resume 'dogbook01' 3 --json
++if ($LASTEXITCODE -ne 0) { throw 'Восстановление главы завершилось с ошибкой.' }
++.\scripts\check-pipeline.ps1 -BookId 'dogbook01' -Chapter 3
++```
+ 
+-Для новых операций запросы снабжаются идентификаторами этапа и отпечатком входа. При прерывании ответ с совпадающей идентичностью повторно проходит локальную проверку схемы и предметных правил; если архив не найден или вход изменился, сетевой вызов не выполняется. Данные нескольких запросов одного этапа сопоставляются по отпечаткам, в том числе при изменении порядка параллельных вызовов. Реализация ещё не подтверждена проверками.
++Подставьте фактические project root, путь к собранному CLI, id книги и номер главы. Книгу можно не указывать, только если в project root есть ровно одна книга; при нескольких книгах CLI просит указать id. Номер главы можно не указывать — тогда выбирается последняя контрольная точка книги. `check-pipeline.ps1` — отдельный проверочный скрипт из workspace книги, не часть команды `resume`.
+ 
+-## Необходимый контракт
++## Что сохраняется и как выбирается точка продолжения
+ 
+-- Сохранять контрольную точку операции после подготовки плана и контекста, черновика, аудита, ревизии, построения и проверки состояния, повторного аудита и итогового сохранения.
+-- Для каждого этапа сохранять состояние, идентификаторы входных и выходных артефактов, учёт токенов и причину ошибки. Проверять принадлежность артефактов книге и главе, а также неизменность их входных данных.
+-- Сохранять ответ модели до обработки; при наличии полного сохранённого ответа сначала повторять локальную обработку. Обрезанный или пустой ответ требует нового вызова только соответствующего этапа.
+-- При сбое аудитора сохранить черновик и продолжить с аудитора. При сбое ревизора сохранить его кандидат и исходные замечания. При сбое построения или проверки состояния повторять соответствующий шаг с принятой версией текста. При сбое повторного аудита сохранять принятую редакцию и продолжать с повторного аудита.
+-- Результат ревизора принимается согласно действующей политике; замечания повторного аудита прикладываются для вычитки. Состояние и канон строятся из принятой версии главы.
+-- Повторный запуск после успешного завершения не вызывает модели и не меняет книгу. При неоднозначном состоянии или изменённых входных артефактах команда останавливается с указанием причины.
+-- Для существующих глав без контрольной точки использовать только подтверждённые артефакты; не объявлять этап успешным по одному наличию снимка канона или расхода токенов. Если восстановить границу безопасно нельзя, сообщить об этом.
+-- Не включать автоматические повторные платные запросы после частичного, пустого или обрезанного ответа. Явный запуск `resume` разрешает повторить провалившийся этап один раз.
++- Контрольные точки лежат в `.inkos/chapter-runs/<encoded-book-id>/chapter-<номер>-<operationId>.json` внутри project root. Запись содержит версию формата, книгу, главу и последовательные записи этапов со статусом, временем и данными результата.
++- До продолжения проверяются книга/глава, baseline runtime state, стабильные исходники книги и идентичность конфигурации. Если они изменились относительно сохранённой операции, `resume` останавливается с ошибкой безопасности данных.
++- Для запросов моделей фиксируются attempt id, порядковый номер и fingerprint входа. Сырой ответ worker сохраняется в `.inkos/agent-runs/<book-id>/worker-responses/` до последующей обработки. При прерывании ответ можно обработать локально повторно только при совпадении идентичности и входа; это не новый сетевой вызов.
++- При отсутствующем или неоднозначном raw-ответе, изменившемся запросе, испорченной контрольной точке или конфликте с уже записанной следующей главой команда останавливается. Не следует вручную объявлять этап завершённым только по наличию текста или расходу токенов.
++- Для некоторых старых глав без checkpoint предусмотрен ограниченный bootstrap по согласованным артефактам и журналу. Поддерживается только безопасно подтверждаемая граница; при недостатке доказательств команда остановится.
+ 
+-## Состояние реализации
++Основные этапы long-form операции: baseline и входы, план и контекст, текст черновика, первичный аудит, ревизия (если она требуется), settlement, проверка истины/канона, повторный аудит редакции и итоговая запись. Уже завершённые результаты берутся из checkpoint, если их входы совпадают; успешное завершение `persisted` делает повторный `resume` идемпотентным.
+ 
+-Реализованы контрольные точки long-form операции в `.inkos/chapter-runs/<book-id>/` и команда `write resume [book-id] [chapter]`. Сохраняются исходное состояние, стабильные источники, входы и результаты этапов, кандидаты и границы запросов. Восстановление повторно использует подтверждённые результаты и проверяет неизменность исходных данных; незавершённый конвейер блокирует `write next` и сообщает о необходимости продолжения. При неизвестном исходе запроса повторный платный вызов блокируется. Для некоторых старых глав с недоступным аудитом предусмотрено восстановление только при достаточности согласованных артефактов и трассы; наличие файла главы само по себе не подтверждает этап.
++## Ошибки, повторные вызовы и границы безопасности
+ 
+-Добавлены локальные тесты контрольных точек, в том числе для неоднозначного запроса, сбоев редакторских этапов, блокировки перехода к следующей главе и ручной правки главы. Не все расходы на неуспешные вызовы и вызовы Валидатора гарантированно отражены в итоговой статистике. Сценарий восстановления старой главы и сквозная работа с моделями требуют отдельной проверки. `write sync` перестраивает состояние и запускает аудит, но не продолжает редакторскую цепочку; `write rewrite` повторно генерирует главу.
++- Сбой до сохранения главы оставляет контрольную точку и доступные артефакты для продолжения. Сбой модели сам по себе не разрешает бесконечный автоматический retry.
++- Если поток оборвался после получения ответа, сначала используется сохранённый raw response. Если безопасно сопоставить его с запросом нельзя, повторная обработка не подменяет ответ новым результатом автоматически.
++- Ошибка первичного аудита, отсутствие применимого результата ревизии или несогласованное состояние могут оставить главу сохранённой, но pipeline отмечается незавершённым. `write next` в таком случае блокируется до восстановления или явного исправления состояния.
++- Версия Ревизора проходит техническую проверку перед принятием и settlement. Канон и производные файлы должны строиться от версии, которая фактически принята как текст главы.
++- Повторный аудит после принятой редакции предназначен для заметок к вычитке. Его недоступность/неполный результат записывается как предупреждение и сам по себе не должен отменять уже принятую редакцию или блокировать завершение главы. При невалидном структурированном ответе диагностический raw response остаётся в worker archive; отображаемая заметка может сообщать только причину недоступности, а не извлекать из сырого ответа непроверенные выводы.
++- Если `resume` сообщает `CHAPTER_RESUME_REQUIRED`, запустите его для той же книги и главы. Если получен `CHAPTER_RESUME_INPUT_CHANGED`, `CHAPTER_RESUME_CHAPTER_CHANGED`, `CHAPTER_RESUME_NOT_LATEST` либо ошибка baseline, сначала разберите изменившиеся артефакты; не удаляйте checkpoint наугад.
+ 
+-Первый пользовательский прогон: сборка **PASS**, тесты — **31 PASS / 1 FAIL**. Ошибка выявила, что полная редакция не сохранялась кандидатом, если у ответа ревизора отсутствовал отчёт по замечаниям. Порядок обработки изменён: законченный текст допустимого объёма сохраняется кандидатом до проверки отчёта, но не принимается при ошибке отчёта.
++`write sync` пересобирает производные данные и выполняет аудит, но не продолжает все редакторские этапы. `write rewrite` повторно пишет главу и не заменяет безопасное восстановление сохранённой операции.
+ 
+-Повторный пользовательский прогон после исправления: оба набора тестов **PASS (32/32)**, `pnpm build` **PASS**. Это подтверждает проверенные сценарии на локальных заглушках; полный платный сквозной прогон остаётся **NOT RUN**.
++## Проверки и ограничения
+ 
+-При реальной попытке продолжения `dogbook01`, глава 3, контрольная точка восстановилась, но DeepSeek V4.1 Flash 1017 исчерпал 96 000 выходных токенов; аудит остался недоступен, исходная глава сохранена, автоматического повтора не было. Сумма `totalTokens` в восстановленном учёте уже не совпадала с суммой входа и выхода в исходном `chapters/index.json` (185 252 против 145 828); текущая попытка добавила к каждому полю значение из ответа модели без изменения этой разницы. Причина исходной исторической неточности не установлена; нормализовать её задним числом без данных провайдера нельзя. Биллинг OpenRouter остаётся источником фактической стоимости.
++Автотесты контрольных точек покрывают идентичность операции, повторное использование этапов, защиту от изменённых входов, ошибки восстановления и блокировку перехода к следующей главе. Они не доказывают надёжность конкретного провайдера или полный платный сквозной прогон. Расход при реальных неудачных запросах следует сверять с OpenRouter billing; внутренний token usage не всегда равен биллингу провайдера.
+ 
+-Последующая попытка с Qwen прошла начальный аудит, ревизию, settlement и проверку состояния, но повторный аудит не прошёл предметную проверку. Обнаружено, что `resume` останавливался до записи проверенной редакции. Убран преждевременный выход: при сбое повторного аудита редакция и состояние сохраняются, а глава остаётся незавершённой для последующего повторного аудита. Добавлен сценарный тест; новая правка и тест **NOT RUN** до пользовательской проверки.
++Пользовательские прогоны `dogbook01`, глава 3, подтвердили восстановление части этапов, сохранение редакции и канона и ручную диагностику через `check-pipeline.ps1`. В одном прогоне аудит не выдал доступный результат; в следующих успешный повторный аудит не всегда проходил проверку доказательств. После последующих изменений post-audit-поведения тесты и сборка **NOT RUN**. Полный платный сквозной прогон с текущей редакцией **NOT RUN**.
+ 
+-Пользователь подтвердил успешные тесты и сборку этой правки. Следующая попытка сохранила редакцию и канон, но Qwen повторно не прошёл предметную проверку: вернул четыре оценки при восьми исходных наблюдениях и использовал сокращённые цитаты с многоточиями. Уточнён запрос: перечислены обязательные ID, включая положительные наблюдения, и задана короткая непрерывная дословная цитата. Проверка не ослаблена; новые изменения требуют пользовательских тестов и сборки.
+-
+-После уточнения Qwen вернул все восемь оценок, но семь цитат отличались от оригинала. Проверка показала, что шесть из семи отличаются только пробельными символами; оставшаяся требует отдельного разбора. Добавлено восстановление точного фрагмента из главы при однозначном совпадении только после нормализации пробельных символов; неоднозначные и изменённые по содержанию цитаты отклоняются. Новая логика и тест пока **NOT RUN**. Уже полученный отчёт автоматически не считается принятым.
+-
+-Оставшееся доказательство `finding-8` не найдено ни в черновике, ни в редакции после нормализации пробелов. Локально подменять его или считать проверенным нельзя; перед принятием отчёта требуется достоверное новое доказательство либо иное явно подтверждённое разрешение. Прочие сохранённые данные не требуют повторной генерации.
++Текущая реализация и документация должны оставаться согласованными: повторный аудит — вычиточные заметки; первичный аудит, применение редакции и техническая проверка состояния остаются отдельными условиями готовности. Не считайте предупреждение повторного аудита доказательством исправления исходной находки.
+diff --git a/fork-docs/INDEX.md b/fork-docs/INDEX.md
+index 7e410e25..fa7d035d 100644
+--- a/fork-docs/INDEX.md
++++ b/fork-docs/INDEX.md
+@@ -25,6 +25,8 @@
+ | --- | --- | --- |
+ | Актуальный статус исследования, незакрытые вопросы и условия возобновления | [RESEARCH_CURRENT_STATE.md](./RESEARCH_CURRENT_STATE.md) | [RESEARCH.md](./RESEARCH.md) — **журнал проходов, исторические «следующие шаги» не действуют** |
+ | Инженерный статус, фактические PASS/NOT RUN, блокеры | [CURRENT_STATE.md](./CURRENT_STATE.md) | [ROADMAP.md](./ROADMAP.md) — этапы, зависимости, G0–G4 |
++| Восстановление прерванной главы и диагностика `write resume` | [G4_CHAPTER_RESUME.md](./G4_CHAPTER_RESUME.md) | Checkpoint, безопасное продолжение, raw-response replay, legacy recovery и статус повторного аудита |
++| Повседневная работа через CLI: книги, главы, восстановление и команды | [CLI_PLAYBOOK.md](./CLI_PLAYBOOK.md) | PowerShell-примеры, полный каталог CLI, конфигурация, диагностика и опасные операции |
+ | Требования литературного G1–G4, неизменный brief и A/B | [BENCHMARK_LONGFORM.md](./BENCHMARK_LONGFORM.md) | [RESEARCH_RU_RUBRIC.md](./RESEARCH_RU_RUBRIC.md) — редакторские признаки; [RESEARCH_R3_STRESS_BRIEF.md](./RESEARCH_R3_STRESS_BRIEF.md) — **архив R3 v0**, не ввод для G1 |
+ | OpenRouter, бесплатные модели и экономика G1 | [G1_MODEL_STACK.md](./G1_MODEL_STACK.md) — **новое решение 31.10: фиксированные `:free` IDs, Xing короткий tool call PASS, устойчивость не подтверждена** | [RESEARCH_R6_MODELS.md](./RESEARCH_R6_MODELS.md) — исторический Selectel и предыдущий OpenRouter shortlist; [RESEARCH_R6_TOKEN_ECONOMY.md](./RESEARCH_R6_TOKEN_ECONOMY.md) — токены, reasoning и историческая статистика |
+ | Открытые upstream Issues: что реально осталось в форке 2.0 | [RESEARCH_UPSTREAM_ISSUES_2026-10-30.md](./RESEARCH_UPSTREAM_ISSUES_2026-10-30.md) | Триаж 195 Issues, проверенный код, потенциальный доступ к секретам, CLI `write next`, context window 128K и старые уже исправленные пути |
 -- 
 2.56.0.windows.3
 
