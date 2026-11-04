@@ -598,6 +598,15 @@ export { exportInk } from "./interactive-film/export-ink.js";
 export { buildPlayableHtml } from "./interactive-film/export-html.js";
 export { ingestMaterial, type IngestMaterialInput, type MaterialAsset } from "./materials/ingest.js";
 export { runWorkerAgent, type WorkerAgentOptions } from "./agent/worker-agent.js";
+export {
+  classifyResultFailure,
+  createRepairBudget,
+  DEFAULT_REPAIR_POLICY,
+  repairDiagnostic,
+  type RepairClass,
+  type RepairPolicy,
+  type RepairReason,
+} from "./agent/result-repair.js";
 export { compileStyleGuide } from "./agents/style-guide.js";
 export { LLM_API_FORMATS, isLLMApiFormat, toPiApi, type LLMApiFormat } from "./llm/api-format.js";
 export * from "./harness/index.js";

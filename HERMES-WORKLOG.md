@@ -269,3 +269,18 @@
 1. ~~Разрешение на `pnpm build` и целевые тесты~~ — получено 2026-11-03, Фаза 0 выполнена.
 2. Какой checkout считается авторитетным runtime — влияет на то, где собирать.
 3. Нужно ли переносить `HERMES-WORKLOG.md` и `HERMES-PLAN.md` в git (сейчас untracked) или оставить локально.
+
+## 6. Технический саморемонт результата (2026-11-04)
+
+**Задача.** Ошибки валидации не должны требовать точечной правки промптов каждого агента и не должны ронять стадию: валидатор возвращает результат модели вместе с диагностикой, модель исправляет его в пределах бюджета.
+
+**Модуль `agent/result-repair.ts` — единственное место политики.**
+- `classifyResultFailure(code)`: `WORKER_SCHEMA_INVALID`, `WORKER_DOMAIN_INVALID`, `REVIEW_*` → `correctable`; `MODEL_EMPTY_RESPONSE`, `MODEL_OUTPUT_LIMIT`, `WORKER_MODEL_ERROR`, `WORKER_RESPONSE_ARCHIVE_FAILED`, `CHAPTER_REPLAY_FAILURE` → `transient`; незарегистрированный код → `fatal` (не маскировать незнакомый дефект повтором).
+- `createRepairBudget(policy)`: бюджет ходов на стадию (`maxRepairs`), запрет второго ремонта одной и той же сигнатуры (`maxRepairsPerSignature`, по умолчанию 1) — защита от зацикливания на одной ошибке.
+- `repairSignature(code, message)` — FNV-хеш кода и текста ошибки; `repairDiagnostic()` ограничивает диагностику 800 символами.
+
+**Проводка.** `WorkerAgentOptions.repair` → бюджет инкрементирует `allowedResultTurns` в `worker-agent.ts`; хук стоит на обоих путях отказа (`WORKER_SCHEMA_INVALID` в `prepareArguments`, доменная ошибка `validate`). Каждое решение пишется в evidence как `worker-repair-granted` / `worker-repair-refused` с причиной (`granted | budget-exhausted | repeated | unrepairable`). Опция проброшена через `base.submitStructured`, `base.submitSourcedReview`, `continuity.auditChapter`, `chapter-review.reviewChapterDraft`; автоаудит в `runner.ts` использует `DEFAULT_REPAIR_POLICY` вместо жёсткого `maxResultTurns: 2`.
+
+**Проверено фактически.** `result-repair.test.ts` — 8 PASS (классификация, стабильная сигнатура, исчерпание бюджета, повтор, неремонтируемый класс, обрезка диагностики). `worker-agent.test.ts` — 20 PASS, включая три новых: ремонт корректен и идёт через полный транспорт; повтор той же ошибки прекращает ремонт; `MODEL_EMPTY_RESPONSE` не получает хода. RED подтверждён: при отключённом бюджете оба положительных теста падают. Полный Core-сьют — **976 PASS / 19 FAIL / 6 SKIP**, состав падений прежний (предсуществующие). `typecheck` и `pnpm build` — PASS.
+
+**Открыто.** Дефект 3 (ложный `addressed` ревизора) сознательно не покрыт ремонтом: это проверка факта, а не формата — нужен детерминированный контроль пересечения цитаты с заменённым диапазоном.

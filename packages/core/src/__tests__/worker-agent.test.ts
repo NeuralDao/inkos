@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Type } from "@sinclair/typebox";
 import { runWorkerAgent, runWorkerAgentTool } from "../agent/worker-agent.js";
+import { DEFAULT_REPAIR_POLICY } from "../agent/result-repair.js";
 import { BaseAgent, type AgentContext } from "../agents/base.js";
 import { PipelineRunner } from "../pipeline/runner.js";
 import { createLLMClient } from "../llm/provider.js";
@@ -50,6 +51,26 @@ vi.mock("../agent/pi-stream.js", async () => {
 vi.mock("../agent/single-attempt-stream.js", () => ({
   singleAttemptStream: singleAttemptStreamMock,
 }));
+
+/** Assistant turn that calls the single result tool with `value`. */
+async function toolCallStream(model: AgentContext["client"]["_piModel"], value: string, id: string) {
+  const { createAssistantMessageEventStream } = await import("@mariozechner/pi-ai");
+  const stream = createAssistantMessageEventStream();
+  const message = {
+    role: "assistant" as const,
+    content: [{ type: "toolCall" as const, id, name: "submit_result", arguments: { value } }],
+    api: model?.api ?? "openai-completions",
+    provider: model?.provider ?? "openai",
+    model: model?.id ?? "deepseek-v4-flash",
+    usage: { input: 5, output: 2, cacheRead: 0, cacheWrite: 0, totalTokens: 7,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+    stopReason: "toolUse" as const,
+    timestamp: Date.now(),
+  };
+  stream.push({ type: "done", reason: "toolUse", message });
+  stream.end(message);
+  return stream;
+}
 
 function client(): AgentContext["client"] {
   return {
@@ -342,6 +363,58 @@ describe("Pi worker harness", () => {
     }, { disableRetries: true })).rejects.toMatchObject({ code: "REVIEW_SOURCE_REQUIRED" });
 
     expect(singleAttemptStreamMock).toHaveBeenCalledTimes(1);
+    expect(guardedPiStreamMock).not.toHaveBeenCalled();
+  });
+
+  it("hands a correctable rejection back to the model under the repair policy", async () => {
+    singleAttemptStreamMock.mockImplementation((model: AgentContext["client"]["_piModel"]) => toolCallStream(model, "blank line", "repair-1"));
+    guardedPiStreamMock.mockImplementation((model: AgentContext["client"]["_piModel"]) => toolCallStream(model, "exact line", "repair-2"));
+    let checks = 0;
+
+    const result = await runWorkerAgentTool(client(), "deepseek-v4-flash", [{ role: "user", content: "审稿" }], {
+      name: "submit_result", label: "Submit", description: "Submit the result.",
+      parameters: Type.Object({ value: Type.String() }),
+      validate: value => {
+        checks++;
+        if (value.value !== "exact line") {
+          throw Object.assign(new Error(JSON.stringify({ code: "REVIEW_SOURCE_REQUIRED", message: "chapter-5 line 150 is blank" })), { code: "REVIEW_SOURCE_REQUIRED" });
+        }
+        return value;
+      },
+    }, { disableRetries: true, repair: DEFAULT_REPAIR_POLICY });
+
+    expect(result).toEqual({ value: "exact line" });
+    expect(checks).toBe(2);
+    expect(guardedPiStreamMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("stops repairing when the model repeats the same rejection", async () => {
+    singleAttemptStreamMock.mockImplementation((model: AgentContext["client"]["_piModel"]) => toolCallStream(model, "blank line", "repair-1"));
+    guardedPiStreamMock.mockImplementation((model: AgentContext["client"]["_piModel"]) => toolCallStream(model, "blank line", "repair-2"));
+
+    await expect(runWorkerAgentTool(client(), "deepseek-v4-flash", [{ role: "user", content: "审稿" }], {
+      name: "submit_result", label: "Submit", description: "Submit the result.",
+      parameters: Type.Object({ value: Type.String() }),
+      validate: () => {
+        throw Object.assign(new Error(JSON.stringify({ code: "REVIEW_SOURCE_REQUIRED", message: "chapter-5 line 150 is blank" })), { code: "REVIEW_SOURCE_REQUIRED" });
+      },
+    }, { disableRetries: true, repair: { maxRepairs: 3 } })).rejects.toMatchObject({ code: "REVIEW_SOURCE_REQUIRED" });
+
+    // First attempt plus the one granted repair; the repeated failure ends it.
+    expect(guardedPiStreamMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not spend a correction turn on an unrepairable failure", async () => {
+    singleAttemptStreamMock.mockImplementation((model: AgentContext["client"]["_piModel"]) => toolCallStream(model, "value", "fatal-1"));
+
+    await expect(runWorkerAgentTool(client(), "deepseek-v4-flash", [{ role: "user", content: "审稿" }], {
+      name: "submit_result", label: "Submit", description: "Submit the result.",
+      parameters: Type.Object({ value: Type.String() }),
+      validate: () => {
+        throw Object.assign(new Error(JSON.stringify({ code: "MODEL_EMPTY_RESPONSE", message: "provider returned nothing" })), { code: "MODEL_EMPTY_RESPONSE" });
+      },
+    }, { disableRetries: true, repair: DEFAULT_REPAIR_POLICY })).rejects.toMatchObject({ code: "MODEL_EMPTY_RESPONSE" });
+
     expect(guardedPiStreamMock).not.toHaveBeenCalled();
   });
 

@@ -30,7 +30,8 @@ import { singleAttemptStream } from "./single-attempt-stream.js";
 import { toPiApi } from "../llm/api-format.js";
 import { recordExecutionEvidence } from "../harness/execution-evidence.js";
 import {isReasoningRejection, reasoningActivation} from '../llm/reasoning.js';
-import {decodeStructuredFields} from './structured-arguments.js';
+import { decodeStructuredFields } from './structured-arguments.js';
+import { createRepairBudget, type RepairPolicy } from './result-repair.js';
 import { preserveToolArgumentTypes, toolArgumentIssues } from "./tool-arguments.js";
 import { archiveWorkerResponse, findArchivedWorkerResponse, markWorkerResponseArchive, type WorkerResponseArchiveContext } from "./worker-response-archive.js";
 import { currentChapterStage } from "./chapter-stage-context.js";
@@ -54,6 +55,12 @@ export interface WorkerAgentOptions {
    * modelling error, not a transient failure.
    */
   readonly maxResultTurns?: number;
+  /**
+   * Enables bounded technical self-repair: a rejected result classified as
+   * correctable is handed back to the model with its diagnostic instead of
+   * failing the stage. Unset keeps the legacy behaviour.
+   */
+  readonly repair?: RepairPolicy;
 }
 
 export interface WorkerResultTool<TParameters extends TSchema> {
@@ -453,11 +460,30 @@ export async function runWorkerAgentTool<TParameters extends TSchema>(
   const responseArtifactPaths: string[] = [];
   const resultArtifactByToolCall = new Map<string, string>();
   const maxResultTurns = options.maxResultTurns ?? (options.disableRetries ? 1 : 3);
+  const repairBudget = options.repair ? createRepairBudget(options.repair) : undefined;
+  let allowedResultTurns = maxResultTurns;
   const monitor = createStreamMonitor(progress => {
     options.onStreamProgress?.(progress);
     recordExecutionEvidence("model-stream-progress", { resultTool: resultTool.name, ...progress });
   });
   const { validate, ...toolDefinition } = resultTool;
+  // A rejected result is handed back to the model only when the repair policy
+  // classifies it as correctable and a correction turn is still available.
+  const offerRepair = (code: string | undefined, message: string) => {
+    if (!repairBudget) return;
+    const grant = repairBudget.grant(code, message);
+    if (grant.granted) allowedResultTurns = Math.max(allowedResultTurns, modelTurns + 1);
+    recordExecutionEvidence(grant.granted ? "worker-repair-granted" : "worker-repair-refused", {
+      resultTool: resultTool.name,
+      code: code ?? "WORKER_DOMAIN_INVALID",
+      reason: grant.reason,
+      repairClass: grant.repairClass,
+      used: grant.used,
+      limit: grant.limit,
+      allowedResultTurns,
+      diagnostic: message.slice(0, 400),
+    });
+  };
   const tool: AgentTool<TParameters, Static<TParameters>> = {
     ...toolDefinition,
     prepareArguments: (params) => {
@@ -469,6 +495,7 @@ export async function runWorkerAgentTool<TParameters extends TSchema>(
         const failure={code:'WORKER_SCHEMA_INVALID',resultTool:resultTool.name,issues,artifactPath:activeResponseArtifactPath};
         recordExecutionEvidence('worker-result-invalid',failure);
         lastValidationError=undefined;
+        offerRepair('WORKER_SCHEMA_INVALID', JSON.stringify(issues));
         throw new Error(JSON.stringify(failure));
       }
       return params as Static<TParameters>;
@@ -489,6 +516,7 @@ export async function runWorkerAgentTool<TParameters extends TSchema>(
         });
         if (activeResponseArtifactPath) await markWorkerResponseArchive(activeResponseArtifactPath,
           { stage: "domain", status: "failed", code: lastValidationError.code, message: lastValidationError.message });
+        offerRepair(lastValidationError.code ?? 'WORKER_DOMAIN_INVALID', lastValidationError.message);
         throw error;
       }
       return {
@@ -517,7 +545,7 @@ export async function runWorkerAgentTool<TParameters extends TSchema>(
     toolExecution: "sequential",
     streamFn: async (streamModel, context, streamOptions) => {
       if (submitted) return localStopStream(streamModel);
-      if (modelTurns >= maxResultTurns) {
+      if (modelTurns >= allowedResultTurns) {
         resultAttemptsExhausted = true;
         return localStopStream(streamModel);
       }

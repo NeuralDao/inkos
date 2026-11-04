@@ -8,6 +8,7 @@ import {currentExecutionBaselineWork} from '../harness/execution-evidence.js';
 import {chapterDocumentBody} from '../utils/chapter-document.js';
 import {changedSourceRegion} from '../utils/source-text.js';
 import type { NarrativeLanguage } from "../utils/book-language.js";
+import type { RepairPolicy } from "../agent/result-repair.js";
 import { Type } from "@sinclair/typebox";
 import type { RevisionFinding, FindingAssessment } from "../pipeline/auto-revision-policy.js";
 
@@ -120,6 +121,8 @@ export class ContinuityAuditor extends BaseAgent {
       readonly disableRetries?: boolean;
       /** Turns allowed for a review rejected by citation validation. */
       readonly maxResultTurns?: number;
+      /** Bounded self-repair for a review rejected by validation. */
+      readonly repair?: RepairPolicy;
     },
   ): Promise<AuditResult> {
     const narrativeLanguage = options.narrativeLanguage ?? options.language;
@@ -182,6 +185,7 @@ export class ContinuityAuditor extends BaseAgent {
       // Reasoning and the structured review share the configured per-agent output budget.
       { temperature: options.temperature ?? 0.3, maxTokens: this.ctx.client.defaults.maxTokens, chapterReview:true, disableRetries: options.disableRetries,
         ...(options.maxResultTurns !== undefined ? { maxResultTurns: options.maxResultTurns } : {}),
+        ...(options.repair !== undefined ? { repair: options.repair } : {}),
         validateObservations:observations=>{
           for(const observation of observations.filter(item=>item.category==='scope'&&item.assessment==='issue')){
             const ids=new Set(observation.sourceRefs.map(ref=>ref.sourceId));

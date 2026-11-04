@@ -60,6 +60,7 @@ import { ChapterCheckpoint, chapterAuthorityHashes, chapterBookIdentity, assertC
 import { bootstrapLegacyAuditCheckpoint } from "./chapter-legacy-evidence.js";
 import { isDeepStrictEqual } from "node:util";
 import { isChapterResumeSafetyError } from "../agent/chapter-stage-context.js";
+import { DEFAULT_REPAIR_POLICY } from "../agent/result-repair.js";
 import { actionableFindings, reviewFindings, revisionModeFor, usageFromError } from "./auto-revision-policy.js";
 import { validateChapterTruthPersistence } from "./chapter-truth-validation.js";
 import { loadPersistedPlan, relativeToBookDir, savePersistedPlan } from "./persisted-governed-plan.js";
@@ -1493,10 +1494,10 @@ export class PipelineRunner {
       assertNotEmpty: (content) => this.assertChapterContentNotEmpty(content, chapterNumber, "draft generation"),
       addUsage: PipelineRunner.addUsage,
       disableRetries: book.writing?.reviewMode !== "manual",
-      // A rejected citation is a correctable modelling error: allow one
-      // correction turn so a single blank or off-by-one sourceRef cannot
-      // silently degrade the whole chapter to "audit unavailable".
-      maxResultTurns: 2,
+      // A rejected citation is a correctable modelling error: hand the
+      // rejection back to the model once instead of degrading the whole
+      // chapter to "audit unavailable".
+      repair: DEFAULT_REPAIR_POLICY,
     }), Boolean(recovery));
     if (!savedReview) await checkpoint.record("audit", reviewResult.review.unavailable || reviewResult.review.observations.some(item => item.assessment === "unavailable")
       ? "failed" : "completed", reviewResult);

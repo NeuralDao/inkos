@@ -6,6 +6,7 @@ import { countChapterLength } from "../utils/length-metrics.js";
 import { resolveNarrativeLanguage, type NarrativeLanguage } from "../utils/book-language.js";
 import { usageFromError } from "./auto-revision-policy.js";
 import { isChapterResumeSafetyError } from "../agent/chapter-stage-context.js";
+import type { RepairPolicy } from "../agent/result-repair.js";
 
 export interface ChapterReviewUsage {
   readonly promptTokens: number;
@@ -45,6 +46,7 @@ export async function reviewChapterDraft(params: {
         readonly temperature?: number;
         readonly disableRetries?: boolean;
         readonly maxResultTurns?: number;
+        readonly repair?: RepairPolicy;
       },
     ) => Promise<AuditResult>;
   };
@@ -52,6 +54,7 @@ export async function reviewChapterDraft(params: {
   readonly addUsage: (left: ChapterReviewUsage, right?: ChapterReviewUsage) => ChapterReviewUsage;
   readonly disableRetries?: boolean;
   readonly maxResultTurns?: number;
+  readonly repair?: RepairPolicy;
 }): Promise<ChapterReviewResult> {
   const content = params.output.content;
   params.assertNotEmpty(content);
@@ -71,6 +74,7 @@ export async function reviewChapterDraft(params: {
         temperature: 0.3,
         ...(params.disableRetries ? { disableRetries: true } : {}),
         ...(params.maxResultTurns !== undefined ? { maxResultTurns: params.maxResultTurns } : {}),
+        ...(params.repair !== undefined ? { repair: params.repair } : {}),
       },
     );
   } catch (error) {

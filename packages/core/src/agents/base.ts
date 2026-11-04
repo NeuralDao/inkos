@@ -8,6 +8,7 @@ import { requiredWorkSkillIds, resolveWorkSkillActivations, resolveProfileSkillA
 import type { LLMClient, LLMMessage, LLMResponse, OnStreamProgress } from "../llm/provider.js";
 import { clientWithModel } from "../llm/provider.js";
 import { runWorkerAgent, runWorkerAgentTool, type WorkerResultTool } from "../agent/worker-agent.js";
+import type { RepairPolicy } from "../agent/result-repair.js";
 import type { Static, TSchema } from "@sinclair/typebox";
 import type { Logger } from "../utils/logger.js";
 import { SourcedReviewIndexToolSchema, ArtifactReviewIndexToolSchema, ChapterReviewIndexToolSchema } from "./review-tool.js";
@@ -57,7 +58,7 @@ export abstract class BaseAgent {
   protected async submitStructured<TParameters extends TSchema>(
     messages: ReadonlyArray<LLMMessage>,
     resultTool: WorkerResultTool<TParameters>,
-    options?: { readonly temperature?: number; readonly maxTokens?: number; readonly professionalGuidance?: boolean; readonly disableRetries?: boolean; readonly maxResultTurns?: number },
+    options?: { readonly temperature?: number; readonly maxTokens?: number; readonly professionalGuidance?: boolean; readonly disableRetries?: boolean; readonly maxResultTurns?: number; readonly repair?: RepairPolicy },
   ): Promise<{ readonly result: Static<TParameters>; readonly usage: LLMResponse["usage"] }> {
     let usage: LLMResponse["usage"] = { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
     const result = await runWorkerAgentTool(
@@ -71,6 +72,7 @@ export abstract class BaseAgent {
         responseArchive: { projectRoot: this.ctx.projectRoot, workId: this.ctx.bookId, role: this.name },
         disableRetries: options?.disableRetries ?? this.ctx.disableRetries,
         ...(options?.maxResultTurns !== undefined ? { maxResultTurns: options.maxResultTurns } : {}),
+        ...(options?.repair !== undefined ? { repair: options.repair } : {}),
         signal: this.ctx.signal,
         onStreamProgress: this.ctx.onStreamProgress,
         onUsage: (value) => { usage = value; },
@@ -93,7 +95,7 @@ export abstract class BaseAgent {
     messages: ReadonlyArray<LLMMessage>,
     sources: ReadonlyMap<string, string>,
     tool: { name: string; label: string; description: string },
-    options: { temperature?: number; maxTokens: number; categoryRequired?: boolean; chapterReview?: boolean; disableRetries?: boolean; maxResultTurns?: number; validateObservations?: (observations: ReturnType<typeof resolveObservationSources>) => void },
+    options: { temperature?: number; maxTokens: number; categoryRequired?: boolean; chapterReview?: boolean; disableRetries?: boolean; maxResultTurns?: number; repair?: RepairPolicy; validateObservations?: (observations: ReturnType<typeof resolveObservationSources>) => void },
   ) {
     const { categoryRequired, chapterReview, validateObservations, ...generationOptions } = options;
     const resolve = (observations: Static<typeof SourcedReviewIndexToolSchema>["observations"]) => {
