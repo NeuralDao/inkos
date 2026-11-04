@@ -1,5 +1,9 @@
 import { z } from "zod";
 import { LLM_API_FORMATS } from "../llm/api-format.js";
+import { REASONING_LEVELS } from "../llm/reasoning.js";
+
+/** `false`/`true` keep the historical activation semantics; a level is explicit. */
+export const ReasoningPreferenceSchema = z.union([z.boolean(), z.enum(REASONING_LEVELS)]);
 
 export const LLMServiceEntrySchema = z.object({
   service: z.string().min(1),
@@ -29,7 +33,7 @@ export const LLMConfigSchema = z.object({
   proxyUrl: z.string().url().optional(),
   temperature: z.number().min(0).max(2).default(0.7),
   thinkingBudget: z.number().int().min(0).default(0),
-  reasoning: z.boolean().optional(),
+  reasoning: ReasoningPreferenceSchema.optional(),
   extra: z.record(z.unknown()).optional(),
   headers: z.record(z.string()).optional(),
   apiFormat: z.enum(LLM_API_FORMATS).default("chat"),
@@ -80,7 +84,7 @@ export type DetectionConfig = z.infer<typeof DetectionConfigSchema>;
 
 export const AgentLLMOverrideSchema = z.object({
   model: z.string().min(1),
-  reasoning: z.boolean().optional(),
+  reasoning: ReasoningPreferenceSchema.optional(),
   contextWindow: z.number().int().positive().optional(),
   maxTokens: z.number().int().positive().optional(),
   provider: z.enum(["anthropic", "openai", "custom"]).optional(),

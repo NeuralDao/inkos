@@ -25,10 +25,11 @@ import {
   type LLMResponse,
   type OnStreamProgress,
 } from "../llm/provider.js";
-import { guardedPiNonStreaming, guardedPiStream } from "./pi-stream.js";
+import { guardedPiNonStreaming, guardedPiStream, stripReasoningFields } from "./pi-stream.js";
 import { singleAttemptStream } from "./single-attempt-stream.js";
 import { toPiApi } from "../llm/api-format.js";
 import { recordExecutionEvidence } from "../harness/execution-evidence.js";
+import {isReasoningRejection, reasoningActivation} from '../llm/reasoning.js';
 import {decodeStructuredFields} from './structured-arguments.js';
 import { preserveToolArgumentTypes, toolArgumentIssues } from "./tool-arguments.js";
 import { archiveWorkerResponse, findArchivedWorkerResponse, markWorkerResponseArchive, type WorkerResponseArchiveContext } from "./worker-response-archive.js";
@@ -80,7 +81,7 @@ function workerModel(client: LLMClient, modelId: string, maxTokens?: number): Mo
     api: toPiApi(client.apiFormat),
     provider: client.provider as Provider,
     baseUrl: "",
-    reasoning: client.defaults?.reasoning ?? ((client.defaults?.thinkingBudget ?? 0) > 0),
+    reasoning: reasoningActivation(client.defaults?.reasoning, client.defaults?.thinkingBudget ?? 0),
     input: ["text"],
     cost: EMPTY_COST,
     contextWindow: 200_000,
@@ -496,7 +497,9 @@ export async function runWorkerAgentTool<TParameters extends TSchema>(
       };
     },
   };
-  const agent = new Agent({
+  let reasoningFallbackUsed = false;
+  let reasoningStripped = false;
+  const buildAgent = () => new Agent({
     initialState: { model, systemPrompt, tools: [tool], messages: [] },
     beforeToolCall: async (context) => {
       activeResponseArtifactPath = resultArtifactByToolCall.get(context.toolCall.id);
@@ -538,7 +541,11 @@ export async function runWorkerAgentTool<TParameters extends TSchema>(
           // There is exactly one result tool, so required selects it without a
           // provider-specific named-function envelope.
           toolChoice: "required" as const,
-          onPayload: (payload: unknown) => payload && typeof payload === "object" ? { ...client.defaults.extra, ...payload } : payload,
+          ...(client.defaults.reasoningLevel && !reasoningStripped ? { reasoning: client.defaults.reasoningLevel } : {}),
+          onPayload: (payload: unknown) => {
+            const base = payload && typeof payload === "object" ? { ...client.defaults.extra, ...payload } : payload;
+            return reasoningStripped ? stripReasoningFields(base) : base;
+          },
         };
       // A correction turn carries the rejected tool result, which the
       // single-attempt transport cannot encode. Keep the cheap one-shot
@@ -561,6 +568,7 @@ export async function runWorkerAgentTool<TParameters extends TSchema>(
     },
     getApiKey: () => client._apiKey,
   });
+  let agent = buildAgent();
   const abortAgent = () => agent.abort();
   options.signal?.addEventListener("abort", abortAgent, { once: true });
   const unsubscribeProgress = agent.subscribe(event => {
@@ -582,13 +590,29 @@ export async function runWorkerAgentTool<TParameters extends TSchema>(
 
   try {
     await agent.prompt(promptMessages);
+    if (!submitted && !reasoningFallbackUsed) {
+      const rejection = [...agent.state.messages].reverse()
+        .find(message => message.role === "assistant" && isReasoningRejection(message));
+      if (rejection) {
+        reasoningFallbackUsed = true;
+        reasoningStripped = true;
+        recordExecutionEvidence("model-reasoning-rejected", {
+          resultTool: resultTool.name, model: modelId, attempt: modelTurns,
+          message: String((rejection as { errorMessage?: string }).errorMessage ?? "").slice(0, 400),
+        });
+        modelTurns = 0;
+        agent = buildAgent();
+        await agent.prompt(promptMessages);
+        options.signal?.throwIfAborted();
+      }
+    }
     if (chapterReplayFailure !== undefined) throw chapterReplayFailure;
     if (responseArchiveFailure !== undefined) throw Object.assign(new Error("Could not preserve the raw worker response before processing."), {
       code: "WORKER_RESPONSE_ARCHIVE_FAILED", cause: responseArchiveFailure,
     });
     options.signal?.throwIfAborted();
     if (resultAttemptsExhausted) throw Object.assign(new Error(lastValidationError?.message??'Structured result remained invalid after bounded correction attempts'), {
-      code:lastValidationError?.code??'WORKER_RESULT_INVALID',resultTool:resultTool.name,attempts:modelTurns,
+      code:lastValidationError?.code??'WORKER_RESULT_INVALID',resultTool:resultTool.name,attempts:modelTurns,reasoningRetryAttempted:reasoningFallbackUsed,
       artifactPaths:responseArtifactPaths,
       lastToolError:[...agent.state.messages].reverse().find(message=>message.role==='toolResult'&&message.isError),
     });
@@ -601,7 +625,8 @@ export async function runWorkerAgentTool<TParameters extends TSchema>(
     if (!submitted && initialResult?.role === "assistant" && initialResult.stopReason === "error") {
       throw Object.assign(new Error(initialResult.errorMessage ?? "Worker model request failed"), {
         code: (initialResult as AssistantMessage & { errorCode?: string }).errorCode ?? "WORKER_MODEL_ERROR",
-        resultTool: resultTool.name, stopReason: initialResult.stopReason, attempts: modelTurns, artifactPaths: responseArtifactPaths,
+        resultTool: resultTool.name, stopReason: initialResult.stopReason, attempts: modelTurns,
+        reasoningRetryAttempted: reasoningFallbackUsed, artifactPaths: responseArtifactPaths,
       });
     }
     if (!submitted) {
@@ -620,6 +645,7 @@ export async function runWorkerAgentTool<TParameters extends TSchema>(
         code: (last as (AssistantMessage & { errorCode?: string }) | undefined)?.errorCode
           ?? (resultAttemptsExhausted ? "WORKER_RESULT_INVALID" : last?.stopReason === "length" ? "MODEL_OUTPUT_LIMIT" : "WORKER_RESULT_MISSING"),
         attempts: modelTurns,
+        reasoningRetryAttempted: reasoningFallbackUsed,
         resultTool: resultTool.name,
         stopReason: last?.stopReason,
         artifactPaths: responseArtifactPaths,

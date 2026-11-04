@@ -231,6 +231,26 @@ describe("automatic longform revision", () => {
     expect(compare).toHaveBeenCalledTimes(1);
   }, 30000);
 
+  it("keeps an unverified post-audit finding as a warning note without blocking the chapter", async () => {
+    const { runner, state, book } = await fixture();
+    vi.mocked(ContinuityAuditor.prototype.auditChapter).mockResolvedValue({ observations: [finding], summary: "Найдено замечание", tokenUsage: usage });
+    const revise = vi.spyOn(ReviserAgent.prototype, "reviseChapter").mockResolvedValue({ revisedContent: revised, wordCount: 9, findingDispositions: [disposition], tokenUsage: usage });
+    const compare = vi.spyOn(ContinuityAuditor.prototype, "compareRevision").mockResolvedValue({
+      assessments: [], newIssues: [], tokenUsage: usage,
+      warnings: [{ code: "POST_AUDIT_FINDING_UNVERIFIED", findingId: "finding-1",
+        message: "Цитата не найдена в исправленном тексте", evidence: "нет такой фразы" }],
+    });
+    const result = await runner.writeNextChapter(book.id);
+    expect(result.autoRevision?.reason).toBe("revised-text-accepted; post-audit-needs-review");
+    const saved = (await state.loadChapterIndex(book.id))[0]!;
+    expect(saved.autoRevision?.reason).toBe("revised-text-accepted; post-audit-needs-review");
+    expect(saved.observations).toContainEqual(expect.objectContaining({ code: "POST_AUDIT_FINDING_UNVERIFIED", assessment: "unavailable" }));
+    // An unverified assessment must never be silently promoted to resolved.
+    expect(saved.observations.filter(item => item.assessment === "resolved")).toHaveLength(0);
+    expect(compare).toHaveBeenCalledTimes(1);
+    expect(revise).toHaveBeenCalledTimes(1);
+  }, 30000);
+
   it("continues from a failed initial audit without regenerating the draft", async () => {
     const { runner, state, book, bookDir } = await fixture();
     const audit = vi.mocked(ContinuityAuditor.prototype.auditChapter)

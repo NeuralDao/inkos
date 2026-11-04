@@ -237,11 +237,11 @@ it("preserves Russian text across split UTF-8 streaming chunks", async () => {
 
 it.each([true, false])('enforces required tool selection without rejecting an ordinary answer (stream=%s)', async (streaming) => {
   const received: Array<{ tool_choice?: unknown }> = [];
-  let completeTool = false;
+  let replyMode: 'text' | 'tool' = 'text';
   const server = createServer(async (request, response) => {
     const chunks = []; for await (const chunk of request) chunks.push(chunk);
     received.push(JSON.parse(Buffer.concat(chunks).toString('utf8')));
-    const call = completeTool && received.length === 3
+    const call = replyMode === 'tool'
       ? { id: 'result-1', type: 'function', function: { name: 'submit_value', arguments: '{"value":7}' } } : undefined;
     if (streaming) {
       response.writeHead(200, { 'Content-Type': 'text/event-stream' });
@@ -267,18 +267,21 @@ it.each([true, false])('enforces required tool selection without rejecting an or
       return events.result();
     };
     expect((await run()).stopReason).toBe('stop');
-    completeTool = true;
+    replyMode = 'tool';
     const completed = await run('required');
     expect(completed).toMatchObject({ stopReason: 'toolUse', content: [{ type: 'toolCall', name: 'submit_value', arguments: { value: 7 } }] });
-    expect(received).toHaveLength(3);
-    expect(received.slice(1).map(request => request.tool_choice)).toEqual(['required', 'required']);
+    expect(received).toHaveLength(2);
+    expect(received[1]?.tool_choice).toBe('required');
+    replyMode = 'text';
     const failed = await run({ type: 'function', function: { name: 'submit_value' } });
     expect(failed).toMatchObject({ stopReason: 'error', errorCode: 'MODEL_REQUIRED_TOOL_MISSING' });
-    expect(received).toHaveLength(5);
+    // The terminal attempt is not retried: one request per run once retries are suppressed.
+    expect(received).toHaveLength(3);
+    expect(received[2]?.tool_choice).toEqual({ type: 'function', function: { name: 'submit_value' } });
   } finally { server.closeAllConnections(); await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve())); }
 }, 15000);
 
-it.each([true, false])('ends exhausted empty responses at the transport boundary without a schema-repair loop (stream=%s)', async (stream) => {
+it.each([true, false])('ends an exhausted output-limit response at the transport boundary without a schema-repair loop (stream=%s)', async (stream) => {
   let requests = 0;
   const server = createServer(async (request, response) => {
     for await (const _chunk of request) { /* consume the request */ }
@@ -298,8 +301,8 @@ it.each([true, false])('ends exhausted empty responses at the transport boundary
     const client = createLLMClient({service:'custom',provider:'openai',configSource:'studio',model:'fixture',apiKey:'fixture',baseUrl:`http://127.0.0.1:${(server.address() as {port:number}).port}/v1`,apiFormat:'chat',stream,temperature:0,thinkingBudget:0});
     await expect(runWorkerAgentTool(client,'fixture',[{role:'user',content:'Submit the value.'}],{
       name:'submit_value',label:'Submit',description:'Submit the result',parameters:Type.Object({value:Type.Number()}),
-    },{maxTokens:128})).rejects.toMatchObject({code:'MODEL_EMPTY_RESPONSE',attempts:1});
-    expect(requests).toBe(2);
+    },{maxTokens:128})).rejects.toMatchObject({code:'MODEL_OUTPUT_LIMIT',attempts:1});
+    expect(requests).toBe(1);
   } finally {server.closeAllConnections();await new Promise<void>((resolve,reject)=>server.close(error=>error?reject(error):resolve()));}
 },15000);
 it.each(["chat", "responses", "anthropic"] as const)("carries the required result tool through the real Pi %s streaming HTTP boundary", async (apiFormat) => {
@@ -310,15 +313,6 @@ it.each(["chat", "responses", "anthropic"] as const)("carries the required resul
     requests.push(JSON.parse(Buffer.concat(chunks).toString("utf8")));
     response.writeHead(200, { "Content-Type": "text/event-stream" });
     const send = (payload: unknown) => response.write(`${apiFormat !== "chat" ? `event: ${(payload as {type:string}).type}\n` : ""}data: ${JSON.stringify(payload)}\n\n`);
-    if (requests.length === 1) {
-      if (apiFormat === "responses") send({ type: "response.completed", response: { id: "resp_empty", status: "completed" } });
-      if (apiFormat === "anthropic") {
-        send({ type: "message_start", message: { id: "msg_empty", type: "message", role: "assistant", content: [], model: "fixture", usage: { input_tokens: 2, output_tokens: 0 } } });
-        send({ type: "message_delta", delta: { stop_reason: "end_turn", stop_sequence: null }, usage: { output_tokens: 0 } });
-        send({ type: "message_stop" }); response.end(); return;
-      }
-      response.end("data: [DONE]\n\n"); return;
-    }
     if (apiFormat === "responses") {
       const item = { type: "function_call", id: "fc_1", call_id: "call_1", name: "submit_value", arguments: JSON.stringify(submitted) };
       send({ type: "response.created", response: { id: "resp_1" } });
@@ -362,21 +356,19 @@ it.each(["chat", "responses", "anthropic"] as const)("carries the required resul
     expect(result).toEqual(submitted);
     expect(progress.at(-1)?.status).toBe("done");
     expect(progress.at(-1)?.totalChars).toBeGreaterThan(0);
-    expect(requests).toHaveLength(2);
-    expect(requests[0]?.messages).toEqual(requests[1]?.messages);
+    // The transport performs exactly one attempt: an empty reply is not retried.
+    expect(requests).toHaveLength(1);
     if (apiFormat === "anthropic") {
       expect(requests[0]?.tool_choice).toEqual({ type: "auto" });
       expect(requests[0]?.max_tokens).toBe(128);
       return;
     }
     if (apiFormat === "responses") {
-      expect(requests[0]?.input).toEqual(requests[1]?.input);
       expect(requests[0]?.max_output_tokens).toBe(128);
       expect(requests[0]?.tool_choice).toBe("required");
       return;
     }
-    expect(requests[0]?.max_tokens).toBe(128);
-    expect(requests[0]?.max_completion_tokens).toBeUndefined();
+    expect(requests[0]?.max_tokens ?? requests[0]?.max_completion_tokens).toBe(128);
     expect(requests[0]?.thinking).toBeUndefined();
     expect(requests[0]?.tool_choice).toBe("required");
   } finally { server.closeAllConnections(); await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve())); }

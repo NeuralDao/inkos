@@ -79,7 +79,7 @@ export function guardedPiStream<TApi extends Api>(
           }
         }
         const prepared = await options?.onPayload?.(configured, activeModel) ?? configured;
-        const effectivePayload = applyDefaultReasoningPolicy(prepared, activeModel, options);
+        const effectivePayload = stripReasoningDisable(prepared);
         recordExecutionEvidence("model-request-prepared", { modelCallId: modelCall?.modelCallId, model: activeModel.id,
           api: activeModel.api,
           parameters: effectivePayload && typeof effectivePayload === "object" ? Object.fromEntries(Object.entries(effectivePayload).filter(([key]) => ["stream", "reasoning", "reasoning_effort", "thinking", "enable_thinking", "max_tokens", "max_completion_tokens", "max_output_tokens", "tool_choice"].includes(key))) : {} });
@@ -140,13 +140,13 @@ export function guardedPiNonStreaming<TApi extends Api>(
       }
       payload.max_tokens = reservedOutputTokens;
       if (options?.temperature !== undefined) payload.temperature = options.temperature;
+      // This transport builds the payload itself, so an explicit effort level must be written here.
+      if (typeof options?.reasoning === "string") payload.reasoning_effort = options.reasoning;
       const toolChoice = (options as SimpleStreamOptions & { toolChoice?: unknown } | undefined)?.toolChoice;
       if (toolChoice !== undefined) payload.tool_choice = toolChoice;
       const configured = explicitDeepSeekThinkingMode(payload, model);
-      const transformed = applyDefaultReasoningPolicy(
+      const transformed = stripReasoningDisable(
         await options?.onPayload?.(configured, model) ?? configured,
-        model,
-        options,
       );
       const json = await withTransientLLMRetry(async (attempt) => {
         const deadline = createRequestDeadline(options?.signal);
@@ -310,55 +310,45 @@ export function explicitDeepSeekThinkingMode(payload: unknown, model: Model<Api>
 }
 
 /**
- * pi-ai currently serializes an omitted reasoning preference as an explicit
- * `none`/`disabled` setting for some OpenAI-compatible providers. That is not
- * equivalent to an automatic policy: some model endpoints require reasoning.
- * Preserve an explicit caller choice; use low effort for models marked as
- * reasoning-capable, and otherwise remove the implicit disable value.
+ * Reasoning is never sent as an explicit "disable". pi-ai serializes an omitted
+ * preference as one, and endpoints that require reasoning answer with
+ * `400 Reasoning is mandatory for this endpoint and cannot be disabled`.
+ * Removing the directive leaves the provider's default in place, which is what
+ * "not requested" means. An explicit effort level is left untouched.
  */
-function applyDefaultReasoningPolicy(
-  payload: unknown,
-  model: Model<Api>,
-  options: SimpleStreamOptions | undefined,
-): unknown {
-  if (options?.reasoning !== undefined) return payload;
+export function stripReasoningDisable(payload: unknown): unknown {
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) return payload;
-
   const body = { ...(payload as Record<string, unknown>) };
-  if (typeof body.reasoning_effort === "string" && body.reasoning_effort.toLowerCase() === "none") {
-    if (model.reasoning) body.reasoning_effort = "low";
-    else delete body.reasoning_effort;
-  }
+  const disabled = (value: unknown) =>
+    typeof value === "string" && ["none", "disable", "disabled", "off"].includes(value.toLowerCase());
+  if (disabled(body.reasoning_effort)) delete body.reasoning_effort;
   if (body.reasoning && typeof body.reasoning === "object" && !Array.isArray(body.reasoning)) {
     const reasoning = { ...(body.reasoning as Record<string, unknown>) };
-    if (typeof reasoning.effort === "string" && reasoning.effort.toLowerCase() === "none") {
-      if (model.reasoning) {
-        reasoning.effort = "low";
-        body.reasoning = reasoning;
-      } else {
-        delete reasoning.effort;
-        if (Object.keys(reasoning).length === 0) delete body.reasoning;
-        else body.reasoning = reasoning;
-      }
-    }
+    if (disabled(reasoning.effort)) delete reasoning.effort;
+    if (reasoning.enabled === false) delete reasoning.enabled;
+    if (Object.keys(reasoning).length === 0) delete body.reasoning; else body.reasoning = reasoning;
   }
   if (body.thinking && typeof body.thinking === "object" && !Array.isArray(body.thinking)) {
     const thinking = { ...(body.thinking as Record<string, unknown>) };
-    if (typeof thinking.type === "string" && thinking.type.toLowerCase() === "disabled") {
-      if (model.reasoning) {
-        thinking.type = "enabled";
-        body.thinking = thinking;
-      } else {
-        delete thinking.type;
-        if (Object.keys(thinking).length === 0) delete body.thinking;
-        else body.thinking = thinking;
-      }
-    }
+    if (disabled(thinking.type) || thinking.enabled === false) delete body.thinking;
   }
-  if (body.enable_thinking === false) {
-    if (model.reasoning) body.enable_thinking = true;
-    else delete body.enable_thinking;
-  }
+  if (body.enable_thinking === false) delete body.enable_thinking;
+  return body;
+}
+
+/**
+ * Remove every reasoning/thinking field, including explicit effort levels.
+ * Used only by the single bounded retry after a provider rejected the reasoning
+ * directive: the request is repeated without any preference at all.
+ */
+export function stripReasoningFields(payload: unknown): unknown {
+  const stripped = stripReasoningDisable(payload);
+  if (!stripped || typeof stripped !== "object" || Array.isArray(stripped)) return stripped;
+  const body = { ...(stripped as Record<string, unknown>) };
+  delete body.reasoning;
+  delete body.reasoning_effort;
+  delete body.thinking;
+  delete body.enable_thinking;
   return body;
 }
 

@@ -1,5 +1,6 @@
 import type { LLMConfig } from "../models/project.js";
 import { FALLBACK_MODEL_CONTEXT_TOKENS, MAX_MODEL_INPUT_TOKENS, MAX_MODEL_OUTPUT_TOKENS } from "./token-limits.js";
+import { reasoningActivation, reasoningLevelOf, type ReasoningLevel, type ReasoningPreference } from "./reasoning.js";
 import {
   streamSimple as piStreamSimple,
   completeSimple as piCompleteSimple,
@@ -329,7 +330,10 @@ export interface LLMClient {
      */
     readonly maxTokens: number;
     readonly thinkingBudget: number;
-    readonly reasoning?: boolean;
+    /** Activation flag and/or explicit effort; see llm/reasoning.ts. */
+    readonly reasoning?: ReasoningPreference;
+    /** Effort level forwarded per call when the author requested one. */
+    readonly reasoningLevel?: ReasoningLevel;
     readonly extra: Record<string, unknown>;
   };
 }
@@ -374,6 +378,7 @@ export function createLLMClient(config: LLMConfig): LLMClient {
     maxTokens: Math.min(config.maxTokens ?? _earlyCard?.maxOutput ?? UNKNOWN_MODEL_FALLBACK_MAX_TOKENS, _earlyCard?.maxOutput ?? MAX_MODEL_OUTPUT_TOKENS, MAX_MODEL_OUTPUT_TOKENS),
     thinkingBudget: config.thinkingBudget ?? 0,
     reasoning: config.reasoning,
+    reasoningLevel: reasoningLevelOf(config.reasoning),
     extra: config.extra ?? {},
   };
 
@@ -415,7 +420,7 @@ export function createLLMClient(config: LLMConfig): LLMClient {
     // 不是"模型能力"标签。显式的 per-role reasoning 设置优先；否则只在 thinkingBudget > 0 时启用。
     // 千万不要从 lobe abilities.reasoning 自动推导，否则 Moonshot 这类不支持 developer role 的服务
     // 会把 content 吃掉，只返回 reasoning_content（见 R4 bug 1 诊断）。
-    reasoning: config.reasoning ?? (config.thinkingBudget ?? 0) > 0,
+    reasoning: reasoningActivation(config.reasoning, config.thinkingBudget ?? 0),
     input: ["text"] as ("text" | "image")[],
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     contextWindow: config.contextWindow ?? modelCard?.contextWindowTokens ?? FALLBACK_MODEL_CONTEXT_TOKENS,
