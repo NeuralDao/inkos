@@ -44,12 +44,14 @@ export async function reviewChapterDraft(params: {
         readonly contextPackage: ContextPackage;
         readonly temperature?: number;
         readonly disableRetries?: boolean;
+        readonly maxResultTurns?: number;
       },
     ) => Promise<AuditResult>;
   };
   readonly assertNotEmpty: (content: string) => void;
   readonly addUsage: (left: ChapterReviewUsage, right?: ChapterReviewUsage) => ChapterReviewUsage;
   readonly disableRetries?: boolean;
+  readonly maxResultTurns?: number;
 }): Promise<ChapterReviewResult> {
   const content = params.output.content;
   params.assertNotEmpty(content);
@@ -68,6 +70,7 @@ export async function reviewChapterDraft(params: {
         contextPackage: params.controlInput.contextPackage,
         temperature: 0.3,
         ...(params.disableRetries ? { disableRetries: true } : {}),
+        ...(params.maxResultTurns !== undefined ? { maxResultTurns: params.maxResultTurns } : {}),
       },
     );
   } catch (error) {

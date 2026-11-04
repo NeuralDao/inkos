@@ -118,6 +118,8 @@ export class ContinuityAuditor extends BaseAgent {
       readonly contextPackage: ContextPackage;
       readonly temperature?: number;
       readonly disableRetries?: boolean;
+      /** Turns allowed for a review rejected by citation validation. */
+      readonly maxResultTurns?: number;
     },
   ): Promise<AuditResult> {
     const narrativeLanguage = options.narrativeLanguage ?? options.language;
@@ -179,6 +181,7 @@ export class ContinuityAuditor extends BaseAgent {
       },
       // Reasoning and the structured review share the configured per-agent output budget.
       { temperature: options.temperature ?? 0.3, maxTokens: this.ctx.client.defaults.maxTokens, chapterReview:true, disableRetries: options.disableRetries,
+        ...(options.maxResultTurns !== undefined ? { maxResultTurns: options.maxResultTurns } : {}),
         validateObservations:observations=>{
           for(const observation of observations.filter(item=>item.category==='scope'&&item.assessment==='issue')){
             const ids=new Set(observation.sourceRefs.map(ref=>ref.sourceId));

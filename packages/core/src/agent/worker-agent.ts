@@ -47,6 +47,12 @@ export interface WorkerAgentOptions {
   readonly responseArchive?: WorkerResponseArchiveContext;
   /** Avoid another paid generation after an invalid or empty result. */
   readonly disableRetries?: boolean;
+  /**
+   * Bounded model turns allowed for a result rejected by domain validation.
+   * Independent of transport retries: a rejected citation is a fixable
+   * modelling error, not a transient failure.
+   */
+  readonly maxResultTurns?: number;
 }
 
 export interface WorkerResultTool<TParameters extends TSchema> {
@@ -445,7 +451,7 @@ export async function runWorkerAgentTool<TParameters extends TSchema>(
   let chapterReplayFailure: unknown;
   const responseArtifactPaths: string[] = [];
   const resultArtifactByToolCall = new Map<string, string>();
-  const maxResultTurns = options.disableRetries ? 1 : 3;
+  const maxResultTurns = options.maxResultTurns ?? (options.disableRetries ? 1 : 3);
   const monitor = createStreamMonitor(progress => {
     options.onStreamProgress?.(progress);
     recordExecutionEvidence("model-stream-progress", { resultTool: resultTool.name, ...progress });
@@ -534,7 +540,12 @@ export async function runWorkerAgentTool<TParameters extends TSchema>(
           toolChoice: "required" as const,
           onPayload: (payload: unknown) => payload && typeof payload === "object" ? { ...client.defaults.extra, ...payload } : payload,
         };
-      const rawStream = options.disableRetries
+      // A correction turn carries the rejected tool result, which the
+      // single-attempt transport cannot encode. Keep the cheap one-shot
+      // transport for the first attempt and use the full Pi transport only
+      // when the model is correcting its own rejected submission.
+      const correctionTurn = modelTurns > 1;
+      const rawStream = options.disableRetries && !correctionTurn
         ? singleAttemptStream(streamModel, context, resultOptions, client.proxyUrl, client.stream !== false, monitor.onChunk)
         : client.stream === false
         ? guardedPiNonStreaming(streamModel, context, resultOptions, client.proxyUrl)

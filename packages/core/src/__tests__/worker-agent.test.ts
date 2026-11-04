@@ -31,6 +31,7 @@ describe("pipeline model metadata cache", () => {
 const chatCompletionMock = vi.hoisted(() => vi.fn());
 const guardedPiStreamMock = vi.hoisted(() => vi.fn());
 const guardedPiNonStreamingMock = vi.hoisted(() => vi.fn());
+const singleAttemptStreamMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../llm/provider.js", async (importOriginal) => ({
   ...await importOriginal<typeof import("../llm/provider.js")>(),
@@ -45,6 +46,10 @@ vi.mock("../agent/pi-stream.js", async () => {
     guardedPiNonStreaming: guardedPiNonStreamingMock,
   };
 });
+
+vi.mock("../agent/single-attempt-stream.js", () => ({
+  singleAttemptStream: singleAttemptStreamMock,
+}));
 
 function client(): AgentContext["client"] {
   return {
@@ -87,6 +92,7 @@ describe("Pi worker harness", () => {
     chatCompletionMock.mockReset();
     guardedPiStreamMock.mockReset();
     guardedPiNonStreamingMock.mockReset();
+    singleAttemptStreamMock.mockReset();
   });
 
   afterEach(() => {
@@ -263,6 +269,80 @@ describe("Pi worker harness", () => {
     } finally {
       await rm(root, { recursive: true, force: true });
     }
+  });
+
+  it("lets a domain-rejected result be corrected on one extra turn", async () => {
+    const { createAssistantMessageEventStream } = await import("@mariozechner/pi-ai");
+    const toolStream = (model: AgentContext["client"]["_piModel"], value: string, id: string) => {
+      const stream = createAssistantMessageEventStream();
+      const message = {
+        role: "assistant" as const,
+        content: [{ type: "toolCall" as const, id, name: "submit_result", arguments: { value } }],
+        api: model?.api ?? "openai-completions",
+        provider: model?.provider ?? "openai",
+        model: model?.id ?? "deepseek-v4-flash",
+        usage: { input: 5, output: 2, cacheRead: 0, cacheWrite: 0, totalTokens: 7,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+        stopReason: "toolUse" as const,
+        timestamp: Date.now(),
+      };
+      stream.push({ type: "done", reason: "toolUse", message });
+      stream.end(message);
+      return stream;
+    };
+    singleAttemptStreamMock.mockImplementation((model: AgentContext["client"]["_piModel"]) => toolStream(model, "blank line", "first"));
+    guardedPiStreamMock.mockImplementation((model: AgentContext["client"]["_piModel"]) => toolStream(model, "exact line", "second"));
+    let domainChecks = 0;
+
+    const result = await runWorkerAgentTool(client(), "deepseek-v4-flash", [{ role: "user", content: "审稿" }], {
+      name: "submit_result", label: "Submit", description: "Submit the result.",
+      parameters: Type.Object({ value: Type.String() }),
+      validate: value => {
+        domainChecks++;
+        if (value.value !== "exact line") {
+          throw Object.assign(new Error(JSON.stringify({ code: "REVIEW_SOURCE_REQUIRED" })), { code: "REVIEW_SOURCE_REQUIRED" });
+        }
+        return value;
+      },
+    }, { disableRetries: true, maxResultTurns: 2 });
+
+    expect(result).toEqual({ value: "exact line" });
+    expect(domainChecks).toBe(2);
+    expect(singleAttemptStreamMock).toHaveBeenCalledTimes(1);
+    // The rejected tool result can only travel through the full Pi transport.
+    expect(guardedPiStreamMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps a single paid attempt when no correction budget is granted", async () => {
+    const { createAssistantMessageEventStream } = await import("@mariozechner/pi-ai");
+    singleAttemptStreamMock.mockImplementation((model: AgentContext["client"]["_piModel"]) => {
+      const stream = createAssistantMessageEventStream();
+      const message = {
+        role: "assistant" as const,
+        content: [{ type: "toolCall" as const, id: "only", name: "submit_result", arguments: { value: "blank line" } }],
+        api: model?.api ?? "openai-completions",
+        provider: model?.provider ?? "openai",
+        model: model?.id ?? "deepseek-v4-flash",
+        usage: { input: 5, output: 2, cacheRead: 0, cacheWrite: 0, totalTokens: 7,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+        stopReason: "toolUse" as const,
+        timestamp: Date.now(),
+      };
+      stream.push({ type: "done", reason: "toolUse", message });
+      stream.end(message);
+      return stream;
+    });
+
+    await expect(runWorkerAgentTool(client(), "deepseek-v4-flash", [{ role: "user", content: "审稿" }], {
+      name: "submit_result", label: "Submit", description: "Submit the result.",
+      parameters: Type.Object({ value: Type.String() }),
+      validate: () => {
+        throw Object.assign(new Error(JSON.stringify({ code: "REVIEW_SOURCE_REQUIRED" })), { code: "REVIEW_SOURCE_REQUIRED" });
+      },
+    }, { disableRetries: true })).rejects.toMatchObject({ code: "REVIEW_SOURCE_REQUIRED" });
+
+    expect(singleAttemptStreamMock).toHaveBeenCalledTimes(1);
+    expect(guardedPiStreamMock).not.toHaveBeenCalled();
   });
 
   it.each([

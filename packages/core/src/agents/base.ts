@@ -57,7 +57,7 @@ export abstract class BaseAgent {
   protected async submitStructured<TParameters extends TSchema>(
     messages: ReadonlyArray<LLMMessage>,
     resultTool: WorkerResultTool<TParameters>,
-    options?: { readonly temperature?: number; readonly maxTokens?: number; readonly professionalGuidance?: boolean; readonly disableRetries?: boolean },
+    options?: { readonly temperature?: number; readonly maxTokens?: number; readonly professionalGuidance?: boolean; readonly disableRetries?: boolean; readonly maxResultTurns?: number },
   ): Promise<{ readonly result: Static<TParameters>; readonly usage: LLMResponse["usage"] }> {
     let usage: LLMResponse["usage"] = { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
     const result = await runWorkerAgentTool(
@@ -70,6 +70,7 @@ export abstract class BaseAgent {
         ...options,
         responseArchive: { projectRoot: this.ctx.projectRoot, workId: this.ctx.bookId, role: this.name },
         disableRetries: options?.disableRetries ?? this.ctx.disableRetries,
+        ...(options?.maxResultTurns !== undefined ? { maxResultTurns: options.maxResultTurns } : {}),
         signal: this.ctx.signal,
         onStreamProgress: this.ctx.onStreamProgress,
         onUsage: (value) => { usage = value; },
@@ -92,7 +93,7 @@ export abstract class BaseAgent {
     messages: ReadonlyArray<LLMMessage>,
     sources: ReadonlyMap<string, string>,
     tool: { name: string; label: string; description: string },
-    options: { temperature?: number; maxTokens: number; categoryRequired?: boolean; chapterReview?: boolean; disableRetries?: boolean; validateObservations?: (observations: ReturnType<typeof resolveObservationSources>) => void },
+    options: { temperature?: number; maxTokens: number; categoryRequired?: boolean; chapterReview?: boolean; disableRetries?: boolean; maxResultTurns?: number; validateObservations?: (observations: ReturnType<typeof resolveObservationSources>) => void },
   ) {
     const { categoryRequired, chapterReview, validateObservations, ...generationOptions } = options;
     const resolve = (observations: Static<typeof SourcedReviewIndexToolSchema>["observations"]) => {

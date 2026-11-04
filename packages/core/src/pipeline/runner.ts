@@ -1493,6 +1493,10 @@ export class PipelineRunner {
       assertNotEmpty: (content) => this.assertChapterContentNotEmpty(content, chapterNumber, "draft generation"),
       addUsage: PipelineRunner.addUsage,
       disableRetries: book.writing?.reviewMode !== "manual",
+      // A rejected citation is a correctable modelling error: allow one
+      // correction turn so a single blank or off-by-one sourceRef cannot
+      // silently degrade the whole chapter to "audit unavailable".
+      maxResultTurns: 2,
     }), Boolean(recovery));
     if (!savedReview) await checkpoint.record("audit", reviewResult.review.unavailable || reviewResult.review.observations.some(item => item.assessment === "unavailable")
       ? "failed" : "completed", reviewResult);
