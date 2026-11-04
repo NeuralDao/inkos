@@ -12,6 +12,8 @@ import { renderNarrativeSelectedContext } from "../utils/narrative-control.js";
 import type { NarrativeLanguage } from "../utils/book-language.js";
 import type { RevisionFinding } from "../pipeline/auto-revision-policy.js";
 import { MAX_MODEL_OUTPUT_TOKENS } from "../llm/token-limits.js";
+import { verifyFindingDispositions } from "../pipeline/finding-verification.js";
+import { recordExecutionEvidence } from "../harness/execution-evidence.js";
 
 export interface FindingDisposition {
   readonly findingId: string;
@@ -189,7 +191,7 @@ export class ReviserAgent extends BaseAgent {
     return {
       revisedContent,
       wordCount: revisedContent.length,
-      ...(autoFindings ? { findingDispositions: validateDispositions((result as unknown as {findingDispositions:unknown}).findingDispositions, autoFindings) } : {}),
+      ...(autoFindings ? { findingDispositions: verifiedDispositions(validateDispositions((result as unknown as {findingDispositions:unknown}).findingDispositions, autoFindings), autoFindings, revisedContent) } : {}),
       tokenUsage:{promptTokens:planUsage.promptTokens+usage.promptTokens,completionTokens:planUsage.completionTokens+usage.completionTokens,totalTokens:planUsage.totalTokens+usage.totalTokens},
     };
   }
@@ -223,10 +225,30 @@ export class ReviserAgent extends BaseAgent {
     return {
       revisedContent: result.revisedContent,
       wordCount: result.revisedContent.length,
-      ...(autoFindings ? { findingDispositions: validateDispositions((result as unknown as {findingDispositions:unknown}).findingDispositions, autoFindings) } : {}),
+      ...(autoFindings ? { findingDispositions: verifiedDispositions(validateDispositions((result as unknown as {findingDispositions:unknown}).findingDispositions, autoFindings), autoFindings, result.revisedContent) } : {}),
       tokenUsage: usage,
     };
   }
+}
+
+/**
+ * Downgrade "addressed" claims whose cited passage is untouched. Pure text
+ * check: the reviser's self-report is not evidence of its own work.
+ */
+function verifiedDispositions(
+  dispositions: FindingDisposition[],
+  findings: ReadonlyArray<RevisionFinding>,
+  revisedContent: string,
+): FindingDisposition[] {
+  const outcome = verifyFindingDispositions(dispositions, findings, revisedContent);
+  if (outcome.downgraded.length > 0) {
+    recordExecutionEvidence("reviser-disposition-downgraded", {
+      downgraded: outcome.downgraded,
+      verified: dispositions.length - outcome.downgraded.length - outcome.unverifiable.length,
+      unverifiable: outcome.unverifiable,
+    });
+  }
+  return outcome.dispositions;
 }
 
 function hasCompleteChapterEnding(content: string): boolean {
