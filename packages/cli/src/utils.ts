@@ -13,14 +13,20 @@ export async function resolveContext(opts: {
   if (opts.contextFile) {
     return readFile(resolve(opts.contextFile), "utf-8");
   }
-  // Read from stdin if piped (non-TTY)
+  // Read from stdin if piped (non-TTY). A closed or detached stdin (background job,
+  // scheduled task) is also "not a TTY", and iterating it throws "stdin is not a tty"
+  // on Windows; treat that as "no context" instead of killing the run.
   if (!process.stdin.isTTY) {
-    const chunks: Buffer[] = [];
-    for await (const chunk of process.stdin) {
-      chunks.push(chunk as Buffer);
+    try {
+      const chunks: Buffer[] = [];
+      for await (const chunk of process.stdin) {
+        chunks.push(chunk as Buffer);
+      }
+      const text = Buffer.concat(chunks).toString("utf-8").trim();
+      if (text.length > 0) return text;
+    } catch {
+      return undefined;
     }
-    const text = Buffer.concat(chunks).toString("utf-8").trim();
-    if (text.length > 0) return text;
   }
   return undefined;
 }
